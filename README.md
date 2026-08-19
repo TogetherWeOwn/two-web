@@ -24,6 +24,10 @@ php artisan migrate
 npm install --include=dev && npm run build
 ```
 
+Those five steps after `docker compose up -d` are exactly what `composer setup`
+runs, if you would rather type one command. Either way the database has to be up
+first, because it migrates.
+
 Then start everything with one command:
 
 ```bash
@@ -144,6 +148,10 @@ credential and the CEO as the unblock owner. Do not improvise around it.
 ---
 
 ## Working here
+
+Branch naming, commit style, and how a PR gets reviewed and merged are in
+[CONTRIBUTING.md](CONTRIBUTING.md). `main` is protected — nothing lands on it
+except by pull request.
 
 - **Tests first.** Write the failing Pest test, then the code. The bar is not
   coverage, it is: does a test fail when you deliberately break the thing?
