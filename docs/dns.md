@@ -50,7 +50,7 @@ curl -s -H 'accept: application/dns-json' 'https://cloudflare-dns.com/dns-query?
 | `togetherweown.com` | WordPress.com, **empty** — title `Together We Own -`, one outbound link, no sitemap, no store | Cut over to us |
 | `www.togetherweown.com` | Same origin, same challenge — no redirect to the apex | Fix at cutover |
 | `togetherweown.com/discord` | **302 into a live Discord OAuth join flow.** The only working web→Discord path we have | **Must survive. See below** |
-| `togetherweown.com/join` | 301 → `/join/` → **HTTP 200 titled "Page Not Found"** — a soft 404 | Do not build a `/join` |
+| `togetherweown.com/join` | 301 → `/join/` → **HTTP 200, titled "Page Not Found", `<meta name="robots" content="follow, noindex">`** — a soft 404 | Do not build a `/join` |
 | `staging.togetherweown.com` | **Already resolves**, proxied, same origin as the apex | Repoint + grey cloud |
 | `two.gg`, `www.two.gg` | **302**, path-preserving, to `https://togetherweown.com/<path>` | Make it 301 |
 | `two.gg/discord` | **301** to `togetherweown.com/discord/` — already correct | Leave it, retarget at cutover |
@@ -77,6 +77,26 @@ Five things fall out of that which change the plan:
 - **`two.gg` can have `p=reject` today.** The issue's original instinct — publish
   reject while there is nothing legitimate to break — was right, and with no store
   anywhere in the estate it is very nearly right for the apex too.
+
+### The `/join` soft 404 is measured, not inferred
+
+This one was challenged on the grounds that the apex answers `403 cf-mitigated:
+challenge` to automated requests, which is indistinguishable from a 404 from
+outside. That is true of a *plain* request and it is why the browser-UA header is at
+the top of this section. With the header, the challenge does not fire and the real
+page comes back. Reproduce it in ten seconds:
+
+```bash
+UA='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36'
+curl -sS -A "$UA" -L https://togetherweown.com/join -o /tmp/join.html -w '%{http_code} %{url_effective}\n'
+grep -o -i '<title>[^<]*</title>\|name="robots" content="[^"]*"' /tmp/join.html
+```
+
+Result: `200 https://togetherweown.com/join/`, title `Page Not Found - Together We
+Own`, and — the decisive part — `<meta name="robots" content="follow, noindex">`.
+**WordPress's own 404 template is telling crawlers not to index it.** A real page
+would not carry that. Two independent signals agree, so this needs no founder
+round-trip: `two.gg/join` sends real people to a dead page today.
 
 ---
 
@@ -172,6 +192,11 @@ Leave it as a Cloudflare redirect rule with no origin behind it. Two changes:
 |---|---|---|---|
 | 1 | `two.gg/join`, `www.two.gg/join` | `https://<community site>/discord` | **301** |
 | 2 | everything else on `two.gg` | `https://<community site>/<path>` | **301** |
+
+> **These two are Rules, not records. A DNS token cannot make either change.**
+> Both live in Cloudflare → Rules → Redirect Rules, and `Zone.DNS: Edit` does not
+> reach them. They are founder clicks. See *Who can actually change these records*
+> at the bottom for the full split of what we can and cannot do ourselves.
 
 - **302 → 301 on the catch-all.** A 302 tells every browser and crawler not to
   remember, so we pay the round trip forever and the link earns us nothing in
@@ -315,15 +340,24 @@ keeping this list short is a standing obligation on every PR.
 
 **The change itself:**
 
-3. `APP_URL` on the production box → `https://togetherweown.com`.
-4. Issue the apex certificate on the origin **first**, while DNS still points at
-   WordPress — DNS-01, or Cloudflare stays proxied and the origin cert is validated
+3. *(us)* `APP_URL` on the production box → `https://togetherweown.com`.
+4. *(us)* Issue the apex certificate on the origin **first**, while DNS still points
+   at WordPress — DNS-01, or Cloudflare stays proxied and the origin cert is validated
    ahead of the swap. Do not find out about a certificate problem after the cutover.
-5. Apex `A` record → `<PROD_IP>`, `www` alongside it. **This is the swap.**
-6. Retarget the one `two.gg` Cloudflare rule to the apex.
-7. Verify `/discord` in a browser before announcing anything. It is the funnel.
+5. *(us, with the token — this is the one moment the standing rule above is lifted,
+   and only because TWO-41 scheduled it)* Apex `A` record → `<PROD_IP>`, `www`
+   alongside it. **This is the swap.**
+6. **(founder — Rules, the token cannot do this)** Retarget the `two.gg` redirect
+   rule to the apex.
+7. *(us)* Verify `/discord` in a browser before announcing anything. It is the funnel.
 
-**Rollback** is putting the old apex `A` record back. Keep the WordPress.com
+**Schedule the founder into the window, do not just notify them.** Step 6 is the only
+step we cannot perform, it sits between the swap and the verification, and until it
+happens `two.gg` is still pointing at whatever the old rule said. A cutover where the
+founder is asleep is a cutover with a half-moved funnel.
+
+**Rollback** is putting the old apex `A` record back — which, with the token, we can
+now do ourselves in under a minute without waking anyone. Keep the WordPress.com
 subscription paid for two weeks after.
 
 **What keeps that list this short:** no hostname is written down anywhere in this
@@ -339,18 +373,60 @@ with a reason.
 
 ## Who can actually change these records
 
-The zones are in **Cloudflare** under the founder's account. We do not have access,
-and that is currently the binding constraint on the three items above that need no
-hosting decision at all: the `two.gg` 301, the `two.gg` mail records, and the
-`_dmarc` `rua`.
+The zones are in **Cloudflare** under the founder's account.
 
-**Recommended:** a Cloudflare API token scoped to `Zone.DNS: Edit` on
-`togetherweown.com` and `two.gg` only — no account access, no billing, no ability to
-touch the WordPress origin settings. Delivered through the secrets channel, never an
-issue comment. A certificate or record fix at 2am then does not need to wake the
-founder.
+**Approved:** a Cloudflare API token scoped to `Zone.DNS: Edit` on **both**
+`togetherweown.com` and `two.gg` — no account access, no billing, no ability to touch
+origin settings. It arrives through the secrets channel as
+`cloudflare_dns_token_two_gg`, bound to this agent as `CLOUDFLARE_DNS_TOKEN`. *(The
+secret name says `two_gg` for historical reasons — an earlier revision scoped it to
+that zone only. It covers both. Not worth a rename; worth knowing when you go
+looking.)* It **expires after 90 days** — whoever notices a `403` from the Cloudflare
+API first should suspect expiry before suspecting the record.
 
-**Fallback:** the founder applies the tables above by hand and we verify.
+### What the token can and cannot do
 
-Either way the apex `A` record is not ours to touch, token or no token, until
-TWO-41 says so.
+Cloudflare scopes tokens **by zone, not by record type**, and DNS and Rules are
+different products. That produces a split worth internalising before you touch
+anything:
+
+| Change | Who | Why |
+|---|---|---|
+| `two.gg` SPF / DMARC / DKIM TXT records | **Us, with the token** | DNS records |
+| `_dmarc.togetherweown.com` → add `rua` | **Us, with the token** | DNS record |
+| `staging` `A` record repoint | **Us, with the token** | DNS record, once TWO-37 lands an IP |
+| `two.gg` catch-all 302 → 301 | **Founder, in Cloudflare → Rules** | Redirect Rule, not DNS |
+| `two.gg/join` → `/discord` retarget | **Founder, in Cloudflare → Rules** | Redirect Rule, not DNS |
+| Apex `A` record | **Nobody, until TWO-41** | See the standing rule below |
+
+The evidence that the `two.gg` redirects are edge Rules and not records: the response
+carries `server: cloudflare` and a `cf-ray` and **no origin headers at all** — no
+`x-powered-by`, no WordPress fingerprint. There is nothing behind that hostname to
+serve a redirect, so Cloudflare is generating it.
+
+**One nuance that cuts the other way, and it is ours to have caught:** `two.gg` *does*
+have DNS records — proxied `A` (`104.21.13.159`, `172.67.156.192`) and `AAAA`. The
+Redirect Rule only fires because the hostname resolves to Cloudflare's edge in the
+first place. So the token cannot change *where* `two.gg` sends people, but it can
+absolutely stop it sending them anywhere, by breaking the record the rule hangs off.
+The token is not harmless on `two.gg` either. Which is the whole reason for:
+
+### Standing rule: the funnel does not move casually
+
+**The apex `A` record, the `two.gg` `A`/`AAAA` records, and anything else serving
+`/discord` change only as part of the TWO-41 cutover — never as a side effect of
+routine DNS work.**
+
+`togetherweown.com/discord` is a live Discord OAuth join flow and currently **the only
+web→Discord conversion path TWO has**. `two.gg/discord` is the spoken shortcut into
+it. Between them they are the entire funnel this whole project exists to grow. A
+staging repoint or a DMARC edit must never be the thing that takes them dark.
+
+This is a team rule, not a permission boundary — the token can reach these records and
+we are trusting ourselves not to. Worst case if we get it wrong is a coming-soon page
+and a dark join button for the minutes it takes to put the record back, which is
+survivable but is not something to discover on a Friday.
+
+**Fallback if the token does not arrive or has expired:** the founder applies the
+tables above by hand and we verify each one. That is why every record in this document
+is written out in full, with its exact value. Keep it that way.
