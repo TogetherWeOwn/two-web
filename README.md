@@ -28,6 +28,33 @@ Those five steps after `docker compose up -d` are exactly what `composer setup`
 runs, if you would rather type one command. Either way the database has to be up
 first, because it migrates.
 
+### No PHP? No Docker? No root?
+
+Some of our working environments ship Node and git and nothing else. Run:
+
+```bash
+bin/dev-bootstrap.sh
+```
+
+It downloads a self-contained PHP 8.3 and Composer into `.tooling/bin`
+(gitignored), touches nothing system-wide, and exits early if you already have a
+usable PHP. Add the printed line to your `PATH` and the rest of the README works
+unchanged.
+
+For the database, if `docker` is also missing, point `DB_HOST`, `DB_PORT`,
+`DB_DATABASE`, `DB_USERNAME` and `DB_PASSWORD` in `.env` at any Postgres 14+ you
+can reach and are allowed to wipe. Nothing in the app cares where Postgres lives —
+the test suite reads the same `.env` and only forces the database *name*, so create
+`two_web_test` on that server as well (docker-compose does this for you):
+
+```sql
+CREATE DATABASE two_web_test;
+```
+
+That PHP build has no `intl`, which Filament wants — locally you will need
+`--ignore-platform-req=ext-intl`. Real dev and production VMs have it, so this is
+a laptop-shaped problem only.
+
 Then start everything with one command:
 
 ```bash

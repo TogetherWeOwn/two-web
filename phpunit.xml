@@ -25,13 +25,15 @@
 
         <!-- Tests run on Postgres, not sqlite. We use jsonb, partial-index-friendly
              constraints and Postgres date handling; a sqlite suite would go green on
-             things that break in production. docker-compose creates this database. -->
+             things that break in production.
+
+             Host, port and credentials deliberately come from your .env, so the suite
+             runs against whatever Postgres you can reach — docker-compose, a CI service
+             container, or a shared server. The database *name* is forced, so a test run
+             can never wipe your development data. docker-compose creates it; if you are
+             not using Docker, create it yourself once. -->
         <env name="DB_CONNECTION" value="pgsql"/>
-        <env name="DB_HOST" value="127.0.0.1"/>
-        <env name="DB_PORT" value="5432"/>
         <env name="DB_DATABASE" value="two_web_test"/>
-        <env name="DB_USERNAME" value="two_web"/>
-        <env name="DB_PASSWORD" value="two_web"/>
 
         <env name="MAIL_MAILER" value="array"/>
         <env name="QUEUE_CONNECTION" value="sync"/>
