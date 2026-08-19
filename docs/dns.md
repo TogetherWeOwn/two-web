@@ -13,7 +13,7 @@ The new Laravel site **replaces the WordPress site** — founder's decision.
 
 1. **Now:** build on `staging.togetherweown.com`, walled off.
 2. **Launch:** the **apex**, `togetherweown.com`. One record change, scheduled by
-   **TWO-41**, once the site is proven on staging.
+   **TWO-61**, once the site is proven on staging.
 
 **There is no intermediate public subdomain, and that is a change from the previous
 version of this page.** That version assumed a live WooCommerce Subscriptions store
@@ -182,7 +182,7 @@ the canonical host is decided in the same file as everything else about the site
 The apex is canonical because it is what people say out loud.
 
 **This is one record change and one rollback.** Nobody has to schedule a migration
-window for it. TWO-41 picks the day.
+window for it. TWO-61 picks the day.
 
 ### `two.gg`
 
@@ -328,7 +328,7 @@ there is no "announce the logout" line in the checklist below.
 
 ## The cutover checklist
 
-The apex swap is TWO-41's to schedule. This is what it costs when it comes, and
+The apex swap is TWO-61's to schedule. This is what it costs when it comes, and
 keeping this list short is a standing obligation on every PR.
 
 **Before the DNS change — founder actions, we have no portal access:**
@@ -345,7 +345,7 @@ keeping this list short is a standing obligation on every PR.
    at WordPress — DNS-01, or Cloudflare stays proxied and the origin cert is validated
    ahead of the swap. Do not find out about a certificate problem after the cutover.
 5. *(us, with the token — this is the one moment the standing rule above is lifted,
-   and only because TWO-41 scheduled it)* Apex `A` record → `<PROD_IP>`, `www`
+   and only because TWO-61 scheduled it)* Apex `A` record → `<PROD_IP>`, `www`
    alongside it. **This is the swap.**
 6. **(founder — Rules, the token cannot do this)** Retarget the `two.gg` redirect
    rule to the apex.
@@ -397,7 +397,7 @@ anything:
 | `staging` `A` record repoint | **Us, with the token** | DNS record, once TWO-37 lands an IP |
 | `two.gg` catch-all 302 → 301 | **Founder, in Cloudflare → Rules** | Redirect Rule, not DNS |
 | `two.gg/join` → `/discord` retarget | **Founder, in Cloudflare → Rules** | Redirect Rule, not DNS |
-| Apex `A` record | **Nobody, until TWO-41** | See the standing rule below |
+| Apex `A` record | **Nobody, until TWO-61** | See the standing rule below |
 
 The evidence that the `two.gg` redirects are edge Rules and not records: the response
 carries `server: cloudflare` and a `cf-ray` and **no origin headers at all** — no
@@ -414,7 +414,7 @@ The token is not harmless on `two.gg` either. Which is the whole reason for:
 ### Standing rule: the funnel does not move casually
 
 **The apex `A` record, the `two.gg` `A`/`AAAA` records, and anything else serving
-`/discord` change only as part of the TWO-41 cutover — never as a side effect of
+`/discord` change only as part of the TWO-61 cutover — never as a side effect of
 routine DNS work.**
 
 `togetherweown.com/discord` is a live Discord OAuth join flow and currently **the only

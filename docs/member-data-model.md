@@ -2,7 +2,8 @@
 
 What a member record is, what a member can change, and who can see it.
 
-**Last checked:** 19 August 2026 · **Issues:** TWO-29, TWO-41
+**Last checked:** 19 August 2026 · **Issues:** TWO-29 · TWO-61 (WordPress
+retirement) · TWO-41 (migration assessment, now closed)
 
 ---
 
@@ -64,28 +65,42 @@ the bot being up.
 
 ---
 
-## Who can see a profile — recommended default
+## Who can see a profile — decided
 
-Not yet built (TWO-29 is blocked on TWO-23 and TWO-27), but the decision is
-made so nobody has to guess:
+**Decided 19 August 2026, and told to the CEO on TWO-29 the same day.** Not yet
+built — TWO-29 is blocked on TWO-23 and TWO-27 — but the call is made so nobody
+has to guess when it unblocks.
 
-**Signed-in members can view any member's profile. Logged-out visitors cannot —
-they get a sign-in prompt.**
+**Profiles are members-only. Signed in with Discord: you can view any member's
+profile. Logged out: you get a sign-in prompt, not a profile.**
+
+There are four tiers and nothing else:
+
+| Who | Sees |
+|---|---|
+| Logged out | Nothing. Sign-in prompt. |
+| Any signed-in member | Any profile: Discord identity, bio, games, timezone, activity stats |
+| The owner | The same, plus the edit form |
+| Moderator | The same as a member, plus whatever the Filament admin shows |
 
 Reasoning: the site exists to convert strangers into Discord members, and
-nothing on somebody's profile page helps a stranger decide to join. A public
-profile page, on the other hand, turns the site into a scrapeable index of who
-is in the server, indexed by Google, forever. That is a real cost against no
-benefit. Owners see their own profile in full; moderators see everything a
-member sees plus the activity stats.
+nothing on somebody's profile page helps a stranger decide to join — the landing
+page does that job. A public profile page, on the other hand, turns the site into
+a scrapeable index of who is in the server, joined to when they are active,
+indexed by Google, forever. Real cost, no benefit. Members-only is also the
+setting we can loosen later without asking anyone; public is not — once it is
+crawled it is public for good.
+
+Stats are visible to any signed-in member rather than owner-only, because the
+same information is already visible in Discord to anyone in the server. We are
+not creating a new disclosure, we are reflecting one — which is also the line
+that tells us when to stop: **if the bot views ever expose something Discord
+itself does not show other members, it does not go on the profile page.**
 
 Deliberately **not** built: per-member visibility toggles, a "hide my stats"
 switch, a member directory. None has been asked for. If a member asks to be
 hidden, a moderator can handle it by hand until there are enough requests to
 justify a setting.
-
-This is a privacy call, so it is flagged for the CEO on TWO-29 rather than just
-merged.
 
 ---
 
@@ -93,14 +108,24 @@ merged.
 
 An earlier draft reserved table shapes for GamiPress points, ranks and badges so
 a future import from `togetherweown.com` could land truthfully. **The import is
-withdrawn.** The WordPress site was inventoried on 19 August 2026: fresh install,
-coming-soon page, GamiPress installed but never switched on — zero points types,
-which is decisive, because a points type *is* the currency. There are no
-balances to move. Evidence: `migration-assessment` rev 2 on TWO-41.
+withdrawn**, and it is now settled twice over:
 
-So there are **no import tables, no `source` / `external_ref` reconciliation
-columns, and no link-your-old-account flow**, now or later. There is no old
-account to link.
+- **Measured.** The WordPress site was inventoried on 19 August 2026: fresh
+  install, coming-soon page, GamiPress installed but never switched on — zero
+  points types, which is decisive, because a points type *is* the currency.
+  There are no balances to move. Evidence: `migration-assessment` rev 2 on
+  TWO-41.
+- **Confirmed by the founder**, same day, on TWO-21: zero paying subscribers,
+  *"none of that is being used, we are starting from scratch on everything."*
+  Retirement is tracked on TWO-61.
+
+So **no member records are imported at all** — not points, not ranks, not badge
+history, not accounts. A member record on this site is created the first time
+that person signs in with Discord, and never any other way. The profile is
+designed against exactly two sources: what the bot's event views give us, and
+what the member types into the form. There are **no import tables, no `source` /
+`external_ref` reconciliation columns, and no link-your-old-account flow**, now
+or later. There is no old account to link.
 
 Two design decisions survive that, and they live here as decisions rather than
 as migrations:
