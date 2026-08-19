@@ -99,10 +99,12 @@ production. Sessions, cache and the queue all run on Postgres.
 Production is one Linux VM: nginx + PHP-FPM + systemd, on the same box as the bot
 to start with. Docker is a local-development convenience and nothing more.
 
-**Which hostname the site lives on is not decided yet, and no hostname is written
-down anywhere in this code** — `APP_URL` drives all of it. `togetherweown.com`
-itself is a live WordPress store and is not ours to repoint. See
-[`docs/dns.md`](docs/dns.md) before touching a DNS record or an absolute URL.
+**No hostname is written down anywhere in this code** — `APP_URL` drives all of it,
+and `tests/Unit/NoHardcodedHostnamesTest.php` fails the build if that stops being
+true. This site launches on a subdomain and takes over `togetherweown.com` later,
+once the WordPress store there has actually been replaced; that is the only reason
+the rule matters. See [`docs/dns.md`](docs/dns.md) before touching a DNS record or
+writing an absolute URL.
 
 ### Deliberate deletions
 

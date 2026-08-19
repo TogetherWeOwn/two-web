@@ -1,193 +1,261 @@
 # Domains and DNS
 
-Everything we own, what each name points at, and what has to change. If you are
-looking at DNS at 2am, this is the page.
+Everything we own, what each name points at today, and what has to change. If you
+are looking at DNS at 2am, this is the page.
 
-**Last checked:** 19 August 2026 · **Issue:** TWO-38
-
----
-
-## Rule 0: `togetherweown.com` is not empty
-
-The apex runs a **live WordPress site with WooCommerce Subscriptions** — it takes
-recurring payments and sends order and renewal email today. GamiPress, AutomatorWP,
-Bricks and Rank Math are installed on top of it. It sits behind Cloudflare.
-
-**Do not repoint the apex at this Laravel app.** That is not a DNS change, it is a
-store migration with revenue attached, and nobody has asked for it. Until the
-founder says otherwise, WordPress keeps the apex and we take a new hostname.
+**Last verified against live DNS:** 19 August 2026 · **Issue:** TWO-38
 
 ---
 
-## What we own
+## Where this is going
 
-| Name | Today | Phase 1 plan |
+The new Laravel site **replaces the WordPress site** — founder's decision. It does
+not do that on day one:
+
+1. **Now:** build on `staging.togetherweown.com`.
+2. **Launch:** a subdomain of `togetherweown.com`. WordPress keeps the apex.
+3. **Later:** the apex becomes this app, as the *last* step of the WooCommerce /
+   GamiPress migration. That inventory and its cost are **TWO-41**, not this issue.
+
+There is a live WooCommerce Subscriptions install at the apex taking recurring
+payments from real members. It keeps earning until the replacement is genuinely
+complete. **Nothing in TWO-38 touches the apex `A` record.**
+
+What TWO-38 owes the future is a *cheap* cutover — see the checklist at the bottom.
+Nothing here should be built as if the subdomain split were permanent.
+
+---
+
+## What is actually live today
+
+Measured, not assumed. Re-check with `curl -sSI https://<host>/` and
+`curl -s -H 'accept: application/dns-json' 'https://cloudflare-dns.com/dns-query?name=<host>&type=TXT'`.
+
+| Name | What it does right now | Verdict |
 |---|---|---|
-| `togetherweown.com` | Live WordPress store, Cloudflare proxied | **Untouched** |
-| `www.togetherweown.com` | Resolves to the same place | **Untouched** — WordPress owns the apex/www canonical choice |
-| `togetherweown.net` | Ours, redirects to the `.com` | Keep the redirect, document it, 301 not 302 |
-| `<hostname>.togetherweown.com` | Does not exist | **The new site.** Name pending — see below |
-| `staging.togetherweown.com` | Does not exist | Staging for this app. Walled off |
-| `two.gg` | Ours | 301 to the community home |
-| `two.gg/join` | Ours | Tracked Discord invite |
+| `togetherweown.com` | WordPress + WooCommerce, Cloudflare proxied, bot challenge on | Leave alone |
+| `www.togetherweown.com` | Same place, same challenge — no redirect to the apex | WordPress' call, not ours |
+| `staging.togetherweown.com` | **Already resolves**, proxied, same origin as the apex | Repoint + grey cloud |
+| `two.gg`, `www.two.gg` | **302**, path-preserving, to `https://togetherweown.com/<path>` | Make it 301, retarget |
+| `two.gg/join` | 302s to `togetherweown.com/join`, which is not a page | Broken today |
+| `togetherweown.net` | 301 to `https://togetherweown.com/` | Correct, leave it |
+| `_dmarc.togetherweown.com` | `v=DMARC1;p=none;` — **no `rua`**, so nobody is collecting anything | Add reporting |
+| `togetherweown.com` SPF | `v=spf1 include:_spf.wpcloud.com ~all` | Do not edit blind |
+| `two.gg` mail records | **None at all.** No SPF, no DMARC | Free win, see below |
 
-### Open question: what is the new site called
+Three things fall out of that which change the plan:
 
-Recommendation on the table is `hub.togetherweown.com`. The founder has not
-answered (asked on TWO-21). **Nothing in this repository hardcodes a hostname** —
-`APP_URL` in `.env` drives every absolute URL the app generates (checked: only
-`config/app.php`, `config/mail.php`, `config/filesystems.php` and the Discord
-redirect URI read it, all through `env()`). When the answer lands, the change is:
-
-1. `APP_URL` on the production box.
-2. The Discord OAuth **redirect URI allowlist** in the Discord developer portal —
-   that is a founder action, we do not have portal access.
-3. One `A` record.
-
-That is the whole cost of the decision. It is not worth blocking other work over.
+- **The staging record already exists and is orange-clouded.** This is a repoint,
+  not a create, and somebody has to remember to turn the cloud off.
+- **`two.gg` is served by a Cloudflare redirect rule with no origin behind it.**
+  It has never needed a server and it should stay that way for as long as possible.
+- **`two.gg` can have `p=reject` today.** The issue's original instinct — publish
+  reject while there is nothing legitimate to break — was right; it is just right
+  for `two.gg`, not for the domain that sends WooCommerce receipts.
 
 ---
 
-## Records to create
+## Records to create or change
 
 `<PROD_IP>` and `<STAGING_IP>` come out of the hosting decision in **TWO-37**. They
 may be the same box to start with. Everything else below is final.
 
-### The new site — after the hostname answer
-
-| Type | Name | Value | Cloudflare | TTL |
-|---|---|---|---|---|
-| `A` | `<hostname>` | `<PROD_IP>` | 🟠 Proxied | Auto |
-| `AAAA` | `<hostname>` | `<PROD_IPV6>` if the host has one | 🟠 Proxied | Auto |
-
-Proxied is fine here: real browsers, real people, and we get Cloudflare's TLS and
-caching for free. Origin still terminates TLS with its own Let's Encrypt
-certificate and auto-renewal — Cloudflare set to **Full (strict)**, never Flexible.
-
-### Staging — ready to go now
+### Staging — one record, blocked only on the IP
 
 | Type | Name | Value | Cloudflare | TTL |
 |---|---|---|---|---|
 | `A` | `staging` | `<STAGING_IP>` | ⚪ **DNS only (grey cloud)** | Auto |
 
-**Grey cloud is deliberate.** Cloudflare's bot challenge pages break headless
-Chrome, and headless Chrome is how QA's Dusk suite runs. A proxied staging record
-would give us a red test suite that has nothing to do with our code.
+**Grey cloud is deliberate, and we now have evidence.** A plain `curl` to the apex
+today comes back `403` with `cf-mitigated: challenge`. QA's Dusk suite is headless
+Chrome; it would get the same page. A proxied staging record buys us a red test
+suite that has nothing to do with our code.
 
-Staging is walled off three ways, all on the origin:
+Walled off three ways, all on the origin:
 
-- **Basic auth** in nginx over the whole site, with one exception: requests from
-  `127.0.0.1` skip it, so Dusk running on the staging box itself does not need
-  credentials baked into the test suite. No password in the repository, ever.
-- **`X-Robots-Tag: noindex, nofollow`** on every response, added by nginx so it
-  cannot be forgotten in application code.
-- **`robots.txt` disallowing everything.** Belt and braces — basic auth already
-  stops a crawler, but a misconfigured proxy one day might not.
+- **Basic auth** in nginx over the whole site, except requests from `127.0.0.1`, so
+  Dusk running on the staging box needs no credentials in the test suite. No
+  password in the repository, ever.
+- **`X-Robots-Tag: noindex, nofollow`** on every response, set by nginx so it cannot
+  be forgotten in application code.
+- **`robots.txt` disallowing everything.** Belt and braces.
 
-Its own Let's Encrypt certificate, same auto-renewal as production.
+Its own Let's Encrypt certificate with auto-renewal, same as production.
 
-### `two.gg`
+### The launch subdomain
 
 | Type | Name | Value | Cloudflare | TTL |
 |---|---|---|---|---|
-| `A` | `@` | `<PROD_IP>` | 🟠 Proxied | Auto |
-| `A` | `www` | `<PROD_IP>` | 🟠 Proxied | Auto |
+| `A` | `<hostname>` | `<PROD_IP>` | 🟠 Proxied | Auto |
 
-`two.gg` is served by **the same Laravel app**, matched on the request host — not a
-second service, not a second deploy, not a link-shortener dependency. Two routes:
+Proxied is right here: real browsers, real people, free TLS and caching. The origin
+still terminates TLS with its own Let's Encrypt certificate — Cloudflare on **Full
+(strict)**, never Flexible.
 
-- `two.gg/*` → 301 to the community home, except:
-- `two.gg/join` → records the click, then redirects to the tracked Discord invite.
+The name is still open (asked on TWO-21; `hub` was the standing suggestion). It
+matters less than it did, because it is now temporary — but pick it knowing **it
+becomes a permanent 301 source** the day the apex takes over. Every link a member
+pastes in Discord between launch and cutover has to keep working forever.
 
-The click write lands in our Postgres, which is where TWO-9's invite attribution
-already expects to read it. One deploy, one database, one place to look when the
-numbers disagree. Build it when TWO-9 has settled the invite-link contract.
+### `two.gg`
+
+Leave it as a Cloudflare redirect rule. Two changes:
+
+| Rule | From | To | Status |
+|---|---|---|---|
+| 1 | `two.gg/join`, `www.two.gg/join` | `https://<community site>/join` | **301** |
+| 2 | everything else on `two.gg` | `https://<community site>/<path>` | **301** |
+
+- **302 → 301.** A 302 tells every browser and crawler not to remember, so we pay
+  the round trip forever and the link earns us nothing in search.
+- **`<community site>` is the launch subdomain now and the apex after cutover.** One
+  value, changed once, in one Cloudflare rule. That is the entire two.gg cost of the
+  apex swap.
+- **No origin, on purpose.** The most important link we own does not depend on our
+  VM being up. `/join` itself is a Laravel route (below) — but if the box is down,
+  the break-glass is one rule edit: point `two.gg/join` straight at the raw Discord
+  invite. Write the invite URL in the runbook next to that sentence.
+
+`two.gg/join` is the link that goes in a stream title or a friend's DM. Its target,
+and how the click is attributed, belong to **TWO-9**'s invite contract. TWO-38 owns
+the name and the redirect; TWO-9 owns what is counted. Default shape: a Laravel
+`/join` route that records the click and redirects to the tracked invite, and if the
+invite lookup fails for any reason it still redirects to a permanent fallback invite
+rather than showing an error. A member who clicked join must always land in Discord.
 
 ### `togetherweown.net`
 
-Stays a **301 to `togetherweown.com`**, apex and `www`. It is a defensive
-registration, not a second front door — no separate content, no separate
-certificate story beyond the redirect host. Written down here so the next person
-does not find a mystery domain in the registrar account.
+Already a correct 301 to the `.com`. Defensive registration, no separate content.
+Documented here so the next person does not find a mystery domain in the registrar.
 
 ---
 
-## Mail: SPF and DMARC, carefully
+## Mail: SPF and DMARC
 
-The original plan said publish `p=reject` immediately "while there is nothing
-legitimate to break." **That was written before we knew the apex sends mail.** It
-does — WooCommerce order confirmations, subscription renewal notices, WordPress
-password resets, Jetpack. Publishing `p=reject` without enumerating those senders
-would silently bin customer receipts for a store that takes recurring payments.
-Silently, because nobody reads their own DMARC failures until a customer complains.
+Two domains, two different answers, because one of them sends money email and the
+other sends nothing.
 
-The staged rollout, which gets us the same protection a few weeks later without
-that risk:
+### `two.gg` — protect it now, it costs nothing
+
+It has no mail records at all, which means anyone can spoof `@two.gg` today and no
+receiver will push back. It sends no mail and has no store, so there is nothing to
+break:
+
+| Type | Name | Value |
+|---|---|---|
+| `TXT` | `@` | `v=spf1 -all` |
+| `TXT` | `_dmarc` | `v=DMARC1; p=reject; rua=mailto:<founder>` |
+| `TXT` | `*._domainkey` | `v=DKIM1; p=` |
+
+Hard fail, reject, and an empty DKIM wildcard. If we ever send mail from `two.gg`
+we undo this deliberately.
+
+### `togetherweown.com` — staged, because the apex sends real receipts
+
+There is already a `_dmarc` record: `v=DMARC1;p=none;`. It has **no `rua`**, so it
+has been collecting nothing this whole time. Jumping that to `p=reject` would
+silently bin WooCommerce order confirmations, renewal notices and password resets —
+silently, because nobody reads their own DMARC failures until a customer complains.
 
 | Step | Record | When |
 |---|---|---|
-| 1 | `_dmarc` TXT: `v=DMARC1; p=none; sp=reject; rua=mailto:<founder>; fo=1` | Now |
-| 2 | Read two to four weeks of reports, list every legitimate sender, fix SPF and DKIM alignment for each | After step 1 |
+| 1 | `_dmarc` TXT → `v=DMARC1; p=none; sp=reject; rua=mailto:<founder>; fo=1` | Now |
+| 2 | Read 2–4 weeks of reports, list every legitimate sender, fix SPF and DKIM alignment | After step 1 |
 | 3 | `p=quarantine; pct=25`, then `pct=100` | Once step 2 is clean |
 | 4 | `p=reject` | Two clean weeks at quarantine |
 
+**The clock starts when `rua` lands, not before.** That is the argument for doing
+step 1 this week even though nothing else here can move.
+
 **`sp=reject` from day one is the important bit.** The subdomain policy covers every
 name under `togetherweown.com` that sends no mail — including ours — so spoofing
-`billing@hub.togetherweown.com` is dead immediately, while the apex's real receipts
-keep flowing. That is the protection the issue actually wanted, available now.
+`billing@<our subdomain>` is dead immediately while the apex's real receipts keep
+flowing. That is the protection the issue wanted, available now.
 
-SPF stays as WordPress has it until the report data says otherwise. **Do not edit
-the apex SPF record blind** — one wrong `-all` has the same effect as a bad DMARC
-policy.
+The consequence, written down so it does not ambush us: **before this app sends its
+first email**, its sending subdomain needs SPF and DKIM that align, or `sp=reject`
+will bin our own account mail. Today `MAIL_MAILER=log` and we send none.
 
-When this app starts sending account email (it sends none today; `MAIL_MAILER=log`),
-it gets its own subdomain sender with its own SPF and DKIM, and `sp=` is revisited
-in the same change. Not before.
+SPF stays as WordPress has it (`include:_spf.wpcloud.com ~all`) until report data
+says otherwise. **Do not edit the apex SPF blind** — one wrong `-all` does the same
+damage as a bad DMARC policy.
 
 ---
 
 ## Security headers
 
-Unchanged from the issue, all set in nginx on the origin so they apply on both the
-new site and staging:
+Set in nginx on the origin so they apply to the launch subdomain and staging alike:
 
 | Header | Value |
 |---|---|
-| `Strict-Transport-Security` | `max-age=31536000; includeSubDomains` — add `preload` only after the new hostname has been stable for a month |
+| `Strict-Transport-Security` | `max-age=31536000; includeSubDomains` |
 | `X-Content-Type-Options` | `nosniff` |
 | `Referrer-Policy` | `strict-origin-when-cross-origin` |
 | `X-Frame-Options` | `DENY` |
-| `Permissions-Policy` | `camera=(), microphone=(), geolocation=(), interest-cohort=()` |
-| `Content-Security-Policy` | Written with the Frontend Engineer once the asset origins are known. Report-only first |
+| `Permissions-Policy` | `camera=(), microphone=(), geolocation=()` |
+| `Content-Security-Policy` | Written with the Frontend Engineer once asset origins are known. Report-only first |
 
-**`includeSubDomains` is a commitment.** Every subdomain of `togetherweown.com`,
-including anything WordPress adds later, must then be HTTPS-only forever. If we set
-HSTS on the apex we need the founder's agreement; on our own hostname we do not.
-Start on ours.
+**No `preload` until after the apex cutover.** Preload is a submission to a list
+baked into browsers and it is slow and painful to reverse; it commits every
+subdomain of `togetherweown.com`, including whatever WordPress still owns, to
+HTTPS-only forever. Revisit it once the apex is ours and stable for a month.
 
 ---
 
-## Cookies: keep them on our hostname
+## Cookies and sessions
 
-If the app lives at `hub.togetherweown.com` while WordPress holds the apex, the
-session cookie must be **host-scoped**. `SESSION_DOMAIN` stays `null` in production
-— it must never be set to `.togetherweown.com`, which would hand our session cookie
-to WordPress on every page view of the store. `SESSION_SECURE_COOKIE=true` and
-`SESSION_SAME_SITE=lax` alongside it.
+`SESSION_DOMAIN` stays **null** — host-scoped. It must never be set to
+`.togetherweown.com`, which would hand our session cookie to WordPress on every page
+view of the store. `SESSION_SECURE_COOKIE=true`, `SESSION_SAME_SITE=lax`.
+
+That stays correct after cutover, and it means **everyone logged in on the launch
+subdomain gets logged out once when the apex takes over.** We accept that rather
+than building cookie sharing: re-login is one Discord OAuth click. It goes in the
+cutover announcement, not in the code.
+
+---
+
+## The cutover checklist
+
+The apex swap is TWO-41's to schedule. This is what it costs when it comes, and
+keeping this list short is a standing obligation on every PR.
+
+1. `APP_URL` on the production box.
+2. **Add** the apex Discord OAuth redirect URI in the developer portal, keeping the
+   subdomain one, *before* the DNS change. Both live through the transition, remove
+   the old one after. Swapping instead of adding is a login outage. Founder action —
+   we do not have portal access.
+3. Apex `A` record → `<PROD_IP>`, and `www` alongside it.
+4. Launch subdomain becomes a 301 to the apex, permanently.
+5. The one `two.gg` Cloudflare rule retargets to the apex.
+6. Certificate for the apex, plus HSTS; `preload` becomes reconsiderable.
+7. Announce the one-time logout.
+
+**What keeps that list this short:** no hostname is written down anywhere in this
+codebase. `APP_URL` drives every absolute URL, read only through `env()` in
+`config/app.php`, `config/mail.php`, `config/filesystems.php` and the Discord
+redirect URI. That is enforced, not hoped for —
+`tests/Unit/NoHardcodedHostnamesTest.php` fails the build if `togetherweown.com`,
+`togetherweown.net` or `two.gg` appears in `app/`, `config/`, `routes/` or
+`resources/views/`. If you need an exception, add it to the allowlist in that file
+with a reason.
 
 ---
 
 ## Who can actually change these records
 
-The zones are in **Cloudflare**, under the founder's account. We do not have
-access. Two ways to make this work, and one is much better:
+The zones are in **Cloudflare** under the founder's account. We do not have access,
+and that is currently the binding constraint on the three items above that need no
+hosting decision at all: the `two.gg` 301, the `two.gg` mail records, and the
+`_dmarc` `rua`.
 
 **Recommended:** a Cloudflare API token scoped to `Zone.DNS: Edit` on
-`togetherweown.com` and `two.gg` only — no account access, no billing, no ability
-to touch the WordPress origin settings. It arrives through the secrets channel,
-never an issue comment. That way a certificate or record fix at 2am does not need
-to wake the founder.
+`togetherweown.com` and `two.gg` only — no account access, no billing, no ability to
+touch the WordPress origin settings. Delivered through the secrets channel, never an
+issue comment. A certificate or record fix at 2am then does not need to wake the
+founder.
 
-**Fallback:** the founder applies the table above by hand and we verify.
+**Fallback:** the founder applies the tables above by hand and we verify.
 
-Either way the apex `A` record is not ours to touch, token or no token.
+Either way the apex `A` record is not ours to touch, token or no token, until
+TWO-41 says so.
