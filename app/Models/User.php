@@ -19,6 +19,8 @@ class User extends Authenticatable
         'username',
         'display_name',
         'avatar',
+        'is_moderator',
+        'discord_joined_at',
         'discord_synced_at',
     ];
 
@@ -31,6 +33,8 @@ class User extends Authenticatable
     protected function casts(): array
     {
         return [
+            'is_moderator' => 'boolean',
+            'discord_joined_at' => 'datetime',
             'discord_synced_at' => 'datetime',
         ];
     }

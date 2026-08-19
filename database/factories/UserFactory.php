@@ -16,7 +16,15 @@ class UserFactory extends Factory
             'username' => $this->faker->unique()->userName(),
             'display_name' => $this->faker->name(),
             'avatar' => $this->faker->md5(),
+            'is_moderator' => false,
+            'discord_joined_at' => now()->subMonths(6),
             'discord_synced_at' => now(),
         ];
+    }
+
+    /** A member who holds a moderator role in the TWO Discord server. */
+    public function moderator(): static
+    {
+        return $this->state(['is_moderator' => true]);
     }
 }
