@@ -35,6 +35,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # The gate checks its own wiring, first, before anything slow. A pull request
+      # that edits this file to something that reports green while it has stopped
+      # gating is rejected by the pipeline it is disarming. Half a second, no
+      # network — see ci/verify-pipeline.sh and docs/ci.md.
+      - name: Gate wiring
+        run: ./ci/verify-pipeline.sh --lint
+
       - uses: shivammathur/setup-php@v2
         with:
           php-version: ${{ env.PHP_VERSION }}

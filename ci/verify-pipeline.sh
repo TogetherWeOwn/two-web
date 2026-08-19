@@ -18,17 +18,39 @@
 #
 # Usage:
 #   ./ci/verify-pipeline.sh              # dry run: prints what it would do
-#   ./ci/verify-pipeline.sh --run        # actually opens the PRs
+#   ./ci/verify-pipeline.sh --lint       # static checks only: no network, no gh
+#   ./ci/verify-pipeline.sh --run        # actually opens the PRs (lints first)
 #   ./ci/verify-pipeline.sh --cleanup    # delete leftover branches and close PRs
 #
 # Needs: gh, authenticated, with push access. Opens PRs against `main`. Never
 # pushes to `main`, never force-pushes anything, closes every PR it opens.
+#
+# --lint needs nothing but bash, so it runs before the org exists, in a pre-commit
+# hook, or in CI itself. It catches the class of bug where the gate still reports
+# green while it has quietly stopped gating.
 
 set -euo pipefail
 
 BRANCH_PREFIX="ci-verify"
 BASE_BRANCH="main"
 MODE="${1:---dry-run}"
+
+WORKFLOW="./.github/workflows/ci.yml"
+DOCS="./docs/ci.md"
+
+# The aggregate. Every other job in ci.yml must be in its `needs:`, and it must go
+# red when any of them does — including when one is *skipped*.
+AGGREGATE="tests"
+
+# The checks branch protection on `main` requires, by check-run name. Source of
+# truth for this file, docs/ci.md, and two-bot/scripts/setup-github.sh (TWO-39):
+# all three have to agree or the gate is decorative.
+REQUIRED_CHECKS=(tests gitleaks)
+
+# Every check run a pull request should produce. A check that never reports is not
+# a pass — GitHub blocks on a missing required context and this script used to read
+# an empty result as green, which is the same bug one level up.
+EXPECTED_CHECKS=(static pest dusk budgets tests gitleaks)
 
 # Each case: <slug>|<expected failing job>|<what it proves>
 CASES=(
@@ -39,11 +61,111 @@ CASES=(
   "dusk|dusk|a broken page is caught in a real browser"
   "a11y|budgets|a WCAG 2.2 AA violation is rejected"
   "lcp|budgets|an LCP breach is rejected"
+  "gate|static|a pull request that disarms the merge gate is rejected"
 )
 
 log()  { printf '\n\033[1m==> %s\033[0m\n' "$*"; }
 fail() { printf '\033[31mFAIL: %s\033[0m\n' "$*" >&2; }
 pass() { printf '\033[32mPASS: %s\033[0m\n' "$*"; }
+
+# --- static checks ----------------------------------------------------------
+# Everything here is about one failure mode: the gate reports a result that is not
+# the pipeline's result. Opening seven pull requests proves it too, but only after
+# the org, the repo and the protection rules exist, and only in about forty
+# minutes. These take no network and half a second, so there is no excuse.
+#
+# GitHub's two asymmetric rules, both of which have bitten this repo already:
+#
+#   a *skipped* required check counts as PASSED
+#   an *absent* required check blocks the PR forever
+#
+# A job with a plain `needs:` is skipped — not failed — when a need goes red. So a
+# plain aggregate is a green light on a red pipeline. `if: always()` plus a guard
+# that treats `skipped` as red is what makes it a gate.
+
+job_ids() { awk '/^jobs:/{j=1;next} j && /^  [a-zA-Z0-9_-]+:[[:space:]]*$/{gsub(/[ :]/,"");print}' "$1"; }
+
+# The lines of one job's block: from `  <id>:` to the next job at the same indent.
+job_block() { awk -v id="$2" '$0 ~ "^  " id ":[[:space:]]*$" {j=1;next} j && /^  [a-zA-Z0-9_-]+:[[:space:]]*$/{exit} j{print}' "$1"; }
+
+lint() {
+  local rc=0 block needs jobs missing
+
+  [ -f "$WORKFLOW" ] || { fail "$WORKFLOW not found — run this from the repository root"; return 1; }
+
+  jobs=$(job_ids "$WORKFLOW")
+  block=$(job_block "$WORKFLOW" "$AGGREGATE")
+
+  if [ -z "$block" ]; then
+    fail "no job \`${AGGREGATE}\` in ${WORKFLOW}. Branch protection requires that name; without the job the check never arrives and every PR waits forever."
+    return 1
+  fi
+
+  # 1. The aggregate must run even when a need went red. Without this it is skipped,
+  #    and a skipped required check is a passed one.
+  if grep -qE '^\s*if:\s*always\(\)\s*$' <<< "$block"; then
+    pass "\`${AGGREGATE}\` has \`if: always()\` — it runs even when a need fails"
+  else
+    fail "\`${AGGREGATE}\` has no \`if: always()\`. A red \`static\` would *skip* it, GitHub counts a skipped required check as passed, and the PR merges."
+    rc=1
+  fi
+
+  # 2. Running is not enough — it has to fail. The guard must treat all three
+  #    non-success results as red. `skipped` is the one people leave out: a job
+  #    disabled by its own `if:` would otherwise sail through.
+  for result in failure cancelled skipped; do
+    if grep -q "'${result}'" <<< "$block"; then
+      pass "\`${AGGREGATE}\` treats \`${result}\` as red"
+    else
+      fail "\`${AGGREGATE}\`'s guard never mentions \`${result}\` — a need in that state would pass the gate"
+      rc=1
+    fi
+  done
+
+  # 3. Every other job must be wired into the aggregate. Adding a job and forgetting
+  #    this is silent: the new job goes red, the required check stays green.
+  needs=$(grep -oE '^\s*needs:.*' <<< "$block" | tr -d '[]' | sed 's/.*needs://' | tr ',' ' ')
+  missing=""
+  while read -r job; do
+    [ -n "$job" ] || continue
+    [ "$job" = "$AGGREGATE" ] && continue
+    grep -qw -- "$job" <<< "$needs" || missing="${missing} ${job}"
+  done <<< "$jobs"
+  if [ -n "$missing" ]; then
+    fail "job(s)${missing} are not in \`${AGGREGATE}\`'s \`needs:\` — they can go red while the required check stays green"
+    rc=1
+  else
+    pass "every job in ${WORKFLOW} is behind \`${AGGREGATE}\`"
+  fi
+
+  # 4. A `needs:` naming a job that does not exist is a workflow that never starts.
+  for job in $needs; do
+    grep -qx -- "$job" <<< "$jobs" || { fail "\`${AGGREGATE}\` needs \`${job}\`, which is not a job in ${WORKFLOW}"; rc=1; }
+  done
+
+  # 5. Every required check must be a real job id somewhere in .github/workflows.
+  #    Protection matches the check-run name; requiring a context nothing produces —
+  #    the workflow *name*, say, rather than a job id — blocks every PR forever on a
+  #    check that will never report.
+  for check in "${REQUIRED_CHECKS[@]}"; do
+    if grep -qxF "$check" <<< "$(for f in ./.github/workflows/*.yml; do job_ids "$f"; done)"; then
+      pass "required check \`${check}\` is a real job"
+    else
+      fail "required check \`${check}\` matches no job id in .github/workflows/ — every PR would wait forever on it"
+      rc=1
+    fi
+  done
+
+  # 6. The docs have to name the same checks. A protection rule set from a stale
+  #    doc is how the wrong context gets required in the first place.
+  if [ -f "$DOCS" ]; then
+    for check in "${REQUIRED_CHECKS[@]}"; do
+      grep -q "\`${check}\`" "$DOCS" || { fail "${DOCS} never names the required check \`${check}\`"; rc=1; }
+    done
+  fi
+
+  return "$rc"
+}
 
 # --- the breakages ----------------------------------------------------------
 # Each writes exactly one deliberate defect into the working tree. Deterministic on
@@ -122,6 +244,15 @@ break_lcp() {
   sed -i '1i @php usleep(3000000); @endphp' resources/views/home.blade.php
 }
 
+break_gate() {
+  # Delete the aggregate's `if: always()`. Every job still passes, every test still
+  # passes, and the pipeline stops being a gate: a red `static` now *skips* `tests`,
+  # and GitHub counts a skipped required check as a passed one. Nothing else in the
+  # suite notices — this is the failure mode that has no symptom until the day a
+  # broken PR merges clean. Caught by `--lint`, which the `static` job runs first.
+  sed -i '/^    if: always()$/d' .github/workflows/ci.yml
+}
+
 # --- driver -----------------------------------------------------------------
 
 cleanup() {
@@ -144,7 +275,16 @@ if [ "$MODE" = "--cleanup" ]; then
   exit 0
 fi
 
+if [ "$MODE" = "--lint" ]; then
+  log "Static checks on the gate (no network)"
+  lint || { fail "the gate would report green while not gating. Fix ${WORKFLOW} before anything is merged behind it."; exit 1; }
+  log "Gate wiring is sound."
+  exit 0
+fi
+
 if [ "$MODE" != "--run" ]; then
+  log "Static checks on the gate (no network)"
+  lint || { fail "the gate would report green while not gating. Fix ${WORKFLOW} before anything is merged behind it."; exit 1; }
   log "Dry run. Nothing will be pushed. Re-run with --run to execute."
   for entry in "${CASES[@]}"; do
     IFS='|' read -r slug job why <<< "$entry"
@@ -153,6 +293,11 @@ if [ "$MODE" != "--run" ]; then
   printf '  %-10s -> expects job %-8s : %s\n' "clean" "tests" "a clean PR goes green"
   exit 0
 fi
+
+# Before eight pull requests and forty minutes of runner time, half a second of
+# reading the file.
+log "Static checks on the gate"
+lint || { fail "the gate is misconfigured. Fix ${WORKFLOW} first — the live run would only tell you the same thing, slower."; exit 1; }
 
 command -v gh >/dev/null || { fail "gh is not installed"; exit 1; }
 gh auth status >/dev/null 2>&1 || { fail "gh is not authenticated"; exit 1; }
@@ -208,12 +353,27 @@ check_branch() {
   local checks
   checks=$(gh pr checks "$branch" --json name,state --jq '.[] | "\(.name)=\(.state)"' 2>/dev/null || echo "")
 
+  # A check that never reported is not a pass. If the workflow file has a syntax
+  # error, or Actions is disabled on the repo, `gh pr checks` returns nothing at
+  # all — and reading nothing as green is exactly the bug this script exists to
+  # catch, one level up.
+  local absent=""
+  for expected in "${EXPECTED_CHECKS[@]}"; do
+    grep -q "^${expected}=" <<< "$checks" || absent="${absent} ${expected}"
+  done
+  if [ -n "$absent" ]; then
+    fail "${why}: check(s)${absent} never reported on ${branch}. A required check that never arrives blocks the PR forever; one that is not required is not gating at all. Got: $(echo "$checks" | tr '\n' ' ')"
+    return 1
+  fi
+
   if [ "$expect_green" = "yes" ]; then
-    if echo "$checks" | grep -qv 'SUCCESS$' && [ -n "$(echo "$checks" | grep -v 'SUCCESS$')" ]; then
-      fail "clean PR was not green: $(echo "$checks" | tr '\n' ' ')"
+    local not_green
+    not_green=$(grep -v '=SUCCESS$' <<< "$checks" || true)
+    if [ -n "$not_green" ]; then
+      fail "clean PR was not green: $(echo "$not_green" | tr '\n' ' ')"
       return 1
     fi
-    pass "clean PR went green"
+    pass "clean PR went green (all ${#EXPECTED_CHECKS[@]} checks reported SUCCESS)"
     return 0
   fi
 

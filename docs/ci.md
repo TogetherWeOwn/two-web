@@ -10,7 +10,7 @@
 
 | Job | What it does | Fails when |
 |---|---|---|
-| `static` | Pint `--test`, PHPStan level 8 | formatting drifts, or types do not hold |
+| `static` | gate wiring, Pint `--test`, PHPStan level 8 | the gate stops gating, formatting drifts, or types do not hold |
 | `pest` | Pest unit + feature, real Postgres 17 | any test fails |
 | `dusk` | Laravel Dusk, real Chrome, real server | any journey fails |
 | `budgets` | Lighthouse mobile + axe-core at 360px and 1280px | LCP ≥ 2.0s, CLS ≥ 0.1, or any WCAG 2.2 AA violation |
@@ -38,17 +38,40 @@ hours. Rename in both places or not at all.
 - **`gitleaks`** comes from `.github/workflows/secret-scan.yml`, job id `gitleaks`.
   Not defined here.
 
+### GitHub's two asymmetric rules
+
+Both have already produced a wrong protection rule on this repo. Learn them once:
+
+- **A *skipped* required check counts as passed.** A job with a plain `needs:` is
+  *skipped*, not failed, when one of its needs goes red. So a plain aggregate is a
+  green light on a red pipeline. `tests` therefore carries `if: always()` and a
+  guard step that fails on `failure`, `cancelled` **and** `skipped`. Dropping any
+  one of those three disarms the gate while leaving it looking armed.
+- **An *absent* required check blocks the PR forever.** Require a context that no
+  job produces — the workflow *name* instead of a job id, a renamed job, a typo —
+  and every PR waits, indefinitely, on a check that will never report. This looks
+  exactly like CI being slow.
+
+`./ci/verify-pipeline.sh --lint` asserts both directions offline, in half a second,
+with no GitHub. Run it after any edit to `ci.yml` or to the protection rules.
+
 ### Required checks to configure on `main`
 
 Already applied by the setup script, and correct as-is:
 
 - `tests` — the aggregate. Adding a job later needs no protection change as long as
-  the new job is in its `needs:` list.
+  the new job is in its `needs:` list. `--lint` fails if a job is not.
 - `gitleaks` — the secret scan.
 
-Do not add `static`, `pest`, `dusk` or `budgets` to the required list. They are
-already covered by the aggregate, and required checks that can be skipped (a path
-filter, a cancelled run) block PRs forever.
+**There is no job called `ci`.** `CI` is the *workflow* name in `ci.yml`; protection
+matches the check-run name, which is the job id. Requiring `ci` blocks every pull
+request forever — see the second rule above.
+
+Requiring `static`, `pest`, `dusk` and `budgets` as well is harmless but buys
+nothing: the aggregate is red whenever any of them is, and a belt-and-braces list
+has to be re-edited every time a job is added or renamed, which is one more place
+to get it wrong. If you do require them, require all four — three of four looks
+deliberate and is not.
 
 Plus: no direct pushes to `main`, PR required, no self-approval, and dismiss stale
 approvals on new commits.
