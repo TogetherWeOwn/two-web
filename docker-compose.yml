@@ -1,0 +1,25 @@
+# Local Postgres only. Nothing else belongs in here — PHP, the queue worker and
+# Vite all run on your machine, and production is nginx + PHP-FPM + systemd on a
+# plain VM, not containers.
+services:
+  postgres:
+    image: postgres:17-alpine
+    container_name: two_web_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: two_web
+      POSTGRES_PASSWORD: two_web
+      POSTGRES_DB: two_web
+    ports:
+      - "5432:5432"
+    volumes:
+      - two_web_pgdata:/var/lib/postgresql/data
+      - ./docker/postgres-init.sql:/docker-entrypoint-initdb.d/10-init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U two_web -d two_web"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  two_web_pgdata:

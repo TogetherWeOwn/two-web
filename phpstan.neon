@@ -1,0 +1,19 @@
+includes:
+    - vendor/larastan/larastan/extension.neon
+
+parameters:
+    level: 8
+
+    # `tests` is deliberately not analysed. Pest binds `$this` to the TestCase at
+    # runtime and PHPStan cannot see it, so every `$this->get(...)` reads as an
+    # error. The only ways to silence that are per-file ignores or a baseline, and
+    # a config full of ignores is worse than an honest smaller scope. Tests are
+    # checked by running them.
+    # `config` is not analysed either: at level 8 every `env('X', 'default')` in
+    # Laravel's own shipped config reads as bool|string. Config files hold values,
+    # not logic — a wrong one shows up the moment the app boots.
+    paths:
+        - app
+        - bootstrap
+        - database
+        - routes
