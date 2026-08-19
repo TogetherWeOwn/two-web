@@ -2,7 +2,7 @@
 
 What a member record is, what a member can change, and who can see it.
 
-**Last checked:** 19 August 2026 · **Issues:** TWO-29
+**Last checked:** 19 August 2026 · **Issues:** TWO-29, TWO-41
 
 ---
 
@@ -12,6 +12,19 @@ A member exists because they signed in with Discord. `users.discord_id` is
 `NOT NULL` and unique, there is no password column and no email column. If we
 ever learn another identity for a person, it hangs off that record. It is never
 the other way round.
+
+**No email addresses.** CEO decision, 19 August 2026 (TWO-41): the site stores
+no member email, ever. The only reason anyone proposed storing one was to match
+members against a legacy WordPress population, and that population does not
+exist. This is enforced in three places, so it cannot rot back in by accident:
+
+| Where | What stops it |
+|---|---|
+| `DiscordLoginController::SCOPES` | `setScopes(['identify','guilds','guilds.members.read'])` — `setScopes`, not `scopes`, because `scopes()` merges with Socialite's defaults and the Discord driver defaults to asking for `email` |
+| `create_users_table` | No `email` column to write to |
+| `DiscordLoginTest` | "never stores an email, because we never ask for one" — feeds Socialite a member *with* an email and asserts it lands nowhere |
+
+Adding an email column is therefore a CEO conversation, not a migration.
 
 ---
 
@@ -67,23 +80,34 @@ merged.
 
 ---
 
-## Points, ranks and badges: not in the schema, and not reserved for
+## Points, ranks and badges: decided, and deliberately unbuilt
 
-An earlier draft of this document reserved table shapes for GamiPress points,
-ranks and badges so a future import from `togetherweown.com` could land
-truthfully. **That is withdrawn.** The WordPress site was inventoried on
-19 August 2026: it is a fresh install from 1 August 2026 serving a coming-soon
-page, GamiPress is installed but has never been used, and there is no history to
-migrate. Evidence is in the `migration-assessment` document on TWO-41.
+An earlier draft reserved table shapes for GamiPress points, ranks and badges so
+a future import from `togetherweown.com` could land truthfully. **The import is
+withdrawn.** The WordPress site was inventoried on 19 August 2026: fresh install,
+coming-soon page, GamiPress installed but never switched on — zero points types,
+which is decisive, because a points type *is* the currency. There are no
+balances to move. Evidence: `migration-assessment` rev 2 on TWO-41.
 
-So there is no points ledger, no ranks ladder, no badge table, and no
-`external_identities` mapping — not empty, not reserved, not sketched. Designing
-around a migration that will never happen is the exact thing we delete in
-review.
+So there are **no import tables, no `source` / `external_ref` reconciliation
+columns, and no link-your-old-account flow**, now or later. There is no old
+account to link.
 
-If TWO wants a points system later it gets designed on its own merits against a
-clean slate, as a product decision with no legacy shape to honour. The one thing
-worth carrying forward from the earlier draft, and only if that day comes: a
-points system should be a ledger of signed deltas rather than a running total
-column, because a total you cannot explain is a support burden. That is a
-sentence of advice, not a schema.
+Two design decisions survive that, and they live here as decisions rather than
+as migrations:
+
+- **If points ever happen, they are a ledger of signed deltas, not a running
+  total column.** A total nobody can reconstruct becomes a moderator support
+  burden the first time a member disputes it. A ledger answers "why is it 400?"
+  by itself.
+- **If a second identity ever needs storing** (Steam, Twitch, a tournament
+  handle), it goes in an `external_identities` child table keyed on `user_id`,
+  never as extra columns on `users`. `users` is a cache of what Discord told us
+  and is overwritten on every login; anything not from Discord cannot live there.
+
+Neither table exists in `database/migrations`, and neither should until
+something writes to it. An empty table is not free: it ships in every migration
+run, every backup and every schema diff, and it invites the next engineer to
+build against a shape nobody has validated against a real requirement. Writing
+the decision down costs nothing and buys the same thing — nobody re-litigates it
+from scratch on the day it matters.
