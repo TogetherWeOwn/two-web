@@ -1,0 +1,372 @@
+# The merge gate. Red means nobody merges — see docs/ci.md.
+#
+# Job names are contract: branch protection on `main` requires them by name. If you
+# rename a job here, the required check silently never arrives and every PR waits
+# forever. Rename in both places or not at all.
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+# A second push to the same PR cancels the first. Never cancel `main` — its result
+# is what the staging deploy keys off.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+env:
+  PHP_VERSION: '8.4'
+  NODE_VERSION: '22'
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # Formatting and static analysis. No database, no browser. Under a minute, so it
+  # is the first thing to go red on the ordinary mistakes.
+  # ---------------------------------------------------------------------------
+  static:
+    name: static
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: ${{ env.PHP_VERSION }}
+          extensions: pdo_pgsql, intl, bcmath
+          coverage: none
+          tools: composer:v2
+
+      - name: Cache Composer packages
+        uses: actions/cache@v4
+        with:
+          path: vendor
+          key: composer-${{ env.PHP_VERSION }}-${{ hashFiles('composer.lock') }}
+          restore-keys: composer-${{ env.PHP_VERSION }}-
+
+      - run: composer install --no-interaction --prefer-dist --no-progress
+
+      # --test means "tell me, do not fix". CI never rewrites the author's code.
+      - name: Pint
+        run: vendor/bin/pint --test
+
+      - name: PHPStan
+        run: vendor/bin/phpstan analyse --memory-limit=512M --no-progress --error-format=github
+
+  # ---------------------------------------------------------------------------
+  # Pest: unit + feature, against real Postgres. Not sqlite — phpunit.xml explains
+  # why, and a suite that passes on sqlite and fails on jsonb is worse than none.
+  #
+  # Named `pest`, not `tests`. `tests` is the aggregate at the bottom of this file,
+  # because that is the required check on `main` (TWO-39) and a required check that
+  # only covers Pest would let a red Dusk or a blown budget merge.
+  # ---------------------------------------------------------------------------
+  pest:
+    name: pest
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: two_web
+          POSTGRES_PASSWORD: two_web
+          POSTGRES_DB: two_web_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U two_web -d two_web_test"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 20
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: ${{ env.PHP_VERSION }}
+          extensions: pdo_pgsql, intl, bcmath
+          coverage: none
+          tools: composer:v2
+
+      - name: Cache Composer packages
+        uses: actions/cache@v4
+        with:
+          path: vendor
+          key: composer-${{ env.PHP_VERSION }}-${{ hashFiles('composer.lock') }}
+          restore-keys: composer-${{ env.PHP_VERSION }}-
+
+      - run: composer install --no-interaction --prefer-dist --no-progress
+
+      - name: Prepare .env
+        run: |
+          cp .env.example .env
+          php artisan key:generate
+
+      # Migrations are run explicitly rather than left to RefreshDatabase so a broken
+      # migration fails as a migration, not as forty confusing test failures.
+      #
+      # The connection is spelled out here because phpunit.xml's <env> block only
+      # applies to PHPUnit, not to artisan — without this the migration would run
+      # against `two_web` from .env.example, which does not exist on this service.
+      # Real environment variables win over .env: Dotenv does not overwrite them.
+      - name: Run migrations
+        env:
+          DB_CONNECTION: pgsql
+          DB_HOST: 127.0.0.1
+          DB_PORT: 5432
+          DB_DATABASE: two_web_test
+          DB_USERNAME: two_web
+          DB_PASSWORD: two_web
+        run: php artisan migrate --force --no-interaction
+
+      - name: Pest
+        run: vendor/bin/pest --colors=always --ci
+
+  # ---------------------------------------------------------------------------
+  # Dusk: real Chrome, real HTTP server, real Postgres. The funnel lives or dies
+  # here. Slowest job in the pipeline, so it runs in parallel with the others
+  # rather than after them.
+  # ---------------------------------------------------------------------------
+  dusk:
+    name: dusk
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: two_web
+          POSTGRES_PASSWORD: two_web
+          POSTGRES_DB: two_web
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U two_web -d two_web"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 20
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: ${{ env.PHP_VERSION }}
+          extensions: pdo_pgsql, intl, bcmath
+          coverage: none
+          tools: composer:v2
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+
+      - name: Cache Composer packages
+        uses: actions/cache@v4
+        with:
+          path: vendor
+          key: composer-${{ env.PHP_VERSION }}-${{ hashFiles('composer.lock') }}
+          restore-keys: composer-${{ env.PHP_VERSION }}-
+
+      - run: composer install --no-interaction --prefer-dist --no-progress
+
+      # --include=dev because the runner sets NODE_ENV=production in some images and
+      # vite is a devDependency. Same reason the composer setup script does it.
+      - run: npm ci --include=dev
+      - run: npm run build
+
+      # APP_URL must match the server Dusk talks to or every assertion on a redirect
+      # fails with a hostname mismatch that reads like a test bug.
+      - name: Prepare .env
+        run: |
+          cp .env.example .env
+          sed -i 's#^APP_URL=.*#APP_URL=http://127.0.0.1:8000#' .env
+          sed -i 's#^APP_ENV=.*#APP_ENV=local#' .env
+          php artisan key:generate
+          php artisan config:clear
+
+      - run: php artisan migrate --force --no-interaction
+
+      # --detect matches the driver to the Chrome the runner already has. Pinning a
+      # version here is how Dusk suites start failing on a Tuesday for no reason.
+      - name: Install matching ChromeDriver
+        run: php artisan dusk:chrome-driver --detect
+
+      # Output goes to a file, not the step's stdout. A backgrounded process holding
+      # the step's pipe open makes the step hang until the job times out, and the
+      # log is worth having in the failure artifact anyway.
+      - name: Start the application server
+        run: |
+          php artisan serve --host=127.0.0.1 --port=8000 --no-reload > storage/logs/serve.log 2>&1 &
+          for i in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:8000/up > /dev/null; then
+              echo "server up after ${i}s"; exit 0
+            fi
+            sleep 1
+          done
+          echo "::error::the application never answered /up — Dusk would have failed as a browser timeout"
+          cat storage/logs/serve.log
+          exit 1
+
+      - name: Dusk
+        run: php artisan dusk --colors=always
+
+      # Dusk writes a screenshot, the page source and the browser console for every
+      # failure. Without these a red Dusk job is unactionable and the team learns to
+      # re-run it instead of reading it.
+      - name: Upload failure evidence
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: dusk-failures
+          path: |
+            tests/Browser/screenshots
+            tests/Browser/console
+            tests/Browser/source
+            storage/logs
+          retention-days: 14
+          if-no-files-found: ignore
+
+  # ---------------------------------------------------------------------------
+  # Budgets. Performance and accessibility are enforced as failures, not warnings.
+  # LCP < 2.0s and CLS < 0.1 on a mid-range phone profile; WCAG 2.2 AA with no
+  # violations. Lowering either of these is a CEO decision, in writing — not a
+  # commit to this file.
+  # ---------------------------------------------------------------------------
+  budgets:
+    name: budgets
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: two_web
+          POSTGRES_PASSWORD: two_web
+          POSTGRES_DB: two_web
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U two_web -d two_web"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 20
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: ${{ env.PHP_VERSION }}
+          extensions: pdo_pgsql, intl, bcmath
+          coverage: none
+          tools: composer:v2
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+
+      - name: Cache Composer packages
+        uses: actions/cache@v4
+        with:
+          path: vendor
+          key: composer-${{ env.PHP_VERSION }}-${{ hashFiles('composer.lock') }}
+          restore-keys: composer-${{ env.PHP_VERSION }}-
+
+      # --no-dev: we measure what production serves. Debug tooling in the container
+      # changes the numbers and flatters us.
+      - run: composer install --no-interaction --prefer-dist --no-progress --no-dev --optimize-autoloader
+
+      - run: npm ci --include=dev
+      - run: npm run build
+
+      - name: Prepare a production-shaped app
+        run: |
+          cp .env.example .env
+          sed -i 's#^APP_ENV=.*#APP_ENV=production#' .env
+          sed -i 's#^APP_DEBUG=.*#APP_DEBUG=false#' .env
+          sed -i 's#^APP_URL=.*#APP_URL=http://127.0.0.1:8000#' .env
+          php artisan key:generate
+          php artisan migrate --force --no-interaction
+          php artisan config:cache
+          php artisan route:cache
+          php artisan view:cache
+
+      # Backgrounded output goes to a file for the same reason as the Dusk job: a
+      # process holding the step's pipe open hangs the step.
+      - name: Start the application server
+        run: |
+          php artisan serve --host=127.0.0.1 --port=8000 --no-reload > storage/logs/serve.log 2>&1 &
+          for i in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:8000/up > /dev/null; then
+              echo "server up after ${i}s"; exit 0
+            fi
+            sleep 1
+          done
+          echo "::error::the application never answered /up — budgets could not be measured"
+          cat storage/logs/serve.log
+          exit 1
+
+      # Pinned exactly. An unpinned budget tool is a budget that changes without a
+      # commit. Fold these into package.json devDependencies when convenient.
+      - name: Install budget tooling
+        run: npm i --no-save --no-package-lock @lhci/cli@0.14.0 puppeteer@23.11.1 @axe-core/puppeteer@4.10.2 axe-core@4.10.2
+
+      # Three runs per URL, median reported. One run of LCP on a shared runner is
+      # noise; see docs/flake-policy.md on why the answer was more samples and a
+      # honest headroom margin rather than a retry.
+      - name: Lighthouse — performance budget
+        run: npx lhci autorun --config=./ci/lighthouserc.cjs
+
+      - name: Accessibility — WCAG 2.2 AA
+        run: node ci/a11y.mjs
+
+      - name: Upload budget reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: budget-reports
+          path: |
+            .lighthouseci
+            ci/a11y-report.json
+          retention-days: 14
+          if-no-files-found: ignore
+
+  # ---------------------------------------------------------------------------
+  # The one required check.
+  #
+  # Its id is `tests` because branch protection on `main` already requires a check
+  # by exactly that name (TWO-39) — GitHub matches the *job id*, not the workflow
+  # name. Making the aggregate carry that id means the required check is red
+  # whenever anything is red, and adding a job above needs no protection change as
+  # long as it is listed in `needs` here. Renaming this job silently disarms the
+  # gate: the required check never arrives and every PR waits forever.
+  # ---------------------------------------------------------------------------
+  tests:
+    name: tests
+    runs-on: ubuntu-24.04
+    if: always()
+    needs: [static, pest, dusk, budgets]
+    steps:
+      - name: Gate
+        run: |
+          echo "static:  ${{ needs.static.result }}"
+          echo "pest:    ${{ needs.pest.result }}"
+          echo "dusk:    ${{ needs.dusk.result }}"
+          echo "budgets: ${{ needs.budgets.result }}"
+          if [ "${{ contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled') || contains(needs.*.result, 'skipped') }}" = "true" ]; then
+            echo "::error::CI is red. Nobody merges. Read the failing job — do not re-run it."
+            exit 1
+          fi
+          echo "CI green."

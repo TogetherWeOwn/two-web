@@ -1,0 +1,137 @@
+# Deploys. Designed against the hosting decision on TWO-37 before it is provisioned,
+# so the pipeline does not get retrofitted around a server that already exists.
+#
+# The deliberate constraint, and it is not mine to relax: GitHub Actions never SSHes
+# into a server and no deploy key lives in CI. The whole deploy is one authenticated
+# POST to a Forge webhook; Forge pulls from GitHub on the box, runs migrations and
+# swaps the symlink. If we end up on Ploi instead of Forge the mechanism is still a
+# webhook, so only the secret's value changes, not this file.
+#
+# Nothing is provisioned yet. Both jobs no-op cleanly — green, not red — until the
+# matching secret exists. A missing deploy target must never look like a broken
+# build; that is how a team learns to ignore a red X.
+name: Deploy
+
+on:
+  # Staging follows `main` automatically, and only after CI has actually gone green.
+  # Keying off `workflow_run` rather than `push` is the difference between "main
+  # moved" and "main passed".
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [main]
+
+  # Production is never automatic. It is a human deciding the release checklist is
+  # satisfied, through an environment that requires a reviewer.
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: Where to deploy
+        required: true
+        default: staging
+        type: choice
+        options: [staging, production]
+
+permissions:
+  contents: read
+
+jobs:
+  staging:
+    name: staging
+    if: >-
+      github.event_name == 'workflow_dispatch' && inputs.environment == 'staging' ||
+      github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    environment:
+      name: staging
+    steps:
+      # The `secrets` context is not available to a job-level `if`, so the guard has
+      # to live in a step. Skipping is a pass: see the header.
+      - name: Check the deploy target exists
+        id: guard
+        env:
+          HOOK: ${{ secrets.FORGE_STAGING_DEPLOY_HOOK }}
+        run: |
+          if [ -z "$HOOK" ]; then
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::FORGE_STAGING_DEPLOY_HOOK is not set. Staging is not provisioned yet (TWO-37). Skipping, not failing."
+          else
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Trigger the Forge deploy
+        if: steps.guard.outputs.ready == 'true'
+        env:
+          HOOK: ${{ secrets.FORGE_STAGING_DEPLOY_HOOK }}
+        run: |
+          # --fail so an HTTP error is an exit code, not a cheerful log line.
+          # The URL carries the token, so it is never echoed.
+          curl --fail --silent --show-error --location \
+            --retry 3 --retry-delay 5 --retry-all-errors \
+            --max-time 60 \
+            --request POST "$HOOK" > /dev/null
+          echo "Forge accepted the staging deploy."
+
+      # Forge returns as soon as it queues the deploy, so a 200 is not "it is live".
+      # Poll the health check until the new release is actually answering.
+      - name: Wait for staging to answer
+        if: steps.guard.outputs.ready == 'true' && vars.STAGING_URL != ''
+        run: |
+          for i in $(seq 1 60); do
+            if curl -fsS --max-time 10 "${{ vars.STAGING_URL }}/up" > /dev/null; then
+              echo "staging healthy after ${i} attempt(s)"
+              exit 0
+            fi
+            sleep 10
+          done
+          echo "::error::staging never answered ${{ vars.STAGING_URL }}/up after 10 minutes. The deploy queued but the site is down."
+          exit 1
+
+  production:
+    name: production
+    if: github.event_name == 'workflow_dispatch' && inputs.environment == 'production'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    # Configure this environment with required reviewers in repo settings. That
+    # approval prompt is the technical half of the release sign-off; the other half
+    # is the checklist in docs/ci.md, and QA owns it.
+    environment:
+      name: production
+      url: https://togetherweown.com
+    steps:
+      - name: Check the deploy target exists
+        id: guard
+        env:
+          HOOK: ${{ secrets.FORGE_PRODUCTION_DEPLOY_HOOK }}
+        run: |
+          if [ -z "$HOOK" ]; then
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::FORGE_PRODUCTION_DEPLOY_HOOK is not set. Production is not provisioned yet (TWO-37). Skipping, not failing."
+          else
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Trigger the Forge deploy
+        if: steps.guard.outputs.ready == 'true'
+        env:
+          HOOK: ${{ secrets.FORGE_PRODUCTION_DEPLOY_HOOK }}
+        run: |
+          curl --fail --silent --show-error --location \
+            --retry 3 --retry-delay 5 --retry-all-errors \
+            --max-time 60 \
+            --request POST "$HOOK" > /dev/null
+          echo "Forge accepted the production deploy."
+
+      - name: Wait for production to answer
+        if: steps.guard.outputs.ready == 'true'
+        run: |
+          for i in $(seq 1 60); do
+            if curl -fsS --max-time 10 "https://togetherweown.com/up" > /dev/null; then
+              echo "production healthy after ${i} attempt(s)"
+              exit 0
+            fi
+            sleep 10
+          done
+          echo "::error::production never answered /up after 10 minutes. Roll back in Forge — the previous release is one click away."
+          exit 1
