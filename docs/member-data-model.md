@@ -20,11 +20,20 @@ exist. This is enforced in three places, so it cannot rot back in by accident:
 
 | Where | What stops it |
 |---|---|
-| `DiscordLoginController::SCOPES` | `setScopes(['identify','guilds','guilds.members.read'])` — `setScopes`, not `scopes`, because `scopes()` merges with Socialite's defaults and the Discord driver defaults to asking for `email` |
+| `DiscordLoginController::SCOPES` | `setScopes(['identify','guilds.members.read'])` — `setScopes`, not `scopes`, because `scopes()` merges with Socialite's defaults and the Discord driver defaults to asking for `email` |
 | `create_users_table` | No `email` column to write to |
 | `DiscordLoginTest` | "never stores an email, because we never ask for one" — feeds Socialite a member *with* an email and asserts it lands nowhere |
 
 Adding an email column is therefore a CEO conversation, not a migration.
+
+**Two scopes on login, and the test asserts the exact set.** `guilds` came off
+alongside `email` on 19 August 2026: it unlocks "list every server this person is
+in", which nothing here calls, and the per-guild role lookup we do call needs
+`guilds.members.read` on its own. Every line on a consent screen is a reason to
+press Cancel. The one-click join flow (TWO-57) needs `guilds.join` and gets its
+own entry point and its own consent screen — it is deliberately not bolted onto
+login, so a returning member checking their profile is never asked for permission
+to add them to servers.
 
 ---
 
