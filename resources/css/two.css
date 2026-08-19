@@ -1,0 +1,356 @@
+/* ============================================================================
+   TWO — design tokens
+   Tailwind v4 CSS-first theme. This file is the design system.
+
+   Consume it from resources/css/app.css — see README.md for the exact block
+   (it is not repeated here: a Tailwind @source glob contains the character
+   pair that would close this comment).
+
+   Rules, non-negotiable:
+   1. No hex, rem, or px literal in a Blade template. If you need a value that
+      is not here, the system is missing it — tell the designer, do not invent.
+   2. Arbitrary values (`text-[13px]`, `bg-[#333]`) fail review. There is no
+      exception that has come up yet.
+   3. Adding a token means retiring one. One palette, one scale, one family.
+
+   Every colour pair used by this system is asserted in tools/check-contrast.mjs
+   and runs in CI. Changing a hex here without running that script is how we
+   ship an accessibility regression.
+   ============================================================================ */
+
+@theme {
+  /* ------------------------------------------------------------------------
+     COLOUR — one palette, dark only.
+
+     Sampled from TWO's own splash art (assets/brand/splash.png): the brand
+     runs #160750 violet to #C80154 crimson with the green channel at zero.
+     We keep both ends as flat colours and throw the gradient away.
+     See docs/BRAND.md for why.
+
+     There is no light mode. Theme switching is out of Phase 1 scope.
+     ------------------------------------------------------------------------ */
+
+  /* Grounds. Three, in stacking order. A fourth is not coming. */
+  --color-canvas: #0b0714;    /* the page */
+  --color-surface: #130e20;   /* cards, panels, table rows */
+  --color-raised: #1b1430;    /* hover of a surface, menus, sticky headers */
+
+  /* The violet end of the mark. A flat ground tint for one band per page,
+     usually the hero or the footer. Never as a gradient. */
+  --color-violet: #160750;
+
+  /* Lines. Two, because they do different jobs.
+     - line:        decorative separation between surfaces. Low contrast on
+                    purpose; it is not carrying meaning.
+     - line-strong: the boundary of an interactive control (input, checkbox,
+                    secondary button). WCAG 2.2 1.4.11 applies here: 3:1
+                    against every ground. Do not swap these two. */
+  --color-line: #2a2142;
+  --color-line-strong: #69607e;
+
+  /* Text. Two, and that is the whole set.
+     Anything quieter than ink-muted is a size or weight change, not a colour
+     change. A third grey would fail AA on canvas — that is why it is absent. */
+  --color-ink: #edeaf4;        /* 14.9:1 worst case */
+  --color-ink-muted: #9e96b5;  /*  6.3:1 worst case */
+  --color-ink-disabled: #686277; /* 3:1 on the lightest ground. Disabled text
+                                    is contrast-exempt under WCAG; we hold 3:1
+                                    anyway so a disabled control still reads as
+                                    a control and not as a smudge. */
+
+  /* Brand crimson. The join action, and almost nothing else.
+     If crimson is on the screen twice, one of them is wrong. */
+  --color-brand: #c80154;
+  --color-brand-hover: #e01260;
+  --color-brand-active: #a50145;
+  --color-brand-quiet: #2b0a1c;  /* tinted row/badge ground */
+  --color-brand-ink: #ff7ba6;    /* crimson as text or a link, on dark */
+  --color-on-brand: #ffffff;     /* text on a crimson fill */
+
+  /* Presence. Green means a person is online, in Discord and here.
+     Borrowing that convention is correct, not lazy. */
+  --color-online: #3bd07a;
+  --color-online-quiet: #06251a;
+
+  /* Alert. One token for errors AND warnings.
+
+     Burnt orange, not red, deliberately. Our primary button is crimson; a red
+     error sitting next to it is indistinguishable at 14px, and worse under
+     deuteranopia. This separates from crimson by hue AND by lightness, which
+     is what survives a colour-vision deficiency.
+
+     It is deliberately not a bright amber either: on this page the crimson
+     join button must stay the loudest warm thing on screen. An error is
+     something you need to notice, not something that should out-shout the
+     one action we want people to take.
+
+     Colour never carries the meaning alone — every alert also has an icon and
+     a text label. See docs/ACCESSIBILITY.md. */
+  --color-alert: #c47527;
+  --color-alert-quiet: #241704;
+
+  /* Focus. Near-white, so it clears 3:1 against every ground AND against a
+     crimson fill. Never a brand colour — a focus ring that matches a semantic
+     colour is a focus ring people stop seeing. */
+  --color-focus: #f3eeff;
+
+  /* ------------------------------------------------------------------------
+     TYPE — one family: Archivo (variable, OFL, self-hosted).
+
+     Archivo carries both a weight axis (100–900) and a WIDTH axis (62–125) in
+     a single file. That is why it is here: the expanded width at display sizes
+     echoes the "TOGETHER WE OWN" lockup without us shipping a second font.
+     Use .u-display (below) for that, never a second --font-* token.
+     ------------------------------------------------------------------------ */
+  --font-sans: 'Archivo', Arial, Helvetica, sans-serif;
+
+  /* Scale. Ten steps, each with its line-height and tracking baked in so the
+     frontend cannot get vertical rhythm wrong by omission. */
+  --text-xs: 0.75rem;      /* 12 — timestamps, meta, table labels */
+  --text-xs--line-height: 1rem;
+  --text-xs--letter-spacing: 0.01em;
+
+  --text-sm: 0.875rem;     /* 14 — secondary text, form help, badges */
+  --text-sm--line-height: 1.25rem;
+
+  --text-base: 1rem;       /* 16 — body. Never smaller for prose. */
+  --text-base--line-height: 1.5rem;
+
+  --text-lg: 1.125rem;     /* 18 — lead paragraph, card titles */
+  --text-lg--line-height: 1.625rem;
+
+  --text-xl: 1.25rem;      /* 20 — h4 */
+  --text-xl--line-height: 1.75rem;
+
+  --text-2xl: 1.5rem;      /* 24 — h3 */
+  --text-2xl--line-height: 1.875rem;
+  --text-2xl--letter-spacing: -0.01em;
+
+  --text-3xl: 1.875rem;    /* 30 — h2, and the mobile hero h1 */
+  --text-3xl--line-height: 2.125rem;
+  --text-3xl--letter-spacing: -0.015em;
+
+  --text-4xl: 2.375rem;    /* 38 — h1 on interior pages */
+  --text-4xl--line-height: 2.625rem;
+  --text-4xl--letter-spacing: -0.02em;
+
+  --text-5xl: 3rem;        /* 48 — tablet hero */
+  --text-5xl--line-height: 3.125rem;
+  --text-5xl--letter-spacing: -0.025em;
+
+  --text-6xl: 3.75rem;     /* 60 — desktop hero, and the ceiling */
+  --text-6xl--line-height: 3.75rem;
+  --text-6xl--letter-spacing: -0.03em;
+
+  /* ------------------------------------------------------------------------
+     SPACING — Tailwind's 4px scale, unchanged.
+
+     It is already the one scale, it is already in everyone's head, and
+     redefining it would be a token that buys nothing. p-4 is 16px. Done.
+     Arbitrary spacing values fail review.
+     ------------------------------------------------------------------------ */
+  --spacing: 0.25rem;
+
+  /* ------------------------------------------------------------------------
+     RADIUS — small and hard.
+
+     The mark is a chamfered geometric shield, not a rounded rectangle. Soft
+     12–16px corners and pill buttons are the visual signature of every SaaS
+     template on the internet, which is exactly what we are not.
+
+     Rule you can hold in your head: nothing is rounder than 8px except a
+     person's avatar, which is a circle.
+     ------------------------------------------------------------------------ */
+  --radius-sm: 2px;    /* checkbox, tag, inline chip */
+  --radius-md: 4px;    /* DEFAULT. Buttons, inputs, badges. */
+  --radius-lg: 8px;    /* cards, panels, modals. The ceiling. */
+  --radius-full: 9999px; /* avatars and status dots ONLY */
+
+  /* ------------------------------------------------------------------------
+     ELEVATION — borders, not shadows.
+
+     On a near-black ground a drop shadow is invisible; teams compensate by
+     making it huge, and the result is the muddy look every dark SaaS theme
+     has. Surfaces here are separated by a 1px line plus a lightness step.
+
+     One shadow token exists, for layers that genuinely float above the page
+     and need to feel detached: dropdowns, popovers, modals. That is the
+     complete list.
+     ------------------------------------------------------------------------ */
+  --shadow-overlay: 0 16px 40px -12px rgb(0 0 0 / 0.7);
+
+  /* ------------------------------------------------------------------------
+     MOTION — short, and only to explain a change.
+
+     Nothing decorative animates. No parallax, no scroll-jacking, no entrance
+     animations on page load. Motion says "this thing changed"; if nothing
+     changed, nothing moves.
+     ------------------------------------------------------------------------ */
+  --ease-out-quick: cubic-bezier(0.2, 0, 0, 1);
+  /* Namespace is --transition-duration-*, not --duration-*. That is what
+     Tailwind v4 reads to generate `duration-fast`; the shorter name compiles
+     silently and produces no utility at all. */
+  --transition-duration-fast: 120ms; /* hover, focus, colour changes */
+  --transition-duration-slow: 220ms; /* something entering or leaving the page */
+}
+
+/* ============================================================================
+   FONT FACES — self-hosted. No Google Fonts request at runtime: it is a
+   third-party round trip on the critical path and it leaks our visitors'
+   IPs to another company.
+
+   Preload the latin file in <head>:
+     <link rel="preload" href="/fonts/archivo-latin.woff2" as="font"
+           type="font/woff2" crossorigin>
+
+   latin-ext is NOT preloaded — unicode-range means it is only fetched when a
+   member's display name actually needs it, which is the point.
+   ============================================================================ */
+
+@font-face {
+  font-family: 'Archivo';
+  font-style: normal;
+  font-weight: 100 900;
+  font-stretch: 62% 125%;
+  font-display: swap;
+  src: url('/fonts/archivo-latin.woff2') format('woff2');
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA,
+    U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193,
+    U+2212, U+2215, U+FEFF, U+FFFD;
+}
+
+@font-face {
+  font-family: 'Archivo';
+  font-style: normal;
+  font-weight: 100 900;
+  font-stretch: 62% 125%;
+  font-display: swap;
+  src: url('/fonts/archivo-latin-ext.woff2') format('woff2');
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF,
+    U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020,
+    U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+
+/* ============================================================================
+   BASE
+   ============================================================================ */
+
+@layer base {
+  html {
+    background-color: var(--color-canvas);
+    color-scheme: dark;
+    -webkit-text-size-adjust: 100%;
+  }
+
+  body {
+    background-color: var(--color-canvas);
+    color: var(--color-ink);
+    font-family: var(--font-sans);
+    font-size: var(--text-base);
+    line-height: var(--text-base--line-height);
+    /* Optical default. The width axis is only pushed by .u-display. */
+    font-variation-settings: 'wdth' 100;
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
+
+  /* One focus treatment, everywhere, and it is visible on every ground.
+     :focus-visible only — a mouse click on a button should not ring it.
+     Never write `outline: none` without replacing it in the same rule. */
+  :where(a, button, input, select, textarea, summary, [tabindex]):focus-visible {
+    outline: 2px solid var(--color-focus);
+    outline-offset: 2px;
+    border-radius: var(--radius-sm);
+  }
+
+  /* Inline links in prose. Underlined, because colour alone is not a
+     distinguishing mark (WCAG 1.4.1). */
+  .prose a,
+  a.u-link {
+    color: var(--color-brand-ink);
+    text-decoration: underline;
+    text-underline-offset: 2px;
+    text-decoration-thickness: 1px;
+  }
+  .prose a:hover,
+  a.u-link:hover {
+    color: var(--color-ink);
+    text-decoration-thickness: 2px;
+  }
+
+  ::selection {
+    background-color: var(--color-brand);
+    color: var(--color-on-brand);
+  }
+
+  /* Respect the OS setting. Ours is a small motion budget anyway. */
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+      scroll-behavior: auto !important;
+    }
+  }
+}
+
+/* ============================================================================
+   UTILITIES — the short list. Each one exists because Tailwind cannot express
+   it and it is used on more than one screen.
+   ============================================================================ */
+
+@utility u-display {
+  /* Expanded width + heavy weight. The headline voice, echoing the lockup.
+     Use on h1 and on section headings you want to read as signage.
+     Do not use below 24px: expanded faces get illegible when small. */
+  font-variation-settings: 'wdth' 112, 'wght' 700;
+  text-transform: uppercase;
+}
+
+@utility u-numeric {
+  /* Member counts, RSVP counts, dates in a column. Stops digits from
+     jittering when a live counter ticks over. */
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: 'tnum';
+}
+
+@utility u-hatch {
+  /* The one texture we own, lifted from the splash art's diagonal ruling.
+     Its job is to say "nothing is here yet, on purpose" — it is the ground of
+     empty states and reserved slots. It is NOT a decorative hero background.
+     Budget: one hatched area per screen. */
+  background-image: repeating-linear-gradient(
+    -45deg,
+    var(--color-line) 0px,
+    var(--color-line) 1px,
+    transparent 1px,
+    transparent 7px
+  );
+}
+
+@utility u-tap {
+  /* 44×44 minimum hit area without changing the visual size of the control.
+     Put this on icon-only buttons: the icon stays 20px, the target is 44px. */
+  position: relative;
+
+  &::after {
+    content: '';
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    translate: -50% -50%;
+    min-width: 44px;
+    min-height: 44px;
+    width: 100%;
+    height: 100%;
+  }
+}
+
+@utility u-focus-ring {
+  /* For composite widgets where the focusable element is not the visible one
+     (e.g. a card whose whole body is a link target). */
+  outline: 2px solid var(--color-focus);
+  outline-offset: 2px;
+}

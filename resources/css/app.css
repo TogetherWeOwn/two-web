@@ -1,11 +1,12 @@
 @import 'tailwindcss';
 
+/* The design system. Vendored from the two-design repo — see README. */
+@import './two.css';
+
+@source '../**/*.blade.php';
+
+/* Blade views inside vendor/ and the compiled-view cache are gitignored, so
+   Tailwind's automatic source detection skips them. Without these two lines
+   the paginator and any packaged Blade component render unstyled. */
 @source '../../vendor/laravel/framework/src/Illuminate/Pagination/resources/views/*.blade.php';
 @source '../../storage/framework/views/*.php';
-@source '../**/*.blade.php';
-@source '../**/*.js';
-
-@theme {
-    --font-sans: 'Instrument Sans', ui-sans-serif, system-ui, sans-serif, 'Apple Color Emoji', 'Segoe UI Emoji',
-        'Segoe UI Symbol', 'Noto Color Emoji';
-}

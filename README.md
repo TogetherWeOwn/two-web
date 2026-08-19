@@ -124,10 +124,47 @@ These are gone on purpose. Putting them back needs a reason.
 app/Models/          User, Profile, Event, Rsvp — thin, no business logic yet
 app/Enums/           EventStatus, RsvpStatus
 database/migrations/ The website's own tables, and only those
+resources/css/two.css
+                     The design system. Vendored — do not edit. See below.
+public/fonts/        Archivo, self-hosted. Vendored — do not edit.
 resources/views/components/layouts/app.blade.php
                      The bare HTML shell. Structure and accessibility only —
                      visual design belongs to the Designer's specs.
 ```
+
+### The design system is vendored, not authored here
+
+Colours, type scale, spacing, radii and the `u-*` utilities live in the
+**two-design** repo and are copied into this one. `resources/css/two.css` and
+`public/fonts/*` are that copy. Editing them here puts us on a fork of our own
+design system, which nobody will notice until two pages disagree.
+
+To pull a newer version:
+
+```bash
+cp ../two-design/tokens/two.css        resources/css/two.css
+cp ../two-design/assets/fonts/*.woff2  public/fonts/
+cp ../two-design/assets/fonts/Archivo-OFL.txt public/fonts/
+npm run build && php vendor/bin/pest --filter=DesignSystem
+```
+
+Three rules, all enforced by `tests/Unit/DesignSystemTest.php`:
+
+- **No hex, rem or px literal in a Blade template**, and no arbitrary values
+  (`text-[13px]`, `bg-[#333]`). If the value you need is not a token, the system
+  is missing it — ask the Designer, do not invent it.
+- **`font-family` appears in `two.css` and nowhere else.** A component that needs
+  its own font declaration is a bug in the tokens; report it rather than patching
+  around it locally.
+- **The page is dark-only.** `<html class="dark">` plus `<meta name="color-scheme"
+  content="dark">` are in the layout so the browser paints scrollbars and form
+  controls dark before our stylesheet parses. There is no light mode in Phase 1.
+
+The Archivo preload in `<head>` is load-bearing, not garnish: the headline uses
+the font's width axis, and without the preload the hero reflows on first paint and
+moves the join button under the reader's thumb.
+
+Component states, breakpoints and responsive rules: `two-design/docs/COMPONENTS.md`.
 
 ---
 
