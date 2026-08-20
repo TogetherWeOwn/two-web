@@ -75,6 +75,14 @@ through future edits. The price is that a newly added job is not required until
 someone adds it here — so `--lint` prints a warning for every job that reports on
 a pull request and is not on this list. Do not let that warning become furniture.
 
+**`static` is not optional in that list**, and it is the one entry that cannot be
+traded away to shorten it. It is the only required check that goes red on a pull
+request which disarms the aggregate — `tests` is *skipped* on that pull request, and
+skipped counts as passed. Dropping `static` while keeping `tests` is precisely the
+protection rule under which a gate-disarming change merges clean. `--lint` fails,
+rather than warns, if the job running `--lint` stops being required. See
+*Which required check stops a gate-disarming pull request* below.
+
 **There is no job called `ci`.** `CI` is the *workflow* name in `ci.yml`; protection
 matches the check-run name, which is the job's `name:` if it sets one and its id
 otherwise. Requiring `ci` blocks every pull request forever — see the second rule
@@ -236,25 +244,32 @@ and the previous release is one click away in Forge.
 A pipeline nobody has watched fail is a pipeline nobody knows works.
 
 ```bash
-./ci/verify-pipeline.sh --lint       # offline, half a second, no gh — runs in `static`
-./ci/verify-lint-selftest.sh         # proves --lint still catches things — runs in `static`
-./ci/verify-pipeline.sh              # dry run — prints what it would do
-./ci/verify-pipeline.sh --run        # opens the PRs, waits, asserts, cleans up
-./ci/verify-pipeline.sh --cleanup    # if a run was interrupted
-./ci/verify-protection-selftest.sh   # proves the protection check catches holes — runs in `static`
-./ci/verify-protection.sh            # reads the live rule — by hand, needs Administration: read
+./ci/verify-pipeline.sh --lint            # offline, half a second, no gh — runs in `static`
+./ci/verify-lint-selftest.sh              # proves --lint still catches things — runs in `static`
+./ci/verify-pipeline.sh --assert-selftest # proves --run's assertions say what they claim
+./ci/verify-pipeline.sh                   # dry run — prints what it would do
+./ci/verify-pipeline.sh --run             # opens the PRs, waits, asserts, cleans up
+./ci/verify-pipeline.sh --cleanup         # if a run was interrupted
+./ci/verify-protection-selftest.sh        # proves the protection check catches holes — runs in `static`
+./ci/verify-protection.sh                 # reads the live rule — by hand, needs Administration: read
 ```
 
-The first five prove the *jobs* go red for the right reasons. That is not the same
+The first six prove the *jobs* go red for the right reasons. That is not the same
 as proving a red job blocks the merge — see "Reading the rule, not the list" above
-for the fact those five never read.
+for the fact those six never read.
 
 `--lint` is the only thing watching the gate, so nothing downstream notices if it
 quietly stops catching anything. `verify-lint-selftest.sh` is the check on the
 check: it mutates a throwaway copy of the workflow one defect at a time and asserts
-`--lint` goes red *for the stated reason*. Ten cases, every one a mistake that has
+`--lint` goes red *for the stated reason*. Twelve cases, every one a mistake that has
 actually been made on this repo or proposed for it. Both run in `static`, first,
 before anything slow.
+
+A thirteenth case is not about `--lint` at all: it runs `--assert-selftest`, which feeds
+recorded check conclusions through the assertions `--run` makes and checks each is
+accepted or rejected as intended. Those assertions otherwise execute only during a
+live run, which is how a wrong one survived review and cost forty minutes of runner
+time to find (TWO-94).
 
 Most of those cases are about the gate reporting a result that is not the pipeline's
 result. One is not: `--lint` also fails if `dusk` or `budgets` stops running
@@ -277,15 +292,64 @@ caught a real LCP breach, and only one of those means the gate works.
 | A heading hidden with CSS — visible in the HTML, invisible in the browser | `dusk` |
 | An image with no alt text | `budgets` |
 | Three seconds of server think-time before paint | `budgets` |
+| Deleting the aggregate's `if: always()` | `static` — see below |
 | Nothing wrong at all | nothing — goes green |
 
 The Dusk case is hidden with CSS rather than deleted on purpose: the HTML still
 contains the text, so the feature test passes and only the real browser notices.
 A breakage that trips `pest` too would prove nothing about the browser job.
 
-Each case also asserts that the aggregate `tests` check went red, not merely the
-named job. A job failing while the required check stays green is the one failure
-mode that lets a broken PR merge while looking perfectly healthy.
+Seven of the eight cases also assert that the aggregate `tests` check went red, not
+merely the named job. A job failing while the required check stays green is the one
+failure mode that lets a broken PR merge while looking perfectly healthy.
+
+### Which required check stops a gate-disarming pull request
+
+The eighth case is the exception, and it is worth understanding rather than
+memorising. It is the one case where `tests` is **not** what stops the pull request,
+and it cannot be.
+
+That case deletes `if: always()` from the aggregate. Deleting it is exactly what
+makes the aggregate *skip* when a need goes red — so on that pull request `tests`
+reports `skipped`, which GitHub counts as passed. No edit to `ci.yml` can make
+`tests` go red on a pull request that removes the mechanism which would make it go
+red. The first live run asserted `tests=FAILURE` there and failed while the gate was
+working perfectly (TWO-94); the assertion was unreachable by construction.
+
+**What actually stops it is `static`.** `static` runs `./ci/verify-pipeline.sh --lint`
+as its first step, before anything slow; `--lint` fails on an aggregate with no
+`if: always()`; and `static` is a required check in its own right. This is the entire
+payoff of requiring the four leaves *as well as* the aggregate: protection does not
+depend on the aggregate's guard staying correct, because the pull request that breaks
+that guard is rejected by a different required check.
+
+So the case now asserts what is load-bearing:
+
+- `static` is red, **and** it is a required check — so something required is blocking;
+- `tests` did **not** report `SUCCESS`. `skipped` is accepted, because that is what a
+  deleted `if: always()` produces. `SUCCESS` is not: an aggregate that ran and passed
+  over a red need is a genuine guard defect and still fails the case.
+
+**Requiring `tests` alone would not cover this.** Reduce the required checks to the
+aggregate — the shape a smaller protection rule naturally takes, and the shape
+`setup-github.sh` originally had — and a pull request that disarms the merge gate
+merges clean, with a green tick, because the only red job is not required. That is
+not hypothetical: nothing is mechanically enforced on GitHub Free today (see
+*Production deploys are manual* below), so this list is the plan for the day
+protection becomes enforceable, and `static` is the load-bearing entry in it.
+
+Two checks keep that argument from rotting, and they read different things:
+
+- `--lint` check 9 reads *our list*. It fails if no job runs `--lint` on a pull
+  request, and it fails if the job that does is not in `REQUIRED_CHECKS`.
+- `./ci/verify-protection.sh` reads *the live rule* — see
+  [Reading the rule, not the list](#reading-the-rule-not-the-list). Check 9 proves
+  we intend `static` to be required; only that proves GitHub agrees.
+
+`./ci/verify-pipeline.sh --assert-selftest` tests these assertions themselves,
+offline, against recorded check conclusions — including the exact ones from the
+acceptance run. That exists because the wrong assertion here was only reachable by a
+forty-minute live run, so it survived review and cost a full run to find.
 
 Run it when the repo lands, and again after any change to `ci.yml` that alters what
 fails. **QA does not sign off TWO-22 until this has passed once, for real.**
