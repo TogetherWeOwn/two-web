@@ -117,9 +117,22 @@ approvals surviving a push, `enforce_admins` off, and force-push or delete allow
 on `main`.
 
 Live mode needs **`Administration: read`** — a fourth permission, separate from the
-three `verify-pipeline.sh` needs, and a 404 from a token without it is
-indistinguishable from "the branch is not protected". Check the permission before
-believing the second reading.
+three `verify-pipeline.sh` needs. A token without it gets a 404 whose *body* reads
+much like "the branch is not protected", so the script reads the HTTP status line
+and the error message rather than the body alone, and says which of the two it
+got. It exits:
+
+| exit | meaning |
+|---|---|
+| 0 | the rule was read and it enforces what the pipeline claims |
+| 1 | the rule was read and it does not, or there is no rule — a finding |
+| 2 | the rule could not be read — no verdict either way |
+
+**2 is not a softer 1.** Treating "I could not check" as "I checked and it is bad"
+is the TWO-96 bug: the script used to read `.enforce_admins` and the rest off a
+403 error body, find every field absent, and print a full red report about a branch
+nobody had read. Both exits fail closed, but only 1 is evidence, and only 1 may be
+quoted in a sign-off.
 
 It does not run on pull requests, for that reason. Its self-test does, in `static`.
 Run the live check by hand after any change to the protection rule, and as part of
