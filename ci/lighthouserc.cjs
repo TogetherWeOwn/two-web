@@ -62,6 +62,30 @@ module.exports = {
         'largest-contentful-paint': ['error', { maxNumericValue: 2000, aggregationMethod: 'median' }],
         'cumulative-layout-shift': ['error', { maxNumericValue: 0.1, aggregationMethod: 'median' }],
 
+        // The LCP budget above does not cover a slow server, and the reason is not
+        // obvious enough to leave unwritten (TWO-93).
+        //
+        // `simulate` does not report the timings Chrome observed — Lantern rebuilds
+        // them from the trace. It models *one* server response time per origin: the
+        // median across every request to that origin. The homepage asks 127.0.0.1
+        // for a document plus a stylesheet, a script, a font and a favicon, and
+        // `artisan serve` hands those four back off disk in a millisecond or two. So
+        // the set is [1, 2, 2, 2, 3000] and the median is 2ms — Lantern then
+        // simulates the *document* at 2ms as well, and a homepage that genuinely
+        // took three seconds to answer produces a simulated LCP comfortably under
+        // budget. Verified against Lantern's NetworkAnalyzer, not guessed.
+        //
+        // This audit is immune to that: it reads the observed TTFB off the main
+        // document's own network record and never goes near the simulator. It is
+        // what actually makes a slow-server breach go red.
+        //
+        // 600ms is Lighthouse's own failure threshold for this audit, not a budget
+        // invented here — worth knowing that Lighthouse asks developers to aim for
+        // 100ms. It sits far below the 2.0s LCP budget on purpose: this is a
+        // tripwire for a server that has fallen over, not a second performance
+        // target competing with the CEO's.
+        'server-response-time': ['error', { maxNumericValue: 600, aggregationMethod: 'median' }],
+
         // Not a CEO budget, so not a failure. They are the two numbers that move
         // first when a page starts getting slow, and a warning in the log is a
         // cheap early signal before LCP actually breaches.
