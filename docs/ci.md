@@ -313,11 +313,11 @@ A pipeline nobody has watched fail is a pipeline nobody knows works.
 ./ci/verify-pipeline.sh --lint             # offline, half a second, no gh — runs in `static`
 ./ci/verify-lint-selftest.sh               # proves --lint still catches things — runs in `static`
 ./ci/verify-pipeline.sh --assert-selftest  # proves --run's assertions, and its cleanup, say what they claim
-./ci/verify-run-preconditions-selftest.sh  # proves --run still refuses to start — runs in `static`
+./ci/verify-run-preconditions-selftest.sh  # proves --run still refuses, and --cleanup still clears — runs in `static`
 ./ci/verify-pipeline.sh                    # dry run — prints what it would do
 cd "$(./ci/scratch-clone.sh)"              # --run needs a checkout of its own — see below
 ./ci/verify-pipeline.sh --run              # opens the PRs, waits, asserts, cleans up
-./ci/verify-pipeline.sh --cleanup          # if a run was interrupted
+./ci/verify-pipeline.sh --cleanup          # if a run was interrupted — clears every ci-verify/*
 ./ci/verify-protection-selftest.sh         # proves the protection check catches holes — runs in `static`
 ./ci/verify-protection.sh                  # reads the live rule — by hand, needs Administration: read
 ```
@@ -454,7 +454,20 @@ So `--run` refuses to start when any `ci-verify/*` pull request is open or any
 `ci-verify/*` branch is on the remote, and names what it found. Unique per-run
 branch names would let both proceed, and two people running the acceptance suite
 at once is a thing to notice, not a thing to support. If the branches are leftovers
-from a run that was killed, `--cleanup` clears them.
+from a run that was killed, `--cleanup` clears them — **all** of them, by the same
+`ci-verify/*` glob the guard refuses on, not just the case names this checkout
+happens to ship. Those were different sets until TWO-109: a `ci-verify/*` branch
+whose slug was not in `CASES` was blocked on forever and cleaned never, and
+`--cleanup` exited 0 without saying so. It now prints what it removed, or `nothing
+to clean`. The script has no `trap`, so a Ctrl-C or a dropped connection leaves
+branches behind — this is the ordinary way a run ends badly, not an edge case.
+
+If one of the two live-run probes cannot be read — `gh pr list` returning an API
+error looks exactly like an empty list — the run starts anyway and says which probe
+it could not read, rather than printing a pass it did not earn. That is safe only
+because `open_pr()` pushes the branch *before* it opens the pull request, so the
+`ls-remote` half sees the same state over a different transport. If `ls-remote` is
+the half that failed there is nothing left to fall back on, and `--run` refuses.
 
 `--run` has six such preconditions, all of which fire in the first second rather
 than forty minutes in: it is running in a checkout of its own (see below), `gh` is
@@ -464,12 +477,15 @@ readable, and no other run is live.
 `verify-run-preconditions-selftest.sh` is the check on those: it builds a throwaway
 repo whose `origin` reads as GitHub while its bytes go to a bare repo next door,
 stubs `gh`, and asserts each guard refuses for its own reason — and that nothing
-was pushed on the way out. Eleven cases: one per precondition, two for the live-run
-guard (an open pull request and a leftover branch refuse independently), three for
-the scratch-clone guard (a shared checkout, another run's clone, and that it stays
-quiet outside Paperclip), one pinning that the scratch-clone guard is checked
-*before* the dirty-tree one, and a negative control proving none of them fires on a
-normal repository.
+was pushed on the way out. Seventeen cases: one per precondition, two for the
+live-run guard (an open pull request and a leftover branch refuse independently),
+three for the scratch-clone guard (a shared checkout, another run's clone, and that
+it stays quiet outside Paperclip), one pinning that the scratch-clone guard is
+checked *before* the dirty-tree one, a negative control proving none of them fires
+on a normal repository, three for an unreadable probe, and three for `--cleanup`,
+because a refusal that points at a recovery command has to be a refusal that command
+can actually clear. Every case is mutation-checked: breaking the guard it covers
+reddens that case and no other.
 
 ### The workspace checkout is not private to a run
 
