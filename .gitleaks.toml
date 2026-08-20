@@ -1,0 +1,73 @@
+# Secret scanning config. Extends the default gitleaks ruleset rather than
+# replacing it, so we keep every provider pattern they maintain and only add
+# what is specific to us.
+#
+# The added rules matter more here than anywhere else in the org. The website
+# holds the Discord OAuth client id and secret; it must never hold the bot
+# token. If `discord-bot-token` ever fires on this repo it is not a style
+# nit — it means the boundary the whole integration rests on has been crossed.
+
+[extend]
+useDefault = true
+
+[[rules]]
+id = "discord-bot-token"
+description = "Discord bot token"
+# Discord tokens are three base64url segments: snowflake.timestamp.hmac.
+regex = '''(?i)\b[MNO][A-Za-z0-9_-]{22,26}\.[A-Za-z0-9_-]{6}\.[A-Za-z0-9_-]{27,38}\b'''
+keywords = ["discord"]
+
+[[rules]]
+id = "discord-mfa-token"
+description = "Discord user (MFA) token"
+regex = '''\bmfa\.[A-Za-z0-9_-]{80,100}\b'''
+keywords = ["mfa."]
+
+[[rules]]
+id = "discord-webhook"
+description = "Discord webhook URL"
+regex = '''https://(?:canary\.|ptb\.)?discord(?:app)?\.com/api/webhooks/[0-9]{17,20}/[A-Za-z0-9_-]{60,}'''
+keywords = ["discord.com/api/webhooks"]
+
+# ---------------------------------------------------------------------------
+# Allowlist.
+#
+# The bar for adding anything below: you looked at the actual line, you can say
+# what it is, and disclosing it to a stranger costs nothing. If you cannot say
+# that, it is a secret - rotate it, do not allowlist it. Deleting the line is
+# not enough either; it is in the history, and history is what this scans.
+# ---------------------------------------------------------------------------
+
+[allowlist]
+description = "Test fixtures and documented placeholders, not live credentials"
+
+# Match the regexes below against the whole matched text, not against the bare
+# secret gitleaks extracted from it. The regex below identifies a value by the
+# variable it is assigned to - `discord_id => 1234...` - and the variable name
+# is not part of the secret, so on the default target ("secret") it could never
+# match.
+regexTarget = "match"
+
+regexes = [
+  # .env.example ships names with empty values, on purpose.
+  '''(DISCORD_CLIENT_SECRET|BOT_SHARED_SECRET|APP_KEY)=$''',
+
+  # --- added 2026-08-20, from the first real scan of this history (TWO-83) ---
+  #
+  # Running the scanner against all 19 commits produced 2 hits, both the same
+  # shape and both read by hand: `'discord_id' => '111222333444555666'` in
+  # tests/Feature/Auth/DiscordLoginTest.php. That is a counting-pattern fake
+  # snowflake in a factory call.
+  #
+  # Even a real one would not be a secret. A Discord user, guild, channel or
+  # role ID is public - every member of the server can read it, and the guild
+  # ID is in the widget and in the invite. There is nothing to rotate.
+  # gitleaks' stock `discord-client-id` rule flags any 17-20 digit number near
+  # the word "discord".
+  #
+  # Deliberately narrow: it allows a BARE run of digits assigned to a variable
+  # whose name ends in _id. A real bot token is base64 with dots in it and does
+  # not match this, so `discord-bot-token` above still fires. `=>` is in the
+  # separator list because these land in PHP arrays, not just env files.
+  '''(?i)(DISCORD|GUILD|CHANNEL|ROLE|APPLICATION|CLIENT|USER|CATEGORY)_ID['"]?\s*(?:=>|[:=])\s*['"]?[0-9]{17,20}['"]?''',
+]
