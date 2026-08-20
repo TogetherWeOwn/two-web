@@ -45,7 +45,16 @@ AGGREGATE="tests"
 # The checks branch protection on `main` requires, by check-run name. Source of
 # truth for this file, docs/ci.md, and two-bot/scripts/setup-github.sh (TWO-39):
 # all three have to agree or the gate is decorative.
-REQUIRED_CHECKS=(tests gitleaks)
+#
+# This is the list actually applied to `two-web` on TWO-36: the five real job ids
+# plus `gitleaks`, and never `ci` — `CI` is the workflow *name*, no job reports it,
+# and an absent required context blocks every PR forever.
+#
+# Requiring the leaves rather than the aggregate alone is deliberate: protection
+# then does not depend on the aggregate's guard *staying* correct through future
+# edits. The cost is that a new job is not required until someone adds it here,
+# which is why check 7 below warns about exactly that.
+REQUIRED_CHECKS=(tests static pest dusk budgets gitleaks)
 
 # Every check run a pull request should produce. A check that never reports is not
 # a pass — GitHub blocks on a missing required context and this script used to read
@@ -87,6 +96,37 @@ job_ids() { awk '/^jobs:/{j=1;next} j && /^  [a-zA-Z0-9_-]+:[[:space:]]*$/{gsub(
 
 # The lines of one job's block: from `  <id>:` to the next job at the same indent.
 job_block() { awk -v id="$2" '$0 ~ "^  " id ":[[:space:]]*$" {j=1;next} j && /^  [a-zA-Z0-9_-]+:[[:space:]]*$/{exit} j{print}' "$1"; }
+
+# Does this workflow run on pull requests? Only those produce check runs a PR can
+# be blocked on. `deploy.yml` is `workflow_run`, `main-guard` is push-only: their
+# job ids look like perfectly good required contexts and would each hang every PR
+# forever. Matching a job id is not enough — it has to be a job that *reports*.
+triggers_on_pr() {
+  awk '/^on:/{o=1;next} o && /^[a-zA-Z]/{exit} o' "$1" | grep -qE '^\s+pull_request:?'
+}
+
+# What one job will actually report as: its `name:` if it sets one, its id if not.
+# Branch protection matches the check-run name, so a job that renames itself stops
+# answering to its id and takes `main` down with it — the same "absent required
+# check" failure as requiring `ci`, but arriving later and looking like flakiness.
+# `^    name:` is job level; step names are deeper and carry a `- `.
+job_reported_name() {
+  local n
+  n=$(job_block "$1" "$2" | grep -m1 -E '^    name:' | sed 's/^    name:[[:space:]]*//' | sed 's/^["'"'"']//; s/["'"'"']$//')
+  [ -n "$n" ] && echo "$n" || echo "$2"
+}
+
+# Every check-run name a pull request will actually produce, across all workflows.
+pr_reported_names() {
+  local f job
+  for f in ./.github/workflows/*.yml; do
+    [ -f "$f" ] || continue
+    triggers_on_pr "$f" || continue
+    while read -r job; do
+      [ -n "$job" ] && job_reported_name "$f" "$job"
+    done <<< "$(job_ids "$f")"
+  done
+}
 
 lint() {
   local rc=0 block needs jobs missing
@@ -143,15 +183,18 @@ lint() {
     grep -qx -- "$job" <<< "$jobs" || { fail "\`${AGGREGATE}\` needs \`${job}\`, which is not a job in ${WORKFLOW}"; rc=1; }
   done
 
-  # 5. Every required check must be a real job id somewhere in .github/workflows.
-  #    Protection matches the check-run name; requiring a context nothing produces —
-  #    the workflow *name*, say, rather than a job id — blocks every PR forever on a
-  #    check that will never report.
+  # 5. Every required check must be something a pull request actually reports.
+  #    Protection matches the check-run name, so this compares against the names
+  #    jobs *report as* on a PR — not their ids, and not jobs from workflows that
+  #    never run on a PR at all. Both of those look like a match and neither one
+  #    ever arrives, and an absent required check blocks every PR forever.
+  local reported
+  reported=$(pr_reported_names)
   for check in "${REQUIRED_CHECKS[@]}"; do
-    if grep -qxF "$check" <<< "$(for f in ./.github/workflows/*.yml; do job_ids "$f"; done)"; then
-      pass "required check \`${check}\` is a real job"
+    if grep -qxF "$check" <<< "$reported"; then
+      pass "required check \`${check}\` is reported by a job on every PR"
     else
-      fail "required check \`${check}\` matches no job id in .github/workflows/ — every PR would wait forever on it"
+      fail "required check \`${check}\` is not reported by any pull-request job — every PR would wait on it forever. Reported on a PR: $(echo "$reported" | tr '\n' ' ')"
       rc=1
     fi
   done
@@ -163,6 +206,35 @@ lint() {
       grep -q "\`${check}\`" "$DOCS" || { fail "${DOCS} never names the required check \`${check}\`"; rc=1; }
     done
   fi
+
+  # 7. The reverse drift, and the price of requiring leaves rather than the
+  #    aggregate alone: a job that reports on pull requests but is not required can
+  #    go red while the PR merges. A warning, not a failure — `tests` still covers
+  #    it while check 3 passes — but this is the line that goes quiet the day
+  #    someone adds a job and forgets protection, so it speaks up on every run.
+  local required_list
+  required_list=$(printf '%s\n' "${REQUIRED_CHECKS[@]}")
+  while read -r name; do
+    [ -n "$name" ] || continue
+    grep -qxF "$name" <<< "$required_list" \
+      || printf '\033[33mwarn: job `%s` reports on pull requests but is not a required check — it can go red while the PR merges\033[0m\n' "$name"
+  done <<< "$reported"
+
+  # 8. The PHP suite does not build assets — tests/TestCase.php stubs Vite so Pest
+  #    stays PHP-only and gives the same answer on a clean runner as on a laptop
+  #    with a stale `public/build`. That is only safe while something else still
+  #    builds for real and renders the layout. `dusk` and `budgets` are that
+  #    something. If either quietly drops its build step, nothing in the pipeline
+  #    exercises a real manifest any more and the gate stops covering a whole
+  #    class of breakage without a single job going red. Hence a failure here.
+  for job in dusk budgets; do
+    if job_block "$WORKFLOW" "$job" | grep -q 'npm run build'; then
+      pass "\`${job}\` builds assets — the real manifest is still exercised somewhere"
+    else
+      fail "job \`${job}\` no longer runs \`npm run build\`. tests/TestCase.php stubs Vite for the PHP suite on the grounds that this job builds for real; drop it and nothing tests the manifest, silently."
+      rc=1
+    fi
+  done
 
   return "$rc"
 }

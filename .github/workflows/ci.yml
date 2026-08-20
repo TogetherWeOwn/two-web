@@ -42,6 +42,14 @@ jobs:
       - name: Gate wiring
         run: ./ci/verify-pipeline.sh --lint
 
+      # And the check on the check. `--lint` is the only thing watching the gate,
+      # so nothing downstream notices if it quietly stops catching anything — a
+      # lint that always passes and a lint that works look identical from here.
+      # This mutates a throwaway copy per defect and asserts it goes red for the
+      # stated reason. Same half second, still no network.
+      - name: Gate wiring self-test
+        run: ./ci/verify-lint-selftest.sh
+
       - uses: shivammathur/setup-php@v2
         with:
           php-version: ${{ env.PHP_VERSION }}
@@ -351,14 +359,17 @@ jobs:
           if-no-files-found: ignore
 
   # ---------------------------------------------------------------------------
-  # The one required check.
+  # The aggregate. It is one of the six required checks on `main` (TWO-36) — the
+  # four jobs above are required too, so protection does not depend on this guard
+  # staying correct through future edits. See docs/ci.md for the full list.
   #
-  # Its id is `tests` because branch protection on `main` already requires a check
-  # by exactly that name (TWO-39) — GitHub matches the *job id*, not the workflow
-  # name. Making the aggregate carry that id means the required check is red
-  # whenever anything is red, and adding a job above needs no protection change as
-  # long as it is listed in `needs` here. Renaming this job silently disarms the
-  # gate: the required check never arrives and every PR waits forever.
+  # Protection matches the check-run *name*, which is a job's `name:` when it sets
+  # one and its id otherwise — which is why every job here pins the two to the same
+  # string. Rename either half and the required check never arrives: every PR waits
+  # forever, and it presents as CI hanging rather than as a misconfiguration.
+  #
+  # What this job buys on top of the four: anything added above goes red through
+  # here the moment it is in `needs`, with no protection change at all.
   # ---------------------------------------------------------------------------
   tests:
     name: tests

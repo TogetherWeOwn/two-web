@@ -14,7 +14,9 @@
 | `pest` | Pest unit + feature, real Postgres 17 | any test fails |
 | `dusk` | Laravel Dusk, real Chrome, real server | any journey fails |
 | `budgets` | Lighthouse mobile + axe-core at 360px and 1280px | LCP ≥ 2.0s, CLS ≥ 0.1, or any WCAG 2.2 AA violation |
-| `tests` | aggregates the four — **the required check** | any of them is not green |
+| `tests` | aggregates the four | any of them is not green, including *skipped* |
+
+All five are required checks on `main`, plus `gitleaks` from `secret-scan.yml`.
 
 `static` is deliberately first to finish — it catches the ordinary mistakes in under
 a minute so you are not waiting on Dusk to be told about an unused import.
@@ -55,23 +57,33 @@ Both have already produced a wrong protection rule on this repo. Learn them once
 `./ci/verify-pipeline.sh --lint` asserts both directions offline, in half a second,
 with no GitHub. Run it after any edit to `ci.yml` or to the protection rules.
 
-### Required checks to configure on `main`
+### Required checks on `main`
 
-Already applied by the setup script, and correct as-is:
+Six, applied by the setup script (TWO-36). This is the list, and it is the same
+list in `ci/verify-pipeline.sh` — `--lint` fails if the two disagree:
 
-- `tests` — the aggregate. Adding a job later needs no protection change as long as
-  the new job is in its `needs:` list. `--lint` fails if a job is not.
-- `gitleaks` — the secret scan.
+- `static` — Pint, PHPStan, and the gate's own wiring
+- `pest` — unit + feature
+- `dusk` — the browser journeys
+- `budgets` — Lighthouse and WCAG 2.2 AA
+- `tests` — the aggregate over the four above
+- `gitleaks` — the secret scan
+
+The four leaves are required *as well as* the aggregate, deliberately: protection
+then does not depend on the aggregate's `if: always()` guard staying correct
+through future edits. The price is that a newly added job is not required until
+someone adds it here — so `--lint` prints a warning for every job that reports on
+a pull request and is not on this list. Do not let that warning become furniture.
 
 **There is no job called `ci`.** `CI` is the *workflow* name in `ci.yml`; protection
-matches the check-run name, which is the job id. Requiring `ci` blocks every pull
-request forever — see the second rule above.
+matches the check-run name, which is the job's `name:` if it sets one and its id
+otherwise. Requiring `ci` blocks every pull request forever — see the second rule
+above. It was briefly applied to this repo, and `--lint` now fails on it by name.
 
-Requiring `static`, `pest`, `dusk` and `budgets` as well is harmless but buys
-nothing: the aggregate is red whenever any of them is, and a belt-and-braces list
-has to be re-edited every time a job is added or renamed, which is one more place
-to get it wrong. If you do require them, require all four — three of four looks
-deliberate and is not.
+**Renaming a job breaks protection the same way.** Every job in `ci.yml` pins
+`name:` equal to its id for this reason. Change one and the old required context
+never arrives again; `--lint` catches that too, and it presents as CI hanging
+rather than as a misconfiguration, so it is worth catching early.
 
 Plus: no direct pushes to `main`, PR required, no self-approval, and dismiss stale
 approvals on new commits.
@@ -195,10 +207,26 @@ and the previous release is one click away in Forge.
 A pipeline nobody has watched fail is a pipeline nobody knows works.
 
 ```bash
+./ci/verify-pipeline.sh --lint       # offline, half a second, no gh — runs in `static`
+./ci/verify-lint-selftest.sh         # proves --lint still catches things — runs in `static`
 ./ci/verify-pipeline.sh              # dry run — prints what it would do
 ./ci/verify-pipeline.sh --run        # opens the PRs, waits, asserts, cleans up
 ./ci/verify-pipeline.sh --cleanup    # if a run was interrupted
 ```
+
+`--lint` is the only thing watching the gate, so nothing downstream notices if it
+quietly stops catching anything. `verify-lint-selftest.sh` is the check on the
+check: it mutates a throwaway copy of the workflow one defect at a time and asserts
+`--lint` goes red *for the stated reason*. Ten cases, every one a mistake that has
+actually been made on this repo or proposed for it. Both run in `static`, first,
+before anything slow.
+
+Most of those cases are about the gate reporting a result that is not the pipeline's
+result. One is not: `--lint` also fails if `dusk` or `budgets` stops running
+`npm run build`. The PHP suite stubs Vite so it needs no build artifact (see
+`docs/testing-strategy.md`), which is only sound while those two still build for
+real. Drop it and nothing in the pipeline exercises a real manifest — with every job
+still green, which is why a human will not notice and the lint has to.
 
 It opens one deliberately broken PR per failure mode and asserts that the **named
 job** went red — not merely that something somewhere was unhappy. A `budgets` job

@@ -73,6 +73,40 @@ They run against **real Postgres**, never sqlite. We use `jsonb` and Postgres da
 handling; a sqlite suite goes green on things that break in production. `phpunit.xml`
 pins this and explains it.
 
+### They do not run against built assets
+
+`Tests\TestCase` calls `withoutVite()`, so `@vite` renders nothing in the PHP suite
+and no test needs `npm run build` or `public/build/manifest.json`.
+
+This is deliberate, and it is about determinism rather than speed. `public/build` is
+gitignored, so it is a build artifact that exists on any machine where someone has
+run a build once and on no clean checkout ever. Left alone, the suite passes on
+every laptop and fails on every fresh runner — which is exactly what happened the
+first time this pipeline ran on GitHub: six feature tests, every one of them a 500
+from inside `@vite`, none of them about the thing under test.
+
+The alternative was to build assets in the `pest` job. It works, but it buys nothing
+and costs something. It buys nothing because no feature test asserts on `@vite`
+output, and a real build is already rendered by `dusk` and `budgets`. It costs an
+npm install on the PHP tier, which means the fast suite now goes red when the npm
+registry has a bad afternoon — a flake vector on the one job that should have none.
+
+So the coverage that would have been lost is bought back explicitly, not assumed:
+
+| Failure | Caught by |
+| --- | --- |
+| The build is broken or missing | `dusk` and `budgets` — both build for real and render the layout in Chrome |
+| `@vite` names an entrypoint that is not built | `tests/Unit/ViteEntrypointsTest.php` — statically, no build |
+| `dusk` or `budgets` quietly stops building | `ci/verify-pipeline.sh --lint` check 8, which fails the `static` job |
+
+That last row is the one that matters. The trade above is only sound while something
+still exercises a real manifest, so the lint fails if either job drops its build step
+— otherwise the day someone does, nothing goes red and the pipeline silently stops
+covering a whole class of breakage.
+
+Dusk is unaffected: `DuskTestCase` extends `Laravel\Dusk\TestCase`, not this one, so
+the browser suite still gets the real, built assets.
+
 ## What earns a Dusk journey
 
 A Dusk journey is expensive: real Chrome, real server, real database, tens of
