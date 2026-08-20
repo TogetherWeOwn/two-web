@@ -44,10 +44,31 @@ test('a moderator is offered the admin panel', function () {
 });
 
 test('a member can sign out again', function () {
+    // Two waits, and neither of them is a retry. This test failed once with a
+    // StaleElementReferenceException and passed on the same code minutes later,
+    // which makes it a flake, which makes it a bug (docs/flake-policy.md).
+    //
+    // Both halves of the old version asserted without waiting for a condition:
+    //
+    //   press()        resolves the button and clicks it in two separate round
+    //                  trips with nothing in between. If the document is replaced
+    //                  in that gap the handle is detached and WebDriver throws
+    //                  instead of clicking — so the click provably never happened,
+    //                  and the failure is real rather than cosmetic.
+    //   assertPathIs() reads the URL on the line after the click, assuming the
+    //                  POST, the redirect and the GET have all landed already.
+    //                  Nothing guarantees that.
+    //
+    // waitForText makes the resolve happen against a rendered page rather than a
+    // page part-way through becoming one. waitForReload waits for the outcome that
+    // actually matters — the old document going away — so assertPathIs runs on the
+    // page we ended up on, and says "path is /profile" rather than timing out if
+    // logout is broken. Nothing here re-runs a step that failed.
     $this->browse(function (Browser $browser) {
         $browser->loginAs(User::factory()->create())
             ->visit('/profile')
-            ->press('Sign out')
+            ->waitForText('Sign out')
+            ->waitForReload(fn (Browser $page) => $page->press('Sign out'))
             ->assertPathIs('/')
             ->assertSeeLink('Sign in with Discord');
     });
