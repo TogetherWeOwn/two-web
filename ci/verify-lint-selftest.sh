@@ -202,11 +202,15 @@ printf '\n\033[1m==> The live-run assertions themselves\033[0m\n'
 # requests and forty minutes of runner time to discover that a line of bash
 # expected something the design makes unreachable. Those assertions are now
 # testable offline against synthetic conclusions, and this is where that runs.
+#
+# The same run also covers cleanup, which had the identical defect in a blunter
+# form: it reported nine pull requests closed while closing none, and the
+# acceptance run left three open behind a green summary.
 n=$((n + 1))
 if ( cd "$(fixture assertions)" && ./ci/verify-pipeline.sh --assert-selftest ) > "$WORK/assert.out" 2>&1; then
-  pass "assertions: --run accepts and rejects the right check conclusions"
+  pass "assertions: --run accepts and rejects the right conclusions, and cleanup reports what it did"
 else
-  fail "assertions: --run's assertions do not say what they claim"
+  fail "assertions: --run's assertions or its cleanup do not say what they claim"
   sed 's/^/        /' "$WORK/assert.out"
   rc=1
 fi

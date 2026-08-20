@@ -497,6 +497,96 @@ gitleaks=SUCCESS" static NOT_SUCCESS no "gate-disarmed-lint-job-not-required" 2>
   return "$rc"
 }
 
+# Cleanup has the same failure mode as the assertions and had it in the worst
+# form: it reported nine pull requests closed while closing none. `gh` and `git`
+# are shadowed by shell functions here, so the real cleanup() runs against
+# synthetic responses — no network, no repository, no pull requests.
+cleanup_selftest() {
+  local rc=0 n=0 out
+
+  # Every close succeeds and the follow-up read finds nothing open. The only
+  # case that may pass.
+  n=$((n + 1))
+  if out=$(
+    gh() {
+      if [ "$2" = "list" ]; then
+        case "$*" in *--head*) echo 101 ;; esac   # per-branch lookup finds a PR
+        return 0                                   # final sweep finds none
+      fi
+      return 0
+    }
+    git() { return 1; }
+    cleanup 2>&1
+  ); then
+    pass "cleanup: every pull request closed -> accept"
+  else
+    fail "cleanup: every pull request closed -> reported a leftover that does not exist"
+    printf '%s\n' "$out" | sed 's/^/        /'
+    rc=1
+  fi
+
+  # Every close fails. This is the TWO-22 acceptance run: it must not report
+  # them closed, and it must not exit 0.
+  n=$((n + 1))
+  out=$(
+    gh() {
+      if [ "$2" = "list" ]; then
+        case "$*" in
+          *--head*) echo 102 ;;
+          *)        echo "#102 ci-verify/lcp" ;;
+        esac
+        return 0
+      fi
+      [ "$2" = "close" ] && return 1
+      return 0
+    }
+    git() { return 1; }
+    cleanup 2>&1
+  ) && cleanup_rc=0 || cleanup_rc=$?
+  if [ "$cleanup_rc" -eq 0 ]; then
+    fail "cleanup: every close failed -> it exited 0. That is the TWO-94 bug: nine reported closed, three still open."
+    rc=1
+  elif printf '%s' "$out" | grep -q 'closed PR #'; then
+    fail "cleanup: every close failed -> it still printed 'closed PR #'. The line has to track the close, not the loop."
+    printf '%s\n' "$out" | sed 's/^/        /'
+    rc=1
+  else
+    pass "cleanup: every close failed -> reject"
+  fi
+
+  # The liar: `gh pr close` exits 0 and the pull request is still open anyway.
+  # Only the re-read catches this one, which is why it is not optional.
+  n=$((n + 1))
+  if out=$(
+    gh() {
+      if [ "$2" = "list" ]; then
+        case "$*" in
+          *--head*) echo 103 ;;
+          *)        echo "#103 ci-verify/gate" ;;
+        esac
+        return 0
+      fi
+      return 0   # close claims success
+    }
+    git() { return 1; }
+    cleanup 2>&1
+  ); then
+    fail "cleanup: close exits 0 but the pull request survives -> it accepted. Trusting the exit code over the live list is the whole bug."
+    printf '%s\n' "$out" | sed 's/^/        /'
+    rc=1
+  else
+    pass "cleanup: close reports success but the pull request survives -> reject"
+  fi
+
+  printf '\n'
+  if [ "$rc" -ne 0 ]; then
+    fail "cleanup does not do what it reports. It is the last thing that runs and nothing downstream checks it."
+  else
+    printf '\033[1m%d/%d — cleanup reports what it actually did.\033[0m\n' "$n" "$n"
+  fi
+  return "$rc"
+}
+
 # --- the breakages ----------------------------------------------------------
 # Each writes exactly one deliberate defect into the working tree. Deterministic on
 # purpose: a verification that itself flakes teaches nothing.
@@ -585,30 +675,70 @@ break_gate() {
 
 # --- driver -----------------------------------------------------------------
 
+# The header promises this closes every pull request it opens. It used to promise
+# that in the output too, whatever happened: every `gh` call was `|| true`, and the
+# "closed PR #N" line printed unconditionally, so a run in which all nine closes
+# failed was indistinguishable from a clean one. The TWO-22 acceptance run left
+# three pull requests open and reported nine closed (TWO-94).
+#
+# That is the same defect the rest of this file exists to catch, one level up: a
+# report that does not track the fact. So the per-branch result is now read from
+# the close, and then the whole thing is checked again against the live list —
+# because `gh pr close` exiting 0 and the pull request being closed are two
+# different facts, and this file's entire premise is that those drift.
 cleanup() {
   log "Cleaning up"
+  local entry slug branch number survivors
+  local rc=0
+
   for entry in "${CASES[@]}" "clean|tests|the happy path"; do
     slug="${entry%%|*}"
     branch="${BRANCH_PREFIX}/${slug}"
     number=$(gh pr list --head "$branch" --state open --json number --jq '.[0].number' 2>/dev/null || true)
     if [ -n "${number:-}" ] && [ "$number" != "null" ]; then
-      gh pr close "$number" --delete-branch --comment "CI verification run finished." >/dev/null 2>&1 || true
-      echo "  closed PR #$number ($branch)"
+      if gh pr close "$number" --delete-branch --comment "CI verification run finished." >/dev/null 2>&1; then
+        echo "  closed PR #$number ($branch)"
+      else
+        fail "could not close PR #$number ($branch)"
+        rc=1
+      fi
     fi
     git push origin --delete "$branch" >/dev/null 2>&1 || true
     git branch -D "$branch" >/dev/null 2>&1 || true
   done
+
+  # Re-read rather than trust the loop. This also catches pull requests an earlier
+  # interrupted run left behind, which is what "closes every PR it opens" has to
+  # mean if the promise is worth anything.
+  survivors=$(gh pr list --state open --limit 100 --json number,headRefName \
+    --jq ".[] | select(.headRefName | startswith(\"${BRANCH_PREFIX}/\")) | \"#\(.number) \(.headRefName)\"" \
+    2>/dev/null || true)
+
+  if [ -n "$survivors" ]; then
+    fail "these ${BRANCH_PREFIX}/* pull requests are still open against ${BASE_BRANCH}:"
+    printf '%s\n' "$survivors" | sed 's/^/        /'
+    fail "close them, or re-run: ./ci/verify-pipeline.sh --cleanup"
+    rc=1
+  fi
+
+  if [ "$rc" -eq 0 ]; then
+    echo "  nothing left behind: no open ${BRANCH_PREFIX}/* pull requests remain."
+  fi
+  return "$rc"
 }
 
 if [ "$MODE" = "--cleanup" ]; then
-  cleanup
+  cleanup || exit 1
   exit 0
 fi
 
 if [ "$MODE" = "--assert-selftest" ]; then
+  selftest_rc=0
   log "The live-run assertions, against synthetic check results (no network)"
-  assert_selftest
-  exit $?
+  assert_selftest || selftest_rc=1
+  log "Cleanup, against synthetic gh responses (no network)"
+  cleanup_selftest || selftest_rc=1
+  exit "$selftest_rc"
 fi
 
 if [ "$MODE" = "--lint" ]; then
@@ -813,10 +943,20 @@ gh run list --branch "${BRANCH_PREFIX}/clean" --workflow CI --limit 1 \
   --json createdAt,updatedAt,conclusion \
   --jq '.[] | "  conclusion: \(.conclusion)  started: \(.createdAt)  finished: \(.updatedAt)"' || true
 
-cleanup
+cleanup_rc=0
+cleanup || cleanup_rc=1
 
+# The gate's verdict first: it is the reason anyone ran this. Leftover pull
+# requests are reported separately and never mistaken for a gate defect — but they
+# still fail the run, because eight open pull requests titled "do not merge" is not
+# a state to walk away from.
 if [ "$ok" -ne 0 ]; then
   fail "the merge gate does not catch everything it claims to. Do not sign off TWO-22."
+  exit 1
+fi
+
+if [ "$cleanup_rc" -ne 0 ]; then
+  fail "the gate itself was verified — nothing above is wrong with ci.yml. This run could not clear its own pull requests. Finish that before walking away."
   exit 1
 fi
 
