@@ -153,8 +153,20 @@ To pull a newer version:
 cp ../two-design/tokens/two.css        resources/css/two.css
 cp ../two-design/assets/fonts/*.woff2  public/fonts/
 cp ../two-design/assets/fonts/Archivo-OFL.txt public/fonts/
-npm run build && php vendor/bin/pest --filter=DesignSystem
+
+# Record what you copied. `vendored.design-system` is the manifest CI checks; the
+# `upstream` line at the top of it takes the two-design commit you copied from.
+sha256sum resources/css/two.css public/fonts/archivo-latin.woff2 \
+          public/fonts/archivo-latin-ext.woff2 public/fonts/Archivo-OFL.txt
+
+npm run build && php vendor/bin/pest --filter='DesignSystem|Vendored'
 ```
+
+Updating the manifest is not paperwork. Nothing in this repo checks colour
+contrast — two-design does, on 43 pairings against WCAG 2.2 AA — and that guarantee
+reaches the site only while our copy is byte-identical. `tests/Unit/VendoredTokensTest.php`
+is what keeps those two facts connected, so a hex edited here fails CI instead of
+quietly shipping.
 
 Three rules, all enforced by `tests/Unit/DesignSystemTest.php`:
 
@@ -249,6 +261,14 @@ except by pull request.
 - **Don't put design opinions in the CSS.** Layout, visuals and copy are the
   Designer's call.
 - **Nobody merges their own PR without QA sign-off.**
+
+Three documents you are expected to have read before your first PR, owned by QA:
+
+| | |
+|---|---|
+| [docs/testing-strategy.md](docs/testing-strategy.md) | what earns a unit test, a feature test, and a Dusk journey |
+| [docs/flake-policy.md](docs/flake-policy.md) | a flaky test is a bug — it is fixed or deleted, never re-run |
+| [docs/ci.md](docs/ci.md) | what CI runs, the budgets, the six-box merge gate, deploys |
 
 Phase 1 is: landing page, Discord login, member profile, events calendar with RSVP,
 and a Filament moderator admin. Anything else needs CEO sign-off before a line is
