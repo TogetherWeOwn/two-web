@@ -37,6 +37,19 @@
 # every pull request and then read nothing back, which looks exactly like a
 # pipeline that never ran.
 #
+# One `--run` at a time per repository. Every case has a fixed branch name, so a
+# second concurrent run overwrites and then deletes the first one's pull requests.
+# The preconditions refuse to start when another run is live rather than let that
+# happen quietly — see TWO-103.
+#
+# And `--run` needs a checkout of its own. It works by checking out and committing
+# on eight branches in whatever repository it is standing in, and the checkout in
+# an agent workspace is shared by every run of that agent — so doing that there is
+# a write to another run's working tree, with no reflog entry for whatever
+# uncommitted work it lands on. `./ci/scratch-clone.sh` gives the run a private
+# clone in a couple of hundred kilobytes and no network; the preconditions refuse
+# to start outside one — see TWO-112.
+#
 # --lint needs nothing but bash, so it runs before the org exists, in a pre-commit
 # hook, or in CI itself. It catches the class of bug where the gate still reports
 # green while it has quietly stopped gating.
@@ -829,6 +842,47 @@ fi
 # reading the file.
 log "Static checks on the gate"
 lint || { fail "the gate is misconfigured. Fix ${WORKFLOW} first — the live run would only tell you the same thing, slower."; exit 1; }
+
+# This has to be first, before the dirty-tree check, because `--run` does its work
+# by checking out branches in whatever repository it is standing in — and in an
+# agent workspace that repository belongs to every run of that agent, not to this
+# one. Two runs overlap: one heartbeat can still be finishing while the next has
+# started. A `git checkout -B` here is a write to someone else's working tree, and
+# unlike a `reset --hard` on committed work it leaves no reflog entry to recover
+# from (TWO-112; observed live on 2026-08-20, both times inside one agent's own
+# workspace).
+#
+# It also has to come before the dirty-tree check specifically, or an operator in a
+# shared checkout is told "commit or stash first" — advice that would have them
+# commit another run's half-finished work onto a ci-verify branch and push it.
+#
+# `ci/scratch-clone.sh` makes a run-private clone and stamps its run id into
+# `paperclip.runScratch`. Outside Paperclip there is no run to own anything, so
+# PAPERCLIP_RUN_ID is unset and this guard does not apply — a laptop or a CI runner
+# has its own checkout by definition.
+if [ -n "${PAPERCLIP_RUN_ID:-}" ]; then
+  SCRATCH_OWNER=$(git config --get paperclip.runScratch 2>/dev/null || true)
+  if [ -z "$SCRATCH_OWNER" ]; then
+    fail "this is a shared workspace checkout, not a scratch clone owned by run ${PAPERCLIP_RUN_ID}.
+\`--run\` checks out and commits on eight branches in the repository it is standing
+in. Another run of this agent shares this directory and can be mid-edit in it right
+now; uncommitted work it destroys is not in any reflog. Work in a clone of your own:
+
+  cd \"\$(./ci/scratch-clone.sh)\" && ./ci/verify-pipeline.sh --run
+
+Nothing has been pushed."
+    exit 1
+  fi
+  if [ "$SCRATCH_OWNER" != "$PAPERCLIP_RUN_ID" ]; then
+    fail "this scratch clone belongs to run ${SCRATCH_OWNER}, not to run ${PAPERCLIP_RUN_ID}.
+Either that run is still going — in which case this is its working tree and the
+same collision applies — or it ended and Paperclip has not yet removed the
+directory, in which case its object store may be pruned out from under you.
+Make your own with \`./ci/scratch-clone.sh\`. Nothing has been pushed."
+    exit 1
+  fi
+  pass "working in this run's own scratch clone"
+fi
 
 command -v gh >/dev/null || { fail "gh is not installed"; exit 1; }
 gh auth status >/dev/null 2>&1 || { fail "gh is not authenticated"; exit 1; }

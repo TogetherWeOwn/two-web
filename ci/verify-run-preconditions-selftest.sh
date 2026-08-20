@@ -18,6 +18,9 @@
 #
 # What is pinned, in the order verify-pipeline.sh checks it:
 #
+#   shared-tree   the repo is a shared workspace checkout, not a scratch clone (TWO-112)
+#   stale-scratch the scratch clone belongs to a different run                 (TWO-112)
+#   no-run-id     outside Paperclip the scratch-clone guard must NOT fire      (TWO-112)
 #   gh-unauth     `gh` is installed but not logged in
 #   dirty         uncommitted changes in the working tree
 #   local-origin  `origin` is a filesystem clone, not GitHub
@@ -44,6 +47,12 @@ trap 'rm -rf "$WORK"' EXIT
 # What `git config --get remote.origin.url` reports. Never contacted: an
 # `insteadOf` rewrite sends every actual transfer to the bare repo in the fixture.
 FAKE_ORIGIN="https://github.com/TWO-Gaming/two-web.git"
+
+# The run id every fixture is stamped with, and the one run_case exports unless a
+# case says otherwise. Real ones are UUIDs; the only thing verify-pipeline.sh does
+# with it is compare it to `paperclip.runScratch`, so any stable string will do.
+# Fixed rather than generated so a failure message is the same on every machine.
+FIXTURE_RUN_ID="selftest-run-0000"
 
 pass() { printf '\033[32mPASS\033[0m  %s\n' "$*"; }
 fail() { printf '\033[31mFAIL\033[0m  %s\n' "$*" >&2; }
@@ -78,6 +87,10 @@ fixture() {
     git config commit.gpgsign false
     git remote add origin "$FAKE_ORIGIN"
     git config "url.${dir}/remote.git.insteadOf" "$FAKE_ORIGIN"
+    # Every fixture passes the scratch-clone guard by default (TWO-112), the same
+    # way a real run does: it is stamped with the run id that owns it. The cases
+    # that test that guard unstamp or re-stamp their own copy.
+    git config paperclip.runScratch "$FIXTURE_RUN_ID"
     git add -A
     git commit -q -m 'fixture'
   ) || return 1
@@ -113,11 +126,24 @@ SH
   echo "$dir"
 }
 
+# The run id run_case exports. A case sets this to something else to play a
+# different run, or to the empty string to play "not inside Paperclip at all",
+# which has to be a real unset and not an empty variable — verify-pipeline.sh
+# branches on whether PAPERCLIP_RUN_ID is set to a non-empty value.
+RUN_CASE_RUN_ID="$FIXTURE_RUN_ID"
+
 # run_case <dir> -> combined output in $RUN_OUT, exit status in $RUN_STATUS.
 # Not a command substitution: that would run in a subshell and lose the status.
+#
+# `env -u` matters here: this harness itself usually runs inside a Paperclip run,
+# so PAPERCLIP_RUN_ID is already in the environment and would leak a real run id
+# into every fixture. Each case states its own.
 run_case() {
   local dir="$1"
-  RUN_OUT="$(cd "$dir/repo" && PATH="$dir/bin:$PATH" GH_STUB_PR_JSON="$dir/prs.json" \
+  local -a runenv=()
+  [ -n "$RUN_CASE_RUN_ID" ] && runenv=("PAPERCLIP_RUN_ID=$RUN_CASE_RUN_ID")
+  RUN_OUT="$(cd "$dir/repo" && env -u PAPERCLIP_RUN_ID "${runenv[@]}" \
+    PATH="$dir/bin:$PATH" GH_STUB_PR_JSON="$dir/prs.json" \
     GH_STUB_AUTH_STATUS="$dir/auth-status" GH_STUB_API_STATUS="$dir/api-status" \
     ./ci/verify-pipeline.sh --run 2>&1)"
   RUN_STATUS=$?
@@ -149,6 +175,67 @@ expect_refused() {
   fi
   pass "$slug"
 }
+
+printf '\n\033[1m==> The run does not have a checkout of its own (TWO-112)\033[0m\n'
+
+# The shared workspace checkout. `--run` checks out and commits on eight branches
+# in the repository it is standing in; in an agent workspace that repository is
+# shared with every other run of that agent, and one heartbeat can still be
+# finishing while the next has started. Committed work it lands on is at least in
+# a reflog. Uncommitted work is not anywhere.
+#
+# This guard is checked before the dirty-tree one on purpose, and the ordering is
+# worth pinning: in a shared checkout that is mid-edit, "working tree is dirty —
+# commit or stash first" would have the operator commit another run's unfinished
+# work onto a ci-verify branch and push it.
+dir="$(fixture shared-tree)" || { fail 'shared-tree: fixture failed'; rc=1; }
+( cd "$dir/repo" && git config --unset paperclip.runScratch )
+printf 'uncommitted\n' > "$dir/repo/scratch.txt"
+PRE_EXISTING='no-such-ref'
+expect_refused shared-tree 'this is a shared workspace checkout' "$dir"
+
+# ... and it must be refused for *that* reason, not for the dirty tree it also has.
+n=$((n + 1))
+if grep -qF 'working tree is dirty' <<< "$RUN_OUT"; then
+  fail 'shared-tree: refused for the dirty tree, so the scratch-clone guard is checked too late'
+  rc=1
+else
+  pass 'shared-tree-first'
+fi
+
+# A scratch clone left behind by a run that has ended, or still owned by a run that
+# has not. Either way it is not this run's tree, and its borrowed object store can
+# be pruned out from under it — `scratch-clone.sh` uses `git clone --shared`.
+dir="$(fixture stale-scratch)" || { fail 'stale-scratch: fixture failed'; rc=1; }
+( cd "$dir/repo" && git config paperclip.runScratch 'selftest-run-9999' )
+PRE_EXISTING='no-such-ref'
+expect_refused stale-scratch 'belongs to run selftest-run-9999' "$dir"
+
+printf '\n\033[1m==> Outside Paperclip, the scratch-clone guard must not fire\033[0m\n'
+
+# On a laptop or a CI runner there is no run to own anything and the checkout is
+# private by definition. If this guard fires there, the acceptance suite becomes
+# unrunnable by a human — and it would fire for a reason that names an environment
+# variable they have never heard of. Inverting the condition is a one-character
+# mistake, so pin it.
+n=$((n + 1))
+dir="$(fixture no-run-id)" || { fail 'no-run-id: fixture failed'; rc=1; }
+( cd "$dir/repo" && git config --unset paperclip.runScratch )
+RUN_CASE_RUN_ID=''
+run_case "$dir"
+out="$RUN_OUT"
+RUN_CASE_RUN_ID="$FIXTURE_RUN_ID"
+if grep -qF 'shared workspace checkout' <<< "$out"; then
+  fail 'no-run-id: the guard fired outside a Paperclip run'
+  printf '%s\n' "$out" | sed 's/^/        /'
+  rc=1
+elif ! grep -qF 'no other verification run is live' <<< "$out"; then
+  fail 'no-run-id: the run stopped before the guards it should have passed'
+  printf '%s\n' "$out" | sed 's/^/        /'
+  rc=1
+else
+  pass 'no-run-id'
+fi
 
 printf '\n\033[1m==> Another verification run is already live (TWO-103)\033[0m\n'
 
