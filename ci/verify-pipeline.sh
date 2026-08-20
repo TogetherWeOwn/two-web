@@ -21,7 +21,7 @@
 #   ./ci/verify-pipeline.sh --lint            # static checks only: no network, no gh
 #   ./ci/verify-pipeline.sh --assert-selftest # tests --run's assertions offline
 #   ./ci/verify-pipeline.sh --run             # actually opens the PRs (lints first)
-#   ./ci/verify-pipeline.sh --cleanup         # delete leftover branches and close PRs
+#   ./ci/verify-pipeline.sh --cleanup         # clear every ci-verify/* branch and PR
 #
 # Needs: gh, authenticated. Opens PRs against `main`. Never pushes to `main`,
 # never force-pushes anything, closes every PR it opens.
@@ -751,37 +751,72 @@ break_gate() {
 
 # --- driver -----------------------------------------------------------------
 
-# The header promises this closes every pull request it opens. It used to promise
-# that in the output too, whatever happened: every `gh` call was `|| true`, and the
-# "closed PR #N" line printed unconditionally, so a run in which all nine closes
-# failed was indistinguishable from a clean one. The TWO-22 acceptance run left
-# three pull requests open and reported nine closed (TWO-94).
+# Delete this run's branches and close its pull requests — and, because the `--run`
+# guard below names this command as the way out, clear everything that guard
+# refuses on rather than everything this checkout happens to know about.
 #
-# That is the same defect the rest of this file exists to catch, one level up: a
-# report that does not track the fact. So the per-branch result is now read from
-# the close, and then the whole thing is checked again against the live list —
-# because `gh pr close` exiting 0 and the pull request being closed are two
+# Those were not the same set. The guard blocks on any `ci-verify/*` ref, by glob.
+# This used to iterate CASES plus `clean` and delete those nine fixed names, so a
+# `ci-verify/*` branch whose slug is not in CASES — a case renamed or dropped since
+# the run that died, an older checkout of this script, one made by hand — was
+# blocked on forever and cleaned never: `--cleanup` printed a header, exited 0 and
+# changed nothing, and the only way out was knowing to `git push origin --delete`
+# by hand (TWO-109). Both ends now read the same two probes, so the guard and its
+# recovery agree by construction instead of by both being remembered.
+#
+# The other half of the promise is TWO-94's: the header says this closes every pull
+# request it opens, and it used to say so in the output too whatever happened —
+# every `gh` call was `|| true` and the "closed" line printed unconditionally, so a
+# run in which every close failed was indistinguishable from a clean one. The TWO-22
+# acceptance run left three pull requests open and reported nine closed. So the
+# result is read from the close, and then the whole thing is checked again against
+# the live list: `gh pr close` exiting 0 and the pull request being closed are two
 # different facts, and this file's entire premise is that those drift.
+#
+# This gets used. The script has no `trap`, so a Ctrl-C, a dropped connection or a
+# CI timeout leaves branches behind with no pull request attached — the killed-run
+# path is the normal way a run ends badly.
 cleanup() {
   log "Cleaning up"
-  local entry slug branch number survivors
+  local entry slug prs branches number head sha ref name survivors removed=0
   local rc=0
 
+  # Local branches first. They are on no remote, nothing enumerates them, and the
+  # fixed names are the only handle there is. Not counted as removals: nothing
+  # outside this checkout can see them, and the guard does not look here.
   for entry in "${CASES[@]}" "clean|tests|the happy path"; do
     slug="${entry%%|*}"
-    branch="${BRANCH_PREFIX}/${slug}"
-    number=$(gh pr list --head "$branch" --state open --json number --jq '.[0].number' 2>/dev/null || true)
-    if [ -n "${number:-}" ] && [ "$number" != "null" ]; then
-      if gh pr close "$number" --delete-branch --comment "CI verification run finished." >/dev/null 2>&1; then
-        echo "  closed PR #$number ($branch)"
-      else
-        fail "could not close PR #$number ($branch)"
-        rc=1
-      fi
-    fi
-    git push origin --delete "$branch" >/dev/null 2>&1 || true
-    git branch -D "$branch" >/dev/null 2>&1 || true
+    git branch -D "${BRANCH_PREFIX}/${slug}" >/dev/null 2>&1 || true
   done
+
+  # Then the two things `--run` refuses on, read the same way it reads them. Pull
+  # requests first: closing one with --delete-branch takes its branch with it, so
+  # the sweep below is left with exactly the branches that have no pull request.
+  prs=$(gh pr list --state open --limit 100 \
+          --json number,headRefName --jq '.[] | "\(.number)\t\(.headRefName)"' 2>/dev/null || true)
+  while IFS=$'\t' read -r number head; do
+    case "${head:-}" in "${BRANCH_PREFIX}/"*) ;; *) continue ;; esac
+    if gh pr close "$number" --delete-branch --comment "CI verification run finished." >/dev/null 2>&1; then
+      printf '  closed pull request #%s (%s)\n' "$number" "$head"
+      removed=$((removed + 1))
+    else
+      fail "could not close pull request #$number ($head)"
+      rc=1
+    fi
+  done <<< "$prs"
+
+  branches=$(git ls-remote --heads origin "refs/heads/${BRANCH_PREFIX}/*" 2>/dev/null || true)
+  while read -r sha ref; do
+    [ -n "${ref:-}" ] || continue
+    name="${ref#refs/heads/}"
+    if git push origin --delete "$name" >/dev/null 2>&1; then
+      printf '  deleted branch %s on origin\n' "$name"
+      removed=$((removed + 1))
+    else
+      printf '  could not delete branch %s on origin\n' "$name"
+      rc=1
+    fi
+  done <<< "$branches"
 
   # Re-read rather than trust the loop. This also catches pull requests an earlier
   # interrupted run left behind, which is what "closes every PR it opens" has to
@@ -797,14 +832,19 @@ cleanup() {
     rc=1
   fi
 
-  if [ "$rc" -eq 0 ]; then
-    echo "  nothing left behind: no open ${BRANCH_PREFIX}/* pull requests remain."
+  # Say which of the two happened. One header and exit 0 read the same whether nine
+  # branches went or none did, which is how the no-op above stayed invisible.
+  if [ "$rc" -eq 0 ] && [ "$removed" -eq 0 ]; then
+    echo "  nothing to clean"
   fi
   return "$rc"
 }
 
 if [ "$MODE" = "--cleanup" ]; then
-  cleanup || exit 1
+  cleanup || {
+    fail "some ${BRANCH_PREFIX}/* refs are still there — see above. \`--run\` will refuse to start while they are."
+    exit 1
+  }
   exit 0
 fi
 
@@ -932,21 +972,30 @@ gh api "repos/${REPO_SLUG}/actions/runs?per_page=1" >/dev/null 2>&1 || {
 # A bare remote branch counts as much as an open pull request. A run killed
 # part-way through leaves branches behind with no PR, and the next run's
 # `--force-with-lease` push collides with those just as hard.
+#
+# The two probes are read here rather than inside the function, because whether
+# each one *answered* matters as much as what it said. An unreadable probe and a
+# probe that found nothing produce the same empty string, and the difference
+# between them is the difference between a checked claim and a guess.
+PR_PROBE=ok
+PRS=$(gh pr list --repo "$REPO_SLUG" --state open --limit 100 \
+        --json number,headRefName --jq '.[] | "\(.number)\t\(.headRefName)"' 2>/dev/null) || PR_PROBE=unreadable
+
+BRANCH_PROBE=ok
+BRANCHES=$(git ls-remote --heads origin "refs/heads/${BRANCH_PREFIX}/*" 2>/dev/null) || BRANCH_PROBE=unreadable
+
 live_run() {
-  local prs branches number head sha ref
-  prs=$(gh pr list --repo "$REPO_SLUG" --state open --limit 100 \
-          --json number,headRefName --jq '.[] | "\(.number)\t\(.headRefName)"' 2>/dev/null || true)
+  local number head sha ref
   while IFS=$'\t' read -r number head; do
     case "${head:-}" in
       "${BRANCH_PREFIX}/"*) printf '  pull request #%s on %s\n' "$number" "$head" ;;
     esac
-  done <<< "$prs"
+  done <<< "$PRS"
 
-  branches=$(git ls-remote --heads origin "refs/heads/${BRANCH_PREFIX}/*" 2>/dev/null || true)
   while read -r sha ref; do
     [ -n "${ref:-}" ] || continue
     printf '  branch %s on origin\n' "${ref#refs/heads/}"
-  done <<< "$branches"
+  done <<< "$BRANCHES"
 }
 
 LIVE_RUN=$(live_run || true)
@@ -959,7 +1008,27 @@ never arrived. Wait for it to finish. If you know it is dead, clear it with
 \`./ci/verify-pipeline.sh --cleanup\` and start again. Nothing has been pushed."
   exit 1
 fi
-pass "no other verification run is live on ${REPO_SLUG}"
+
+if [ "$PR_PROBE" = ok ] && [ "$BRANCH_PROBE" = ok ]; then
+  pass "no other verification run is live on ${REPO_SLUG}"
+elif [ "$BRANCH_PROBE" = ok ]; then
+  # `gh pr list --json` prints nothing and exits non-zero when the API will not
+  # answer, which is byte-for-byte what an empty list looks like. Starting anyway
+  # is the right call: open_pr() pushes the branch *before* it opens the pull
+  # request, so every live run has a ci-verify/* branch too, and the ls-remote
+  # half — different transport, different credential — just looked for exactly
+  # that and found none. What is not right is printing PASS, which is a positive
+  # claim about a probe that was never read.
+  printf '\033[33mNOTE: could not read the open pull requests on %s. No %s/* branch is on origin either way, and a live run would have one, so this run is starting on that evidence alone.\033[0m\n' \
+    "$REPO_SLUG" "$BRANCH_PREFIX"
+else
+  # The other half is gone too, so there is nothing left to fail open onto — and
+  # `git ls-remote` is the same transport every push in this script uses, so the
+  # fetch on the next line would die regardless. Refuse here, where the message is
+  # about the thing that is actually wrong.
+  fail "cannot read the branches on origin: \`git ls-remote\` failed, so whether another verification run is live is unknown — and so is whether this run could push at all. Nothing has been pushed."
+  exit 1
+fi
 
 # `--prune` is not decoration. Every push below is `--force-with-lease`, which holds
 # the lease against the local `refs/remotes/origin/ci-verify/*`. A previous run's
