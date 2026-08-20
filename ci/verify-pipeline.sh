@@ -17,10 +17,11 @@
 # again after any change to .github/workflows/ci.yml that alters what fails.
 #
 # Usage:
-#   ./ci/verify-pipeline.sh              # dry run: prints what it would do
-#   ./ci/verify-pipeline.sh --lint       # static checks only: no network, no gh
-#   ./ci/verify-pipeline.sh --run        # actually opens the PRs (lints first)
-#   ./ci/verify-pipeline.sh --cleanup    # delete leftover branches and close PRs
+#   ./ci/verify-pipeline.sh                   # dry run: prints what it would do
+#   ./ci/verify-pipeline.sh --lint            # static checks only: no network, no gh
+#   ./ci/verify-pipeline.sh --assert-selftest # tests --run's assertions offline
+#   ./ci/verify-pipeline.sh --run             # actually opens the PRs (lints first)
+#   ./ci/verify-pipeline.sh --cleanup         # delete leftover branches and close PRs
 #
 # Needs: gh, authenticated. Opens PRs against `main`. Never pushes to `main`,
 # never force-pushes anything, closes every PR it opens.
@@ -85,16 +86,37 @@ REQUIRED_CHECKS=(tests static pest dusk budgets gitleaks)
 # an empty result as green, which is the same bug one level up.
 EXPECTED_CHECKS=(static pest dusk budgets tests gitleaks)
 
-# Each case: <slug>|<expected failing job>|<what it proves>
+# Each case: <slug>|<expected failing job>|<expected aggregate state>|<what it proves>
+#
+# The third field is what `tests` must report. Normally FAILURE: the named job goes
+# red, `if: always()` runs the aggregate anyway, and its guard turns that into a red
+# required check. Every case is FAILURE except one.
+#
+# `gate` is NOT_SUCCESS, and that is not a weakening (TWO-94). That case deletes
+# `if: always()` — the very mechanism that makes the aggregate report at all when a
+# need is red. So on that pull request `tests` is *skipped*, and no possible edit to
+# ci.yml could make it FAILURE instead: the thing being deleted is the thing that
+# would do it. Asserting FAILURE there asks for something unreachable by
+# construction, and the assertion fails while the gate is working.
+#
+# What stops that pull request is `static`. It runs `--lint` before anything slow,
+# `--lint` fails on a missing `if: always()`, and `static` is a required check in its
+# own right — which is the entire reason the leaves are required alongside the
+# aggregate. So the case asserts the two things that are actually load-bearing:
+# `static` is red, and `tests` did not report SUCCESS over a red pipeline. A skipped
+# aggregate is tolerated; an aggregate that ran and said yes is not.
+#
+# Check 9 in lint() is what keeps that true offline: it fails if the job running
+# `--lint` stops being a required check.
 CASES=(
-  "pint|static|badly formatted PHP is rejected"
-  "phpstan|static|a type error is rejected"
-  "pest|pest|a failing feature test is rejected"
-  "tokens|pest|an edit to the vendored design system is rejected"
-  "dusk|dusk|a broken page is caught in a real browser"
-  "a11y|budgets|a WCAG 2.2 AA violation is rejected"
-  "lcp|budgets|an LCP breach is rejected"
-  "gate|static|a pull request that disarms the merge gate is rejected"
+  "pint|static|FAILURE|badly formatted PHP is rejected"
+  "phpstan|static|FAILURE|a type error is rejected"
+  "pest|pest|FAILURE|a failing feature test is rejected"
+  "tokens|pest|FAILURE|an edit to the vendored design system is rejected"
+  "dusk|dusk|FAILURE|a broken page is caught in a real browser"
+  "a11y|budgets|FAILURE|a WCAG 2.2 AA violation is rejected"
+  "lcp|budgets|FAILURE|an LCP breach is rejected"
+  "gate|static|NOT_SUCCESS|a pull request that disarms the merge gate is rejected"
 )
 
 log()  { printf '\n\033[1m==> %s\033[0m\n' "$*"; }
@@ -125,9 +147,33 @@ job_block() { awk -v id="$2" '$0 ~ "^  " id ":[[:space:]]*$" {j=1;next} j && /^ 
 # be blocked on. `deploy.yml` is `workflow_run`, `main-guard` is push-only: their
 # job ids look like perfectly good required contexts and would each hang every PR
 # forever. Matching a job id is not enough — it has to be a job that *reports*.
+#
+# The awk output goes through a here-string rather than a pipe. See the note on
+# `has_line` below: `awk | grep -q` under `pipefail` is a coin flip.
 triggers_on_pr() {
-  awk '/^on:/{o=1;next} o && /^[a-zA-Z]/{exit} o' "$1" | grep -qE '^\s+pull_request:?'
+  local on
+  on=$(awk '/^on:/{o=1;next} o && /^[a-zA-Z]/{exit} o' "$1")
+  grep -qE '^\s+pull_request:?' <<< "$on"
 }
+
+# grep for a pattern in some text, and say so honestly.
+#
+# Never write `producer | grep -q pattern` in this file. `grep -q` exits the
+# instant it matches; if the producer still has output to write it takes SIGPIPE
+# and dies with 141, and `set -o pipefail` makes the whole pipeline non-zero —
+# so a *successful* match reports as a failure. `if` suppresses errexit but not
+# pipefail, so the branch silently inverts. `grep -m1` exits early for the same
+# reason and is banned in the same place.
+#
+# It is a race, so it depends on how far into the producer's output the match
+# lands and on how fast the machine is: `job_block budgets | grep -q 'npm run
+# build'` matched 65 lines from the end, passed on a laptop every time, and went
+# red on the runner (TWO-87). A check that fails only sometimes, only in CI, and
+# only when it should have passed is worse than no check.
+#
+# `verify-lint-selftest.sh` greps this file for the shape and fails on a hit,
+# which is the only way a ban on something invisible in review stays a ban.
+has_line() { grep -q -- "$2" <<< "$1"; }
 
 # What one job will actually report as: its `name:` if it sets one, its id if not.
 # Branch protection matches the check-run name, so a job that renames itself stops
@@ -135,8 +181,9 @@ triggers_on_pr() {
 # check" failure as requiring `ci`, but arriving later and looking like flakiness.
 # `^    name:` is job level; step names are deeper and carry a `- `.
 job_reported_name() {
-  local n
-  n=$(job_block "$1" "$2" | grep -m1 -E '^    name:' | sed 's/^    name:[[:space:]]*//' | sed 's/^["'"'"']//; s/["'"'"']$//')
+  local blk n
+  blk=$(job_block "$1" "$2")
+  n=$(grep -m1 -E '^    name:' <<< "$blk" | sed 's/^    name:[[:space:]]*//' | sed 's/^["'"'"']//; s/["'"'"']$//')
   [ -n "$n" ] && echo "$n" || echo "$2"
 }
 
@@ -150,6 +197,20 @@ pr_reported_names() {
       [ -n "$job" ] && job_reported_name "$f" "$job"
     done <<< "$(job_ids "$f")"
   done
+}
+
+# Which jobs run the gate's own lint, by the name they report as. `--lint` is the
+# only thing that catches an aggregate whose guard has been removed, so both the
+# step's existence and the requiredness of the job carrying it are load-bearing.
+gate_lint_jobs() {
+  local job blk
+  while read -r job; do
+    [ -n "$job" ] || continue
+    blk=$(job_block "$1" "$job")
+    if has_line "$blk" 'verify-pipeline.sh --lint'; then
+      job_reported_name "$1" "$job"
+    fi
+  done <<< "$(job_ids "$1")"
 }
 
 lint() {
@@ -278,7 +339,40 @@ lint() {
     fi
   done
 
-  # 9. The performance budget is still a budget. ci/lighthouserc.cjs asks in prose
+  # 9. The gate's own lint must run on pull requests, from a job that is required.
+  #
+  #    Check 1 catches an aggregate that has lost `if: always()` — but only if
+  #    something runs check 1 on the pull request making that edit, and only if a
+  #    failure there actually blocks. `tests` cannot be what blocks it: deleting
+  #    `if: always()` *skips* the aggregate, GitHub reads a skipped required check
+  #    as passed, and the mechanism that would have made it red is the thing being
+  #    deleted. The job carrying `--lint` is the only required check that goes red
+  #    on that pull request (TWO-94), which is why this is a failure and not a
+  #    warning: check 7 only warns about an unrequired job on the grounds that
+  #    `tests` still covers it, and here `tests` is precisely what does not.
+  #
+  #    Two ways to lose this whole class of breakage with every job still green:
+  #    drop the `--lint` step, or drop its job from REQUIRED_CHECKS. Neither shows
+  #    up anywhere else in the pipeline.
+  local lint_jobs guarded=""
+  lint_jobs=$(gate_lint_jobs "$WORKFLOW")
+  if [ -z "$lint_jobs" ]; then
+    fail "no job in ${WORKFLOW} runs \`verify-pipeline.sh --lint\`. Nothing then catches an aggregate that has lost \`if: always()\`: that edit skips \`${AGGREGATE}\`, and a skipped required check counts as passed."
+    rc=1
+  else
+    while read -r name; do
+      [ -n "$name" ] || continue
+      if grep -qxF "$name" <<< "$required_list"; then guarded="$name"; fi
+    done <<< "$lint_jobs"
+    if [ -n "$guarded" ]; then
+      pass "\`${guarded}\` runs \`--lint\` and is a required check — it is what stops a PR that disarms \`${AGGREGATE}\`"
+    else
+      fail "the job(s) running \`--lint\` ($(echo "$lint_jobs" | tr '\n' ' ')) are not required checks. A pull request deleting \`${AGGREGATE}\`'s \`if: always()\` would skip \`${AGGREGATE}\` — which GitHub counts as passed — and nothing required would be red. Requiring \`${AGGREGATE}\` alone does not cover this."
+      rc=1
+    fi
+  fi
+
+  # 10. The performance budget is still a budget. ci/lighthouserc.cjs asks in prose
   #    that nobody edit a threshold to make a build go green, and until TWO-93
   #    nothing checked — a relaxed budget and an enforced one look the same from
   #    every job in the pipeline. Each entry below must be present, at `error`, at
@@ -315,6 +409,257 @@ lint() {
     rc=1
   fi
 
+  return "$rc"
+}
+
+# The assertions, kept separate from the fetching so they can be exercised without
+# a network, a repository, or forty minutes of runner time — see --assert-selftest.
+# `checks` is one `name=STATE` per line, exactly as `branch_checks` yields it.
+assert_checks() {
+  local checks expected_job="$2" aggregate="$3" expect_green="$4" why="$5" where="${6:-}"
+  checks=$(grep -v '^[[:space:]]*$' <<< "$1" || true)
+  if [ -n "$where" ]; then where=" on ${where}"; fi
+
+  # A check that never reported is not a pass. If the workflow file has a syntax
+  # error, or Actions is disabled on the repo, the Actions API returns nothing at
+  # all — and reading nothing as green is exactly the bug this script exists to
+  # catch, one level up. The other two ways to get nothing back — an origin that is
+  # not a GitHub repository, and a token without `Actions: read` — are ruled out in
+  # the preconditions before anything is pushed (TWO-87).
+  local absent=""
+  for expected in "${EXPECTED_CHECKS[@]}"; do
+    grep -q "^${expected}=" <<< "$checks" || absent="${absent} ${expected}"
+  done
+  if [ -n "$absent" ]; then
+    fail "${why}: check(s)${absent} never reported${where}. A required check that never arrives blocks the PR forever; one that is not required is not gating at all. Got: $(echo "$checks" | tr '\n' ' ')"
+    return 1
+  fi
+
+  if [ "$expect_green" = "yes" ]; then
+    local not_green
+    not_green=$(grep -v '=SUCCESS$' <<< "$checks" || true)
+    if [ -n "$not_green" ]; then
+      fail "clean PR was not green: $(echo "$not_green" | tr '\n' ' ')"
+      return 1
+    fi
+    pass "clean PR went green (all ${#EXPECTED_CHECKS[@]} checks reported SUCCESS)"
+    return 0
+  fi
+
+  # The named job must be the one that failed. Anything else — including a green
+  # run — means the gate does not catch this, whatever else it caught.
+  if ! grep -q "^${expected_job}=FAILURE$" <<< "$checks"; then
+    fail "${why}: expected job '${expected_job}' to fail${where}, got: $(echo "$checks" | tr '\n' ' ')"
+    return 1
+  fi
+
+  local aggregate_state
+  aggregate_state=$(grep -m1 "^${AGGREGATE}=" <<< "$checks" | cut -d= -f2)
+
+  if [ "$aggregate" = "FAILURE" ]; then
+    # The aggregate is a required check, and it has `if: always()` on this pull
+    # request, so it must have run and gone red. A named job going red while
+    # `tests` stays green is the exact failure this whole script exists to catch:
+    # it looks like a working pipeline and merges anyway.
+    if [ "$aggregate_state" != "FAILURE" ]; then
+      fail "${why}: '${expected_job}' failed but the required '${AGGREGATE}' check reported ${aggregate_state} — the gate would let this merge"
+      return 1
+    fi
+    pass "${why} (rejected by '${expected_job}', and '${AGGREGATE}' went red with it)"
+    return 0
+  fi
+
+  # NOT_SUCCESS — the `gate` case, and only that case. See the CASES comment: the
+  # breakage deletes the aggregate's `if: always()`, so the aggregate is skipped
+  # and cannot be red. Two things still have to hold, and both are real.
+  #
+  # First, the aggregate must not have reported SUCCESS. Skipped is tolerated;
+  # skipped is what a deleted `if: always()` produces. SUCCESS would mean the
+  # aggregate ran and blessed a red pipeline, which is a genuine guard defect.
+  if [ "$aggregate_state" = "SUCCESS" ]; then
+    fail "${why}: '${expected_job}' failed and '${AGGREGATE}' still reported SUCCESS. The aggregate ran and passed over a red need — its guard is not treating a red need as red."
+    return 1
+  fi
+  # Second, the job that did go red must itself be a required check. Otherwise
+  # nothing required is red, the aggregate counts as passed, and this merges. This
+  # is the whole load-bearing argument for requiring the leaves as well as the
+  # aggregate, so it is asserted rather than assumed. Check 9 in lint() is the
+  # offline half of the same guarantee.
+  if ! grep -qxF "$expected_job" <<< "$(printf '%s\n' "${REQUIRED_CHECKS[@]}")"; then
+    fail "${why}: '${expected_job}' failed and '${AGGREGATE}' was ${aggregate_state}, but '${expected_job}' is not a required check. Nothing required is red and a skipped required check counts as passed — this merges."
+    return 1
+  fi
+  pass "${why} (rejected by required check '${expected_job}'; '${AGGREGATE}' was ${aggregate_state}, which is not a pass and not what stops this one — TWO-94)"
+  return 0
+}
+
+# Tests for the assertions above, with synthetic check results.
+#
+# TWO-94 was a wrong assertion, not a wrong pipeline, and it cost a full live run
+# to find out: eight pull requests and forty minutes of runner time to learn that
+# one line of bash expected something the design makes impossible. An assertion
+# that is only ever exercised by the slowest thing we own gets exactly one review
+# and then nobody looks again. These scenarios take no network and no runner, so
+# the next wrong assertion is caught by `static` in half a second.
+#
+# Every scenario is a real conclusion set: the ordinary case, the case that
+# motivated this file, and the ways each could be read wrong.
+assert_selftest() {
+  local rc=0 n=0 name expect job aggregate green raw out status
+
+  # <name>|<ok|reject>|<expected job>|<aggregate expectation>|<expect_green>|<checks>
+  local scenarios=(
+    "ordinary-failure|ok|static|FAILURE|no|static=FAILURE;pest=SUCCESS;dusk=SUCCESS;budgets=SUCCESS;tests=FAILURE;gitleaks=SUCCESS"
+    "aggregate-stayed-green|reject|static|FAILURE|no|static=FAILURE;pest=SUCCESS;dusk=SUCCESS;budgets=SUCCESS;tests=SUCCESS;gitleaks=SUCCESS"
+    "aggregate-skipped-when-it-should-be-red|reject|static|FAILURE|no|static=FAILURE;pest=SUCCESS;dusk=SUCCESS;budgets=SUCCESS;tests=SKIPPED;gitleaks=SUCCESS"
+    "wrong-job-went-red|reject|dusk|FAILURE|no|static=FAILURE;pest=SUCCESS;dusk=SUCCESS;budgets=SUCCESS;tests=FAILURE;gitleaks=SUCCESS"
+    "nothing-red-at-all|reject|static|FAILURE|no|static=SUCCESS;pest=SUCCESS;dusk=SUCCESS;budgets=SUCCESS;tests=SUCCESS;gitleaks=SUCCESS"
+    "nothing-reported|reject|static|FAILURE|no|"
+    "one-check-never-arrived|reject|static|FAILURE|no|static=FAILURE;pest=SUCCESS;dusk=SUCCESS;budgets=SUCCESS;tests=FAILURE"
+    # The observed conclusions from run 32324926996 — the gate holding, correctly.
+    "gate-disarmed-aggregate-skipped|ok|static|NOT_SUCCESS|no|static=FAILURE;pest=SUCCESS;dusk=SUCCESS;budgets=SUCCESS;tests=SKIPPED;gitleaks=SUCCESS"
+    # The aggregate ran and passed over a red need: a real guard defect, still caught.
+    "gate-disarmed-aggregate-passed|reject|static|NOT_SUCCESS|no|static=FAILURE;pest=SUCCESS;dusk=SUCCESS;budgets=SUCCESS;tests=SUCCESS;gitleaks=SUCCESS"
+    # NOT_SUCCESS must not become "anything goes": the lint job still has to go red.
+    "gate-disarmed-lint-missed-it|reject|static|NOT_SUCCESS|no|static=SUCCESS;pest=SUCCESS;dusk=SUCCESS;budgets=SUCCESS;tests=SKIPPED;gitleaks=SUCCESS"
+    "clean-all-green|ok|${AGGREGATE}|SUCCESS|yes|static=SUCCESS;pest=SUCCESS;dusk=SUCCESS;budgets=SUCCESS;tests=SUCCESS;gitleaks=SUCCESS"
+    "clean-one-skipped|reject|${AGGREGATE}|SUCCESS|yes|static=SUCCESS;pest=SUCCESS;dusk=SKIPPED;budgets=SUCCESS;tests=SUCCESS;gitleaks=SUCCESS"
+  )
+
+  for entry in "${scenarios[@]}"; do
+    IFS='|' read -r name expect job aggregate green raw <<< "$entry"
+    n=$((n + 1))
+    if out=$(assert_checks "$(tr ';' '\n' <<< "$raw")" "$job" "$aggregate" "$green" "$name" 2>&1); then
+      status=ok
+    else
+      status=reject
+    fi
+    if [ "$status" = "$expect" ]; then
+      pass "assert: ${name} -> ${expect}"
+    else
+      fail "assert: ${name} -> expected the assertion to ${expect}, it returned ${status}"
+      printf '%s\n' "$out" | sed 's/^/        /'
+      rc=1
+    fi
+  done
+
+  # And the caveat this whole case turns on: NOT_SUCCESS is only safe while the job
+  # that went red is itself required. Strip `static` from REQUIRED_CHECKS in a
+  # subshell and the same conclusions must be rejected — because then nothing
+  # required is red, `tests` is skipped, and GitHub reads skipped as passed.
+  n=$((n + 1))
+  if out=$(
+    REQUIRED_CHECKS=(tests gitleaks)
+    assert_checks "static=FAILURE
+pest=SUCCESS
+dusk=SUCCESS
+budgets=SUCCESS
+tests=SKIPPED
+gitleaks=SUCCESS" static NOT_SUCCESS no "gate-disarmed-lint-job-not-required" 2>&1
+  ); then
+    fail "assert: gate-disarmed-lint-job-not-required -> the assertion passed. If the only red job is not a required check, nothing stops that PR."
+    printf '%s\n' "$out" | sed 's/^/        /'
+    rc=1
+  else
+    pass "assert: gate-disarmed-lint-job-not-required -> reject"
+  fi
+
+  printf '\n'
+  if [ "$rc" -ne 0 ]; then
+    fail "the live-run assertions do not say what they claim. Fix them before spending forty minutes on --run."
+  else
+    printf '\033[1m%d/%d — the live-run assertions accept and reject the right conclusions.\033[0m\n' "$n" "$n"
+  fi
+  return "$rc"
+}
+
+# Cleanup has the same failure mode as the assertions and had it in the worst
+# form: it reported nine pull requests closed while closing none. `gh` and `git`
+# are shadowed by shell functions here, so the real cleanup() runs against
+# synthetic responses — no network, no repository, no pull requests.
+cleanup_selftest() {
+  local rc=0 n=0 out
+
+  # Every close succeeds and the follow-up read finds nothing open. The only
+  # case that may pass.
+  n=$((n + 1))
+  if out=$(
+    gh() {
+      if [ "$2" = "list" ]; then
+        case "$*" in *--head*) echo 101 ;; esac   # per-branch lookup finds a PR
+        return 0                                   # final sweep finds none
+      fi
+      return 0
+    }
+    git() { return 1; }
+    cleanup 2>&1
+  ); then
+    pass "cleanup: every pull request closed -> accept"
+  else
+    fail "cleanup: every pull request closed -> reported a leftover that does not exist"
+    printf '%s\n' "$out" | sed 's/^/        /'
+    rc=1
+  fi
+
+  # Every close fails. This is the TWO-22 acceptance run: it must not report
+  # them closed, and it must not exit 0.
+  n=$((n + 1))
+  out=$(
+    gh() {
+      if [ "$2" = "list" ]; then
+        case "$*" in
+          *--head*) echo 102 ;;
+          *)        echo "#102 ci-verify/lcp" ;;
+        esac
+        return 0
+      fi
+      [ "$2" = "close" ] && return 1
+      return 0
+    }
+    git() { return 1; }
+    cleanup 2>&1
+  ) && cleanup_rc=0 || cleanup_rc=$?
+  if [ "$cleanup_rc" -eq 0 ]; then
+    fail "cleanup: every close failed -> it exited 0. That is the TWO-94 bug: nine reported closed, three still open."
+    rc=1
+  elif has_line "$out" 'closed PR #'; then
+    fail "cleanup: every close failed -> it still printed 'closed PR #'. The line has to track the close, not the loop."
+    printf '%s\n' "$out" | sed 's/^/        /'
+    rc=1
+  else
+    pass "cleanup: every close failed -> reject"
+  fi
+
+  # The liar: `gh pr close` exits 0 and the pull request is still open anyway.
+  # Only the re-read catches this one, which is why it is not optional.
+  n=$((n + 1))
+  if out=$(
+    gh() {
+      if [ "$2" = "list" ]; then
+        case "$*" in
+          *--head*) echo 103 ;;
+          *)        echo "#103 ci-verify/gate" ;;
+        esac
+        return 0
+      fi
+      return 0   # close claims success
+    }
+    git() { return 1; }
+    cleanup 2>&1
+  ); then
+    fail "cleanup: close exits 0 but the pull request survives -> it accepted. Trusting the exit code over the live list is the whole bug."
+    printf '%s\n' "$out" | sed 's/^/        /'
+    rc=1
+  else
+    pass "cleanup: close reports success but the pull request survives -> reject"
+  fi
+
+  printf '\n'
+  if [ "$rc" -ne 0 ]; then
+    fail "cleanup does not do what it reports. It is the last thing that runs and nothing downstream checks it."
+  else
+    printf '\033[1m%d/%d — cleanup reports what it actually did.\033[0m\n' "$n" "$n"
+  fi
   return "$rc"
 }
 
@@ -385,17 +730,9 @@ break_a11y() {
 }
 
 break_lcp() {
-  # Three seconds of server think-time before anything can paint. A real member on
-  # a real phone waits three seconds; the budget has to say so.
-  #
-  # What catches it is `server-response-time`, not `largest-contentful-paint`, and
-  # that is worth knowing before you go looking. This case ran green for a while
-  # (TWO-93): `simulate` throttling does not report observed timings, it rebuilds
-  # them, and Lantern models one server response time per origin — the median over
-  # every request to it. The document's three seconds sits in a set with four
-  # static files served off disk in a millisecond, the median is a millisecond, and
-  # Lantern then simulates the document at a millisecond too. Simulated LCP comes
-  # in well under 2.0s over a server that took three seconds to answer.
+  # Three seconds of server think-time before anything can paint. LCP cannot come
+  # in under the 2.0s budget no matter how fast the runner is, so this proves the
+  # assertion is wired up without depending on runner luck.
   #
   # In the view rather than as a closure route on purpose: the budgets job runs
   # `route:cache`, and a closure route is not serialisable, so that version would
@@ -414,24 +751,70 @@ break_gate() {
 
 # --- driver -----------------------------------------------------------------
 
+# The header promises this closes every pull request it opens. It used to promise
+# that in the output too, whatever happened: every `gh` call was `|| true`, and the
+# "closed PR #N" line printed unconditionally, so a run in which all nine closes
+# failed was indistinguishable from a clean one. The TWO-22 acceptance run left
+# three pull requests open and reported nine closed (TWO-94).
+#
+# That is the same defect the rest of this file exists to catch, one level up: a
+# report that does not track the fact. So the per-branch result is now read from
+# the close, and then the whole thing is checked again against the live list —
+# because `gh pr close` exiting 0 and the pull request being closed are two
+# different facts, and this file's entire premise is that those drift.
 cleanup() {
   log "Cleaning up"
+  local entry slug branch number survivors
+  local rc=0
+
   for entry in "${CASES[@]}" "clean|tests|the happy path"; do
     slug="${entry%%|*}"
     branch="${BRANCH_PREFIX}/${slug}"
     number=$(gh pr list --head "$branch" --state open --json number --jq '.[0].number' 2>/dev/null || true)
     if [ -n "${number:-}" ] && [ "$number" != "null" ]; then
-      gh pr close "$number" --delete-branch --comment "CI verification run finished." >/dev/null 2>&1 || true
-      echo "  closed PR #$number ($branch)"
+      if gh pr close "$number" --delete-branch --comment "CI verification run finished." >/dev/null 2>&1; then
+        echo "  closed PR #$number ($branch)"
+      else
+        fail "could not close PR #$number ($branch)"
+        rc=1
+      fi
     fi
     git push origin --delete "$branch" >/dev/null 2>&1 || true
     git branch -D "$branch" >/dev/null 2>&1 || true
   done
+
+  # Re-read rather than trust the loop. This also catches pull requests an earlier
+  # interrupted run left behind, which is what "closes every PR it opens" has to
+  # mean if the promise is worth anything.
+  survivors=$(gh pr list --state open --limit 100 --json number,headRefName \
+    --jq ".[] | select(.headRefName | startswith(\"${BRANCH_PREFIX}/\")) | \"#\(.number) \(.headRefName)\"" \
+    2>/dev/null || true)
+
+  if [ -n "$survivors" ]; then
+    fail "these ${BRANCH_PREFIX}/* pull requests are still open against ${BASE_BRANCH}:"
+    printf '%s\n' "$survivors" | sed 's/^/        /'
+    fail "close them, or re-run: ./ci/verify-pipeline.sh --cleanup"
+    rc=1
+  fi
+
+  if [ "$rc" -eq 0 ]; then
+    echo "  nothing left behind: no open ${BRANCH_PREFIX}/* pull requests remain."
+  fi
+  return "$rc"
 }
 
 if [ "$MODE" = "--cleanup" ]; then
-  cleanup
+  cleanup || exit 1
   exit 0
+fi
+
+if [ "$MODE" = "--assert-selftest" ]; then
+  selftest_rc=0
+  log "The live-run assertions, against synthetic check results (no network)"
+  assert_selftest || selftest_rc=1
+  log "Cleanup, against synthetic gh responses (no network)"
+  cleanup_selftest || selftest_rc=1
+  exit "$selftest_rc"
 fi
 
 if [ "$MODE" = "--lint" ]; then
@@ -446,10 +829,12 @@ if [ "$MODE" != "--run" ]; then
   lint || { fail "the gate would report green while not gating. Fix ${WORKFLOW} before anything is merged behind it."; exit 1; }
   log "Dry run. Nothing will be pushed. Re-run with --run to execute."
   for entry in "${CASES[@]}"; do
-    IFS='|' read -r slug job why <<< "$entry"
-    printf '  %-10s -> expects job %-8s : %s\n' "$slug" "$job" "$why"
+    IFS='|' read -r slug job aggregate why <<< "$entry"
+    printf '  %-10s -> expects %-8s red, and %s %-11s : %s\n' \
+      "$slug" "$job" "${AGGREGATE}" "$aggregate" "$why"
   done
-  printf '  %-10s -> expects job %-8s : %s\n' "clean" "tests" "a clean PR goes green"
+  printf '  %-10s -> expects %-8s red, and %s %-11s : %s\n' \
+    "clean" "nothing" "${AGGREGATE}" "SUCCESS" "a clean PR goes green"
   exit 0
 fi
 
@@ -576,7 +961,17 @@ never arrived. Wait for it to finish. If you know it is dead, clear it with
 fi
 pass "no other verification run is live on ${REPO_SLUG}"
 
-git fetch origin "$BASE_BRANCH" --quiet
+# `--prune` is not decoration. Every push below is `--force-with-lease`, which holds
+# the lease against the local `refs/remotes/origin/ci-verify/*`. A previous run's
+# cleanup deletes those branches on the remote but leaves the remote-tracking refs
+# here, so the lease is held against a branch that no longer exists and every push
+# is rejected with "stale info" — a whole run wasted, and the error names neither
+# the cause nor the fix.
+#
+# It has to be a bare `git fetch origin --prune`. Adding `--prune` to a fetch with
+# an explicit refspec prunes only within that refspec, so `git fetch origin main
+# --prune` leaves every stale `ci-verify/*` ref exactly where it was.
+git fetch origin --prune --quiet
 results=()
 
 open_pr() {
@@ -598,7 +993,7 @@ open_pr() {
 # rather than end to end. Six sequential CI runs is most of an hour.
 log "Opening the broken pull requests"
 for entry in "${CASES[@]}"; do
-  IFS='|' read -r slug job why <<< "$entry"
+  IFS='|' read -r slug job aggregate why <<< "$entry"
   branch=$(open_pr "$slug" "$why")
   echo "  $branch"
 done
@@ -689,7 +1084,7 @@ wait_for_checks() {
 }
 
 check_branch() {
-  local branch="$1" expected_job="$2" expect_green="$3" why="$4"
+  local branch="$1" expected_job="$2" aggregate="$3" expect_green="$4" why="$5"
 
   # Blocks until every check on the branch has reported.
   wait_for_checks "$branch" || true
@@ -697,67 +1092,36 @@ check_branch() {
   local checks
   checks=$(branch_checks "$branch")
 
-  # A check that never reported is not a pass. If the workflow file has a syntax
-  # error, or Actions is disabled on the repo, the API returns nothing at all — and
-  # reading nothing as green is exactly the bug this script exists to catch, one
-  # level up. The other two ways to get nothing back — an origin that is not a
-  # GitHub repository, and a token without `Actions: read` — are ruled out in the
-  # preconditions before anything is pushed, so if this fires the pipeline really
-  # did not report.
-  local absent=""
-  for expected in "${EXPECTED_CHECKS[@]}"; do
-    grep -q "^${expected}=" <<< "$checks" || absent="${absent} ${expected}"
-  done
-  if [ -n "$absent" ]; then
-    fail "${why}: check(s)${absent} never reported on ${branch}. A required check that never arrives blocks the PR forever; one that is not required is not gating at all. Got: $(echo "$checks" | tr '\n' ' ')"
-    return 1
-  fi
-
-  if [ "$expect_green" = "yes" ]; then
-    local not_green
-    not_green=$(grep -v '=SUCCESS$' <<< "$checks" || true)
-    if [ -n "$not_green" ]; then
-      fail "clean PR was not green: $(echo "$not_green" | tr '\n' ' ')"
-      return 1
-    fi
-    pass "clean PR went green (all ${#EXPECTED_CHECKS[@]} checks reported SUCCESS)"
-    return 0
-  fi
-
-  # The named job must be the one that failed. Anything else — including a green
-  # run — means the gate does not catch this, whatever else it caught.
-  if ! echo "$checks" | grep -q "^${expected_job}=FAILURE$"; then
-    fail "${why}: expected job '${expected_job}' to fail, got: $(echo "$checks" | tr '\n' ' ')"
-    return 1
-  fi
-  # The aggregate is what branch protection requires. A named job going red while
-  # `tests` stays green is the exact failure this whole script exists to catch: it
-  # looks like a working pipeline and merges anyway.
-  if ! echo "$checks" | grep -q "^tests=FAILURE$"; then
-    fail "${why}: '${expected_job}' failed but the required 'tests' check did not — the gate would let this merge"
-    return 1
-  fi
-  pass "${why} (rejected by '${expected_job}')"
-  return 0
+  assert_checks "$checks" "$expected_job" "$aggregate" "$expect_green" "$why" "$branch"
 }
 
 log "Waiting for CI on all seven pull requests"
 ok=0
 for entry in "${CASES[@]}"; do
-  IFS='|' read -r slug job why <<< "$entry"
-  check_branch "${BRANCH_PREFIX}/${slug}" "$job" "no" "$why" || ok=1
+  IFS='|' read -r slug job aggregate why <<< "$entry"
+  check_branch "${BRANCH_PREFIX}/${slug}" "$job" "$aggregate" "no" "$why" || ok=1
 done
-check_branch "${BRANCH_PREFIX}/clean" "tests" "yes" "the happy path" || ok=1
+check_branch "${BRANCH_PREFIX}/clean" "$AGGREGATE" "SUCCESS" "yes" "the happy path" || ok=1
 
 log "Runtime of the clean run (the number the team has to tolerate)"
 gh run list --branch "${BRANCH_PREFIX}/clean" --workflow CI --limit 1 \
   --json createdAt,updatedAt,conclusion \
   --jq '.[] | "  conclusion: \(.conclusion)  started: \(.createdAt)  finished: \(.updatedAt)"' || true
 
-cleanup
+cleanup_rc=0
+cleanup || cleanup_rc=1
 
+# The gate's verdict first: it is the reason anyone ran this. Leftover pull
+# requests are reported separately and never mistaken for a gate defect — but they
+# still fail the run, because eight open pull requests titled "do not merge" is not
+# a state to walk away from.
 if [ "$ok" -ne 0 ]; then
   fail "the merge gate does not catch everything it claims to. Do not sign off TWO-22."
+  exit 1
+fi
+
+if [ "$cleanup_rc" -ne 0 ]; then
+  fail "the gate itself was verified — nothing above is wrong with ci.yml. This run could not clear its own pull requests. Finish that before walking away."
   exit 1
 fi
 

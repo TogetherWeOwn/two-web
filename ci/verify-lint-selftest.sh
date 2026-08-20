@@ -11,6 +11,10 @@
 # lint goes red *for the right reason*. Every case here is a bug that has actually
 # been committed to this repo or proposed for it, not a hypothetical.
 #
+# The last section covers `--run`'s assertions rather than `--lint`'s, for the same
+# reason one level along: those only ever execute during a live run, so a wrong one
+# survives until somebody spends forty minutes finding it. TWO-94 is that, once.
+#
 # No network, no gh, no PHP. Half a second. Run it anywhere.
 #
 # Usage: ./ci/verify-lint-selftest.sh
@@ -108,6 +112,21 @@ expect_fail guard-misses-skipped "never mentions \`skipped\`" \
 expect_fail job-not-behind-aggregate "are not in \`tests\`'s \`needs:\`" \
   bash -c "printf '  orphan:\n    name: orphan\n    runs-on: ubuntu-24.04\n    steps:\n      - run: true\n' >> .github/workflows/ci.yml"
 
+# The `static` job stops running `--lint`. Every job still passes and every other
+# check above still passes, because they all read `ci.yml` rather than asking who
+# reads it. Nothing then catches a disarmed aggregate on the pull request that
+# disarms it (TWO-94).
+expect_fail no-lint-step 'runs `verify-pipeline.sh --lint`' \
+  sed -i '/verify-pipeline.sh --lint/d' .github/workflows/ci.yml
+
+# `static` is dropped from the required checks. This is the specific hazard TWO-94
+# turned on: deleting `if: always()` *skips* `tests`, GitHub counts a skipped
+# required check as passed, and `static` is then the only required check that goes
+# red. Require the aggregate alone — the shape a smaller protection rule naturally
+# takes — and a pull request that disarms the gate merges clean.
+expect_fail lint-job-not-required 'are not required checks' \
+  bash -c 'sed -i "s/^REQUIRED_CHECKS=(.*)$/REQUIRED_CHECKS=(tests pest dusk budgets gitleaks)/" ci/verify-pipeline.sh'
+
 printf '\n\033[1m==> The required check never arrives (main unmergeable, forever)\033[0m\n'
 
 # Requiring the workflow *name*. `CI` is the workflow; protection matches the
@@ -183,6 +202,39 @@ printf '\n\033[1m==> Tripwires (warn, do not block)\033[0m\n'
 expect_warn unrequired-job 'job `budgets` reports on pull requests but is not a required check' \
   bash -c 'sed -i "s/^REQUIRED_CHECKS=(.*)$/REQUIRED_CHECKS=(tests static pest dusk gitleaks)/" ci/verify-pipeline.sh'
 
+printf '\n\033[1m==> The lint cannot fail for reasons that are not about the workflow\033[0m\n'
+
+# `producer | grep -q pattern` is banned in verify-pipeline.sh, and this is the
+# only way to keep it banned — the defect is invisible in review and reproduces
+# on maybe one run in three.
+#
+# `grep -q` exits the instant it matches. If the producer still has output to
+# write it takes SIGPIPE and dies with 141, `set -o pipefail` hands that up as
+# the pipeline's status, and `if` suppresses errexit but not pipefail — so a
+# check that *found what it was looking for* takes the else branch and reports
+# red. Whether it happens depends on how far into the producer's output the
+# match lands and how fast the machine is.
+#
+# It has already cost this repo a day: `job_block budgets | grep -q 'npm run
+# build'` matched 65 lines from the end of the block, passed every time on a
+# laptop, and went red on the runner (TWO-87). Every one of these greps is
+# looking for a reason to fail the merge gate, so every one of them can invent
+# one. Use a here-string, or `has_line`.
+n=$((n + 1))
+# Comment lines are skipped — the ban is documented in the file it applies to,
+# in prose that necessarily quotes the thing being banned. Indented as well as
+# column-zero `#`, because the explanation sits inside the function it warns
+# about.
+offenders=$(grep -nE '\|[[:space:]]*grep[[:space:]]+-[a-zA-Z]*[qm]' "$REPO_ROOT/ci/verify-pipeline.sh" \
+  | grep -vE '^[0-9]+:[[:space:]]*#' || true)
+if [ -z "$offenders" ]; then
+  pass "no-pipe-into-early-exit-grep"
+else
+  fail "no-pipe-into-early-exit-grep: verify-pipeline.sh pipes into a grep that exits early. Under \`set -o pipefail\` the producer takes SIGPIPE and a successful match reports as a failure. Use a here-string or \`has_line\`."
+  printf '%s\n' "$offenders" | sed 's/^/        /'
+  rc=1
+fi
+
 printf '\n\033[1m==> The unmutated repo still passes\033[0m\n'
 n=$((n + 1))
 if ( cd "$(fixture clean)" && ./ci/verify-pipeline.sh --lint >/dev/null 2>&1 ); then
@@ -190,6 +242,27 @@ if ( cd "$(fixture clean)" && ./ci/verify-pipeline.sh --lint >/dev/null 2>&1 ); 
 else
   fail "clean: the real workflow does not lint green"
   ( cd "$WORK/clean" && ./ci/verify-pipeline.sh --lint 2>&1 | sed 's/^/        /' )
+  rc=1
+fi
+
+printf '\n\033[1m==> The live-run assertions themselves\033[0m\n'
+
+# `--lint` reads the workflow. `--run` reads the check conclusions a pull request
+# actually produced, and its assertions are only ever exercised by the slowest,
+# rarest thing we own — so a wrong one survives. One did: TWO-94 cost eight pull
+# requests and forty minutes of runner time to discover that a line of bash
+# expected something the design makes unreachable. Those assertions are now
+# testable offline against synthetic conclusions, and this is where that runs.
+#
+# The same run also covers cleanup, which had the identical defect in a blunter
+# form: it reported nine pull requests closed while closing none, and the
+# acceptance run left three open behind a green summary.
+n=$((n + 1))
+if ( cd "$(fixture assertions)" && ./ci/verify-pipeline.sh --assert-selftest ) > "$WORK/assert.out" 2>&1; then
+  pass "assertions: --run accepts and rejects the right conclusions, and cleanup reports what it did"
+else
+  fail "assertions: --run's assertions or its cleanup do not say what they claim"
+  sed 's/^/        /' "$WORK/assert.out"
   rc=1
 fi
 
