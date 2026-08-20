@@ -194,6 +194,21 @@ expect_fail ttfb-gate-removed 'budget `server-response-time`' \
 expect_fail ttfb-downgraded 'budget `server-response-time`' \
   sed -i "s/'server-response-time': \['error'/'server-response-time': ['warn'/" ci/lighthouserc.cjs
 
+# The number kept, the aggregation swapped. One word, and every budget goes from
+# median-of-3 to best-of-3: with `optimistic`, @lhci/utils/src/assertions.js takes
+# `Math.min` over the runs for any `max*` assertion. The threshold still reads 600
+# in the diff, so this is the quietest way to relax a budget there is.
+expect_fail budget-aggregation-swapped 'budget `server-response-time` is not asserted' \
+  sed -i "s/maxNumericValue: 600, aggregationMethod: 'median'/maxNumericValue: 600, aggregationMethod: 'optimistic'/" ci/lighthouserc.cjs
+
+# The aggregation deleted rather than swapped. Same effect: lhci defaults
+# `aggregationMethod` to `'optimistic'`, so `'median'` is load-bearing and removing
+# it is best-of-3 by another route. This used to be caught by luck — the old grep
+# needed a trailing comma and `{ maxNumericValue: 2000 }` has none. Now it is
+# caught on purpose, and this case is what keeps it that way.
+expect_fail budget-aggregation-removed 'budget `largest-contentful-paint` is not asserted' \
+  sed -i "s/{ maxNumericValue: 2000, aggregationMethod: 'median' }/{ maxNumericValue: 2000 }/" ci/lighthouserc.cjs
+
 # A second entry appended for an audit that already has one. The pinned line is
 # left exactly as it was — and a JavaScript object literal keeps the *last*
 # duplicate key, so lhci loads the new one and the CEO's LCP budget is gone. The

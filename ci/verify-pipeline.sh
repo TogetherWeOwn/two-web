@@ -435,10 +435,32 @@ lint() {
         continue
       fi
 
-      if grep -qE "^[[:space:]]*'${audit}':[[:space:]]*\['error',[[:space:]]*\{[[:space:]]*maxNumericValue:[[:space:]]*${value//./\\.}[[:space:]]*," "$budget_file"; then
-        pass "budget \`${audit}\` fails the build above ${value}"
+      # The whole options object, closing brace included — not just up to the
+      # comma after the number. Everything after that comma is part of the budget
+      # too, and `aggregationMethod` is the part that decides *which of the three
+      # runs* the number is compared against. From the pinned @lhci/cli@0.14.0
+      # (@lhci/utils/src/assertions.js):
+      #
+      #     const useMin =
+      #       (aggregationMethod === 'optimistic' && assertionType.startsWith('max')) ||
+      #       (aggregationMethod === 'pessimistic' && assertionType.startsWith('min'));
+      #     return useMin ? Math.min(...values) : Math.max(...values);
+      #
+      # All three budgets are `maxNumericValue`, so `optimistic` takes the minimum
+      # over `numberOfRuns: 3` — one word turns every budget from median-of-3 into
+      # best-of-3, with the threshold still reading 2000 in the diff. That is a
+      # materially weaker gate and the quietest possible way to relax it.
+      #
+      # `'median'` is load-bearing rather than decoration: the same file defaults
+      # `aggregationMethod` to `'optimistic'`, so deleting it is best-of-3 too.
+      # Anchoring on `}` is deliberate — it pins the whole object rather than
+      # moving the unchecked tail one field to the right, so a fourth option
+      # cannot be smuggled in either. Adding one on purpose means updating this
+      # line, which is the point.
+      if grep -qE "^[[:space:]]*'${audit}':[[:space:]]*\['error',[[:space:]]*\{[[:space:]]*maxNumericValue:[[:space:]]*${value//./\\.}[[:space:]]*,[[:space:]]*aggregationMethod:[[:space:]]*'median'[[:space:]]*\}[[:space:]]*\]" "$budget_file"; then
+        pass "budget \`${audit}\` fails the build above ${value}, on the median of the runs"
       else
-        fail "budget \`${audit}\` is not asserted at ${value} as an \`error\` in ${budget_file}. Either it was relaxed, downgraded to a warning, or removed — and the job goes on reporting green either way. If the number genuinely changed, change it in both places in the commit that explains why."
+        fail "budget \`${audit}\` is not asserted at ${value} as an \`error\` with \`aggregationMethod: 'median'\` in ${budget_file}. Either it was relaxed, downgraded to a warning, removed, or its aggregation was changed — and the job goes on reporting green in every one of those cases. Note that dropping \`aggregationMethod\` is not neutral: lhci defaults it to \`'optimistic'\`, which compares the *best* of the runs instead of the median. If the budget genuinely changed, change it in both places in the commit that explains why."
         rc=1
       fi
     done
