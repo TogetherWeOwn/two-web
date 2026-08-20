@@ -580,14 +580,23 @@ gitleaks=SUCCESS" static NOT_SUCCESS no "gate-disarmed-lint-job-not-required" 2>
 cleanup_selftest() {
   local rc=0 n=0 out
 
+  # The stubs below answer two different `gh pr list` calls: the one cleanup()
+  # closes from, and the re-read it checks itself against afterwards. They are told
+  # apart by the re-read's `startswith` filter, so a cleanup() that stops doing one
+  # of them stops being fed by these stubs and the case it belongs to goes red —
+  # which is the point. Keep the filters and these patterns in step (TWO-109).
+
   # Every close succeeds and the follow-up read finds nothing open. The only
   # case that may pass.
   n=$((n + 1))
   if out=$(
     gh() {
       if [ "$2" = "list" ]; then
-        case "$*" in *--head*) echo 101 ;; esac   # per-branch lookup finds a PR
-        return 0                                   # final sweep finds none
+        case "$*" in
+          *startswith*) ;;                              # final sweep finds none
+          *) printf '101\tci-verify/pint\n' ;;          # one open to close
+        esac
+        return 0
       fi
       return 0
     }
@@ -608,8 +617,8 @@ cleanup_selftest() {
     gh() {
       if [ "$2" = "list" ]; then
         case "$*" in
-          *--head*) echo 102 ;;
-          *)        echo "#102 ci-verify/lcp" ;;
+          *startswith*) echo "#102 ci-verify/lcp" ;;
+          *)            printf '102\tci-verify/lcp\n' ;;
         esac
         return 0
       fi
@@ -622,8 +631,8 @@ cleanup_selftest() {
   if [ "$cleanup_rc" -eq 0 ]; then
     fail "cleanup: every close failed -> it exited 0. That is the TWO-94 bug: nine reported closed, three still open."
     rc=1
-  elif has_line "$out" 'closed PR #'; then
-    fail "cleanup: every close failed -> it still printed 'closed PR #'. The line has to track the close, not the loop."
+  elif has_line "$out" 'closed pull request #'; then
+    fail "cleanup: every close failed -> it still printed 'closed pull request #'. The line has to track the close, not the loop."
     printf '%s\n' "$out" | sed 's/^/        /'
     rc=1
   else
@@ -637,8 +646,8 @@ cleanup_selftest() {
     gh() {
       if [ "$2" = "list" ]; then
         case "$*" in
-          *--head*) echo 103 ;;
-          *)        echo "#103 ci-verify/gate" ;;
+          *startswith*) echo "#103 ci-verify/gate" ;;
+          *)            printf '103\tci-verify/gate\n' ;;
         esac
         return 0
       fi
