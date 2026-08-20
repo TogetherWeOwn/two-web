@@ -992,6 +992,26 @@ break_lcp() {
   # on the way, so the size in the header is the size on the wire. Realistic, too —
   # a hero image nobody compressed is how LCP actually breaches on a real site, and
   # TWO-28 is about to put real screenshots on this page.
+  #
+  # 1.6 MB of /dev/urandom in a commit is the obvious thing for the secret scan to
+  # object to, and this case going red on `gitleaks` instead of `budgets` would be a
+  # false result rather than a caught one, so it was measured rather than argued.
+  # Bytes 6..9 of the header are a `le32 0` — four NUL bytes — so git calls the file
+  # binary every time regardless of what the random payload spells, and writes
+  # `Binary files ... differ` into the patch instead of content. `gitleaks git` reads
+  # that patch, so it never sees a byte of the payload: on gitleaks 8.30.1, the
+  # version secret-scan.yml pins, this exact file commits as 6 bytes scanned, no
+  # leaks, exit 0.
+  #
+  # 1.6 MB of /dev/urandom is also exactly what an entropy-based secret scanner is
+  # built to notice, and a `gitleaks` failure here would redden this case for a
+  # reason that has nothing to do with LCP (QA, TWO-111). It does not: checked
+  # against the pinned gitleaks 8.30.1 with this repo's .gitleaks.toml, on a commit
+  # of this very file — `no leaks found`, exit 0. Not luck. `.gitattributes` sets
+  # `text=auto`, NUL bytes make git call the blob binary, and `gitleaks git` reads
+  # `git log -p`, which prints `Binary files ... differ` and never the bytes. The
+  # scanner sees 0 of the 1.6 MB, so no rule of any kind can fire on it. It would
+  # only change if someone forced this path to diff as text in .gitattributes.
   local w=900 h=620 stride data size
   stride=$(( (w * 3 + 3) / 4 * 4 ))
   data=$(( stride * h ))
