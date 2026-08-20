@@ -139,7 +139,8 @@ CASES=(
   "tokens|pest|FAILURE|an edit to the vendored design system is rejected"
   "dusk|dusk|FAILURE|a broken page is caught in a real browser"
   "a11y|budgets|FAILURE|a WCAG 2.2 AA violation is rejected"
-  "lcp|budgets|FAILURE|an LCP breach is rejected"
+  "slowserver|budgets|FAILURE|a three-second server response is rejected"
+  "lcp|budgets|FAILURE|a client-side LCP breach is rejected"
   "gate|static|NOT_SUCCESS|a pull request that disarms the merge gate is rejected"
   "secret|gitleaks|SUCCESS|a committed credential is rejected"
 )
@@ -859,10 +860,18 @@ break_a11y() {
   sed -i 's#</x-layouts.app>#    <img src="/favicon.ico" width="16" height="16">\n</x-layouts.app>#' resources/views/home.blade.php
 }
 
-break_lcp() {
-  # Three seconds of server think-time before anything can paint. LCP cannot come
-  # in under the 2.0s budget no matter how fast the runner is, so this proves the
-  # assertion is wired up without depending on runner luck.
+break_slowserver() {
+  # Three seconds of server think-time before anything can paint. A real member on
+  # a real phone waits three seconds; the budget has to say so.
+  #
+  # What catches it is `server-response-time`, not `largest-contentful-paint`, and
+  # that is worth knowing before you go looking. This case ran green for a while
+  # (TWO-93): `simulate` throttling does not report observed timings, it rebuilds
+  # them, and Lantern models one server response time per origin — the median over
+  # every request to it. The document's three seconds sits in a set with four
+  # static files served off disk in a millisecond, the median is a millisecond, and
+  # Lantern then simulates the document at a millisecond too. Simulated LCP comes
+  # in well under 2.0s over a server that took three seconds to answer.
   #
   # In the view rather than as a closure route on purpose: the budgets job runs
   # `route:cache`, and a closure route is not serialisable, so that version would
@@ -923,6 +932,58 @@ break_secret() {
     printf '# .gitleaks.toml and has never been a live token for anything.\n'
     printf 'DISCORD_BOT_TOKEN=%s.%s.%s\n' "$seg1" "$seg2" "$seg3"
   } > ci-verify-credential.txt
+}
+
+break_lcp() {
+  # An oversized hero image above the fold. This is the case that actually exercises
+  # the CEO's LCP < 2.0s budget, and it exists because `slowserver` above does not:
+  # what reddens `budgets` there is `server-response-time`. Without this case the
+  # headline budget has no live proof that it fires at all, and a broken
+  # `largest-contentful-paint` assertion would be invisible to every job in the
+  # pipeline (TWO-101, finding 2).
+  #
+  # Measured, not assumed — same Lighthouse settings as ci/lighthouserc.cjs
+  # (mobile, simulate, 1474.56 kbps down), varying only the image:
+  #
+  #     no image      LCP  752ms
+  #     148 KB image  LCP 1653ms   under budget
+  #     1.6 MB image  LCP 9152ms   4.6x over the 2.0s budget
+  #
+  # with CLS 0 and server-response-time 2ms in every case, so LCP is the only
+  # assertion that goes red and the case proves the thing it is named for. The
+  # simulator charges ~9s to pull 1.6 MB over Slow 4G and the largest contentful
+  # element cannot render until it lands (95% of LCP is Render Delay). Deterministic
+  # because it is simulated from the byte count, not measured off the runner's clock.
+  #
+  # An uncompressed BMP of random bytes, built by hand: it needs no image tooling on
+  # whoever's machine runs this, and it cannot be squeezed by transport compression
+  # on the way, so the size in the header is the size on the wire. Realistic, too —
+  # a hero image nobody compressed is how LCP actually breaches on a real site, and
+  # TWO-28 is about to put real screenshots on this page.
+  local w=900 h=620 stride data size
+  stride=$(( (w * 3 + 3) / 4 * 4 ))
+  data=$(( stride * h ))
+  size=$(( 54 + data ))
+  b()    { printf "$(printf '\\x%02x' "$1")"; }
+  le16() { b $(( $1 & 255 )); b $(( ($1 >> 8) & 255 )); }
+  le32() { b $(( $1 & 255 )); b $(( ($1 >> 8) & 255 )); b $(( ($1 >> 16) & 255 )); b $(( ($1 >> 24) & 255 )); }
+  {
+    printf 'BM'; le32 "$size"; le32 0; le32 54          # BITMAPFILEHEADER
+    le32 40; le32 "$w"; le32 "$h"; le16 1; le16 24      # BITMAPINFOHEADER, 24bpp
+    le32 0; le32 "$data"; le32 2835; le32 2835; le32 0; le32 0
+  } > public/ci-verify-hero.bmp
+  head -c "$data" /dev/urandom >> public/ci-verify-hero.bmp
+
+  # Above the first contentful element, not appended at the end of the page like the
+  # other breakages. An image below the fold is lazy-loadable and would not touch
+  # LCP at all, so anchoring on `</x-layouts.app>` would produce a case that quietly
+  # stops breaching the moment this page gets longer. Fail loudly if the anchor is
+  # gone rather than opening a PR that is not broken.
+  grep -q '<h1>' resources/views/home.blade.php || {
+    fail "break_lcp: no <h1> in resources/views/home.blade.php to place the hero above. The anchor moved; fix this case rather than deleting it."
+    return 1
+  }
+  sed -i '0,/<h1>/s##<img src="/ci-verify-hero.bmp" width="900" height="620" alt="A deliberately oversized hero image">\n    <h1>#' resources/views/home.blade.php
 }
 
 break_gate() {
@@ -1244,7 +1305,7 @@ open_pr() {
 }
 
 # Every PR is opened before any waiting starts, so the runs happen in parallel
-# rather than end to end. Six sequential CI runs is most of an hour.
+# rather than end to end. Ten sequential CI runs is most of a morning.
 log "Opening the broken pull requests"
 for entry in "${CASES[@]}"; do
   IFS='|' read -r slug job aggregate why <<< "$entry"
