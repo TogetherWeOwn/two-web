@@ -7,9 +7,30 @@
 # swaps the symlink. If we end up on Ploi instead of Forge the mechanism is still a
 # webhook, so only the secret's value changes, not this file.
 #
-# Nothing is provisioned yet. Both jobs no-op cleanly — green, not red — until the
+# Nothing is provisioned yet. The job no-ops cleanly — green, not red — until the
 # matching secret exists. A missing deploy target must never look like a broken
 # build; that is how a team learns to ignore a red X.
+#
+# THIS WORKFLOW DEPLOYS STAGING ONLY. THAT IS DELIBERATE — DO NOT ADD A PRODUCTION
+# JOB HERE WITHOUT READING THIS.
+#
+# There was a `production` job. It was gated on `environment: production`, which on
+# GitHub's docs is where required reviewers live. `two-gaming/two-web` is private on
+# GitHub Free, and on that plan environments cannot be configured at all: "any
+# configured protection rules or environment secrets will be ignored". So the gate
+# was not merely unconfigured, it was unenforceable — and the moment somebody created
+# `FORGE_PRODUCTION_DEPLOY_HOOK`, anyone with write access could have shipped to
+# production from the Actions tab with no approval and no record. Four teams have
+# write access. A gate that fails silently is worse than no gate, because the file
+# says the gate is there. Removing the fuse beats guarding it. (TWO-91.)
+#
+# Production therefore ships **by hand from the hosting provider's dashboard**, after
+# the release checklist in docs/ci.md. Whoever holds that login is the approval, and
+# that is real access control rather than a simulation of one.
+#
+# Bring the job back only when the repo is on a plan that can actually enforce
+# environment protection rules (GitHub Team or better, or a public repo). `git revert`
+# of the TWO-91 commit restores it; do not hand-rebuild it.
 name: Deploy
 
 on:
@@ -21,16 +42,9 @@ on:
     types: [completed]
     branches: [main]
 
-  # Production is never automatic. It is a human deciding the release checklist is
-  # satisfied, through an environment that requires a reviewer.
+  # Manual re-deploy of staging. There is no environment input any more: a choice
+  # list with `production` on it is how the ignored gate gets rebuilt by accident.
   workflow_dispatch:
-    inputs:
-      environment:
-        description: Where to deploy
-        required: true
-        default: staging
-        type: choice
-        options: [staging, production]
 
 permissions:
   contents: read
@@ -39,13 +53,27 @@ jobs:
   staging:
     name: staging
     if: >-
-      github.event_name == 'workflow_dispatch' && inputs.environment == 'staging' ||
+      github.event_name == 'workflow_dispatch' ||
       github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-24.04
     timeout-minutes: 10
+    # Decorative on GitHub Free + private: environments are ignored, so this grants no
+    # protection and claims none. It is here so the deployment shows up in the UI the
+    # day the plan changes. Do not read it as a gate.
     environment:
       name: staging
     steps:
+      # Tripwire. Nothing in this repo consumes a production hook, so if one exists
+      # somebody is mid-way through rebuilding the deploy path that TWO-91 removed.
+      # A notice, not a failure — a staging deploy should not go red over it.
+      - name: Warn if a production hook has appeared
+        env:
+          PRODUCTION_HOOK: ${{ secrets.FORGE_PRODUCTION_DEPLOY_HOOK }}
+        run: |
+          if [ -n "$PRODUCTION_HOOK" ]; then
+            echo "::warning::FORGE_PRODUCTION_DEPLOY_HOOK is set, but this workflow deploys staging only and nothing reads that secret. Production deploys are manual, from the hosting dashboard, after the release checklist in docs/ci.md. See TWO-91 before adding a production job back."
+          fi
+
       # The `secrets` context is not available to a job-level `if`, so the guard has
       # to live in a step. Skipping is a pass: see the header.
       - name: Check the deploy target exists
@@ -86,52 +114,4 @@ jobs:
             sleep 10
           done
           echo "::error::staging never answered ${{ vars.STAGING_URL }}/up after 10 minutes. The deploy queued but the site is down."
-          exit 1
-
-  production:
-    name: production
-    if: github.event_name == 'workflow_dispatch' && inputs.environment == 'production'
-    runs-on: ubuntu-24.04
-    timeout-minutes: 10
-    # Configure this environment with required reviewers in repo settings. That
-    # approval prompt is the technical half of the release sign-off; the other half
-    # is the checklist in docs/ci.md, and QA owns it.
-    environment:
-      name: production
-      url: https://togetherweown.com
-    steps:
-      - name: Check the deploy target exists
-        id: guard
-        env:
-          HOOK: ${{ secrets.FORGE_PRODUCTION_DEPLOY_HOOK }}
-        run: |
-          if [ -z "$HOOK" ]; then
-            echo "ready=false" >> "$GITHUB_OUTPUT"
-            echo "::notice::FORGE_PRODUCTION_DEPLOY_HOOK is not set. Production is not provisioned yet (TWO-37). Skipping, not failing."
-          else
-            echo "ready=true" >> "$GITHUB_OUTPUT"
-          fi
-
-      - name: Trigger the Forge deploy
-        if: steps.guard.outputs.ready == 'true'
-        env:
-          HOOK: ${{ secrets.FORGE_PRODUCTION_DEPLOY_HOOK }}
-        run: |
-          curl --fail --silent --show-error --location \
-            --retry 3 --retry-delay 5 --retry-all-errors \
-            --max-time 60 \
-            --request POST "$HOOK" > /dev/null
-          echo "Forge accepted the production deploy."
-
-      - name: Wait for production to answer
-        if: steps.guard.outputs.ready == 'true'
-        run: |
-          for i in $(seq 1 60); do
-            if curl -fsS --max-time 10 "https://togetherweown.com/up" > /dev/null; then
-              echo "production healthy after ${i} attempt(s)"
-              exit 0
-            fi
-            sleep 10
-          done
-          echo "::error::production never answered /up after 10 minutes. Roll back in Forge — the previous release is one click away."
           exit 1
