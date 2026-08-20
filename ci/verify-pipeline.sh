@@ -415,59 +415,91 @@ lint() {
   #    loads a few static files a three-second document response is medianed away
   #    and simulated LCP never sees it. That is TWO-93, and it passed a homepage
   #    that took three seconds to answer. Delete this line and it passes one again.
+  #
+  #    Read through node rather than grepped. This check used to match the text of
+  #    the file, and matching text is guessing: `'largest-contentful-paint'` is one
+  #    of four spellings of that key, and the other three load as the effective
+  #    budget while leaving the pinned line word for word intact —
+  #
+  #        "largest-contentful-paint": ['warn', { maxNumericValue: 99999 }],
+  #        ['largest-contentful-paint']: ['warn', { maxNumericValue: 99999 }],
+  #        ...{ 'largest-contentful-paint': ['warn', { maxNumericValue: 99999 }] },
+  #
+  #    — because an object literal keeps the last entry for a key. All three were
+  #    demonstrated green past the grep (QA, TWO-101). Widening the pattern closes
+  #    two of them and cannot close the spread, which has no key to match at all.
+  #    So: load the config the way lhci loads it, with the same `require()`, and
+  #    compare the value it actually gets. There is no fourth spelling to miss
+  #    because there is no longer any spelling involved.
   local budget_file="./ci/lighthouserc.cjs"
-  if [ -f "$budget_file" ]; then
-    local entry audit value asserted
-    for entry in \
-      "largest-contentful-paint|2000" \
-      "cumulative-layout-shift|0.1" \
-      "server-response-time|600"; do
-      IFS='|' read -r audit value <<< "$entry"
-
-      # Count before matching. A JavaScript object literal keeps the *last*
-      # duplicate key, so appending a second entry for the same audit relaxes the
-      # budget while the pinned line above it sits there untouched and still
-      # matching the grep below. That is the one edit this check exists to stop,
-      # and it is also the variant that looks most like an accident.
-      asserted=$(grep -cE "^[[:space:]]*'${audit}':" "$budget_file" || true)
-      if [ "$asserted" -ne 1 ]; then
-        fail "budget \`${audit}\` is asserted ${asserted} times in ${budget_file}. JavaScript keeps the last one, so every pinned line above it is decorative — the effective threshold is whichever entry comes last. There should be exactly one."
-        rc=1
-        continue
-      fi
-
-      # The whole options object, closing brace included — not just up to the
-      # comma after the number. Everything after that comma is part of the budget
-      # too, and `aggregationMethod` is the part that decides *which of the three
-      # runs* the number is compared against. From the pinned @lhci/cli@0.14.0
-      # (@lhci/utils/src/assertions.js):
-      #
-      #     const useMin =
-      #       (aggregationMethod === 'optimistic' && assertionType.startsWith('max')) ||
-      #       (aggregationMethod === 'pessimistic' && assertionType.startsWith('min'));
-      #     return useMin ? Math.min(...values) : Math.max(...values);
-      #
-      # All three budgets are `maxNumericValue`, so `optimistic` takes the minimum
-      # over `numberOfRuns: 3` — one word turns every budget from median-of-3 into
-      # best-of-3, with the threshold still reading 2000 in the diff. That is a
-      # materially weaker gate and the quietest possible way to relax it.
-      #
-      # `'median'` is load-bearing rather than decoration: the same file defaults
-      # `aggregationMethod` to `'optimistic'`, so deleting it is best-of-3 too.
-      # Anchoring on `}` is deliberate — it pins the whole object rather than
-      # moving the unchecked tail one field to the right, so a fourth option
-      # cannot be smuggled in either. Adding one on purpose means updating this
-      # line, which is the point.
-      if grep -qE "^[[:space:]]*'${audit}':[[:space:]]*\['error',[[:space:]]*\{[[:space:]]*maxNumericValue:[[:space:]]*${value//./\\.}[[:space:]]*,[[:space:]]*aggregationMethod:[[:space:]]*'median'[[:space:]]*\}[[:space:]]*\]" "$budget_file"; then
-        pass "budget \`${audit}\` fails the build above ${value}, on the median of the runs"
-      else
-        fail "budget \`${audit}\` is not asserted at ${value} as an \`error\` with \`aggregationMethod: 'median'\` in ${budget_file}. Either it was relaxed, downgraded to a warning, removed, or its aggregation was changed — and the job goes on reporting green in every one of those cases. Note that dropping \`aggregationMethod\` is not neutral: lhci defaults it to \`'optimistic'\`, which compares the *best* of the runs instead of the median. If the budget genuinely changed, change it in both places in the commit that explains why."
-        rc=1
-      fi
-    done
-  else
+  if [ ! -f "$budget_file" ]; then
     fail "${budget_file} not found — the \`budgets\` job has no thresholds to enforce"
     rc=1
+  elif ! command -v node >/dev/null 2>&1; then
+    # Red, not skipped. A budget check that cannot run is a budget that is not
+    # enforced, and it should look like one. node is on ubuntu-24.04 before
+    # `setup-node` runs, which is where `--lint` already sits in `static`.
+    fail "node is not on PATH, so the budgets in ${budget_file} cannot be read as lhci reads them"
+    rc=1
+  else
+    # One line per audit: name|level|maxNumericValue|aggregationMethod|options.
+    #
+    # The last field is every option key, sorted — the equivalent of anchoring the
+    # old pattern on the closing brace. It means a fourth option cannot be added
+    # unnoticed, and adding one on purpose means updating the line below, which is
+    # the point. `aggregationMethod` is in there because it decides *which of the
+    # three runs* the number is compared against. From the pinned @lhci/cli@0.14.0
+    # (@lhci/utils/src/assertions.js):
+    #
+    #     const useMin =
+    #       (aggregationMethod === 'optimistic' && assertionType.startsWith('max')) ||
+    #       (aggregationMethod === 'pessimistic' && assertionType.startsWith('min'));
+    #     return useMin ? Math.min(...values) : Math.max(...values);
+    #
+    # All three budgets are `maxNumericValue`, so `optimistic` takes the minimum
+    # over `numberOfRuns: 3` — one word turns every budget from median-of-3 into
+    # best-of-3 with the threshold still reading 2000 in the diff. `'median'` is
+    # load-bearing rather than decoration: that same file defaults the option to
+    # `'optimistic'`, so deleting it is best-of-3 by another route.
+    local effective entry audit value expected
+    local loaded=1
+    effective=$(node -e '
+      const path = require("path");
+      const config = require(path.resolve(process.argv[1]));
+      const assertions = ((config.ci || {}).assert || {}).assertions || {};
+      for (const audit of process.argv.slice(2)) {
+        const entry = assertions[audit];
+        if (!Array.isArray(entry)) { console.log(audit + "|absent|||"); continue; }
+        const options = entry[1] || {};
+        console.log([
+          audit,
+          entry[0],
+          String(options.maxNumericValue),
+          String(options.aggregationMethod),
+          Object.keys(options).sort().join("+"),
+        ].join("|"));
+      }
+    ' "$budget_file" largest-contentful-paint cumulative-layout-shift server-response-time 2>&1) || loaded=0
+
+    if [ "$loaded" -eq 0 ]; then
+      fail "${budget_file} could not be loaded by node, so lhci cannot load it either and the \`budgets\` job has no thresholds to enforce: ${effective}"
+      rc=1
+    else
+      for entry in \
+        "largest-contentful-paint|2000" \
+        "cumulative-layout-shift|0.1" \
+        "server-response-time|600"; do
+        IFS='|' read -r audit value <<< "$entry"
+        expected="${audit}|error|${value}|median|aggregationMethod+maxNumericValue"
+
+        if grep -qxF -- "$expected" <<< "$effective"; then
+          pass "budget \`${audit}\` fails the build above ${value}, on the median of the runs"
+        else
+          fail "budget \`${audit}\` is not asserted at ${value} as an \`error\` on the median of the runs. lhci loads \`$(grep -F -- "${audit}|" <<< "$effective" | head -1)\` (audit|level|maxNumericValue|aggregationMethod|options), and the job goes on reporting green whether the budget was relaxed, downgraded to a warning, removed, or had its aggregation changed. If the line in ${budget_file} still reads correctly, look further down the file for a second entry for the same audit: an object literal keeps the last one. If the budget genuinely changed, change it in both places in the commit that explains why."
+          rc=1
+        fi
+      done
+    fi
   fi
 
   return "$rc"

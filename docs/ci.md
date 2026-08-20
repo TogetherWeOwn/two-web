@@ -174,7 +174,19 @@ belt-and-braces: lhci defaults `aggregationMethod` to `'optimistic'`, which for 
 `maxNumericValue` assertion compares the *best* of the three runs instead of the
 median. Swapping one word turns every budget into best-of-3 while the threshold in
 the diff still reads 2000, so `aggregationMethod: 'median'` is load-bearing and the
-lint matches the whole options object, closing brace included (TWO-101).
+lint pins the whole options object, not just the number (TWO-101).
+
+It pins it by **loading the config through node and reading the value lhci will
+read**, rather than by matching the text of the file. Matching text was guessing:
+`'largest-contentful-paint'` is one of four ways JavaScript spells that key, and a
+second entry written any of the other three ways — double-quoted, computed, or
+spread in — becomes the effective budget while leaving the pinned line word for word
+intact, because an object literal keeps the last entry for a key. Three of the four
+went straight past the old pattern (QA, TWO-101), and widening it could never have
+caught the spread, which has no key to match. The check now runs the same
+`require()` lhci does and compares what comes back, so there is no fourth spelling
+to miss. If `ci/lighthouserc.cjs` cannot be loaded at all, `--lint` goes red for
+that too — a budget that cannot be read is not being enforced.
 
 Each budget also has a live case behind it in `verify-pipeline.sh`, which matters
 because the two performance cases go red for different reasons and only one of them
@@ -359,8 +371,8 @@ the list" above for the fact none of them ever read it.
 `--lint` is the only thing watching the gate, so nothing downstream notices if it
 quietly stops catching anything. `verify-lint-selftest.sh` is the check on the
 check: it mutates a throwaway copy of the workflow one defect at a time and asserts
-`--lint` goes red *for the stated reason*. COUNT_PLACEHOLDER mutation cases, every one a mistake
-that has actually been made on this repo or proposed for it. Both run in `static`, first,
+`--lint` goes red *for the stated reason*. Nineteen cases, every one a mistake that has
+actually been made on this repo or proposed for it. Both run in `static`, first,
 before anything slow.
 
 Three further cases do not mutate the workflow at all. One runs the unmutated repo and
@@ -408,7 +420,7 @@ caught a real LCP breach, and only one of those means the gate works.
 | An image with no alt text | `budgets` |
 | Three seconds of server think-time before paint | `budgets` (via `server-response-time`) |
 | A 1.6 MB uncompressed hero image above the fold | `budgets` (via `largest-contentful-paint`) |
-| A budget threshold relaxed, downgraded to a warning, deleted, or its aggregation swapped | `static` |
+| A budget threshold relaxed, downgraded to a warning, deleted, shadowed by a second entry, or its aggregation swapped | `static` |
 | Deleting the aggregate's `if: always()` | `static` — see below |
 | A credential committed to a tracked file | `gitleaks` — see below |
 | Nothing wrong at all | nothing — goes green |
