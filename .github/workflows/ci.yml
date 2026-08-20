@@ -42,6 +42,14 @@ jobs:
       - name: Gate wiring
         run: ./ci/verify-pipeline.sh --lint
 
+      # And the check on the check. `--lint` is the only thing watching the gate,
+      # so nothing downstream notices if it quietly stops catching anything — a
+      # lint that always passes and a lint that works look identical from here.
+      # This mutates a throwaway copy per defect and asserts it goes red for the
+      # stated reason. Same half second, still no network.
+      - name: Gate wiring self-test
+        run: ./ci/verify-lint-selftest.sh
+
       - uses: shivammathur/setup-php@v2
         with:
           php-version: ${{ env.PHP_VERSION }}
