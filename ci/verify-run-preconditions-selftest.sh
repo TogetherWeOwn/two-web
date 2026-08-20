@@ -16,6 +16,23 @@
 # The stub answers `gh pr list --json ... --jq ...` by running the real jq over a
 # fixture file, so the filter tested here is the filter verify-pipeline.sh ships.
 #
+# What is pinned, in the order verify-pipeline.sh checks it:
+#
+#   gh-unauth     `gh` is installed but not logged in
+#   dirty         uncommitted changes in the working tree
+#   local-origin  `origin` is a filesystem clone, not GitHub
+#   actions-api   the credential cannot read the Actions API
+#   live-pr       another run's pull request is open        (TWO-103)
+#   live-branch   another run's branch is on the remote     (TWO-103)
+#   clear         a negative control: none of the above fires on a normal repo
+#
+# One precondition is deliberately not pinned: `command -v gh`. Faking a missing
+# `gh` means a PATH with no `gh` on it, and the harness needs `git` and `jq` from
+# that same PATH. It is also the one guard that cannot drift into silence — if it
+# stops firing the very next line dies on a command that does not exist. Every
+# other precondition can fail open without anyone noticing, which is why they are
+# all here. Add the case with the guard if you ever add another.
+#
 # Usage: ./ci/verify-run-preconditions-selftest.sh
 
 set -uo pipefail
@@ -66,8 +83,10 @@ fixture() {
 # Stub `gh`. Answers only what the --run preconditions ask.
 set -uo pipefail
 case "${1:-}" in
-  auth) exit 0 ;;                       # authenticated
-  api)  exit 0 ;;                       # Actions API is readable
+  # Each fixture owns a file holding the status these should exit with, so a case
+  # that breaks one of them cannot leak into the next case.
+  auth) exit "$(cat "${GH_STUB_AUTH_STATUS:?}")" ;;
+  api)  exit "$(cat "${GH_STUB_API_STATUS:?}")" ;;
   pr)
     [ "${2:-}" = "list" ] || exit 0
     filter='.'
@@ -83,6 +102,9 @@ esac
 SH
   chmod +x "$dir/bin/gh"
   printf '[]\n' > "$dir/prs.json"
+  # Healthy by default. A case that wants a broken `gh` overwrites its own copy.
+  printf '0\n' > "$dir/auth-status"
+  printf '0\n' > "$dir/api-status"
 
   echo "$dir"
 }
@@ -92,6 +114,7 @@ SH
 run_case() {
   local dir="$1"
   RUN_OUT="$(cd "$dir/repo" && PATH="$dir/bin:$PATH" GH_STUB_PR_JSON="$dir/prs.json" \
+    GH_STUB_AUTH_STATUS="$dir/auth-status" GH_STUB_API_STATUS="$dir/api-status" \
     ./ci/verify-pipeline.sh --run 2>&1)"
   RUN_STATUS=$?
 }
@@ -212,6 +235,30 @@ if [ "$RUN_STATUS" -eq 0 ] || ! grep -qF 'working tree is dirty' <<< "$out"; the
 else
   pass 'dirty'
 fi
+
+printf '\n\033[1m==> gh is not authenticated\033[0m\n'
+
+# The first precondition, and the one most likely to be true on a fresh machine:
+# a `gh` that is installed but has never been logged in. Everything after it —
+# opening the pull requests, reading the results back — is a `gh` call, so an
+# unauthenticated credential fails eight times over, forty minutes late.
+dir="$(fixture gh-unauth)" || { fail 'gh-unauth: fixture failed'; rc=1; }
+printf '1\n' > "$dir/auth-status"
+PRE_EXISTING='no-such-ref'
+expect_refused gh-unauth 'gh is not authenticated' "$dir"
+
+printf '\n\033[1m==> The Actions API cannot be read\033[0m\n'
+
+# A token with push access but without `Actions: read`. This one is the reason the
+# check exists rather than a nicety: the run pushes fine, opens all eight pull
+# requests, and then reads nothing back — which is byte-for-byte what a pipeline
+# that never ran looks like, and the two diagnoses point in opposite directions
+# (TWO-87). Authenticated `gh`, clean tree, GitHub origin: only the API read is
+# broken, so nothing but this guard can catch it.
+dir="$(fixture actions-api)" || { fail 'actions-api: fixture failed'; rc=1; }
+printf '1\n' > "$dir/api-status"
+PRE_EXISTING='no-such-ref'
+expect_refused actions-api 'cannot read the Actions API on TWO-Gaming/two-web' "$dir"
 
 printf '\n'
 if [ "$rc" -ne 0 ]; then
