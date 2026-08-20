@@ -317,6 +317,65 @@ expect_live plan-403 1 \
   '403 Forbidden' \
   '{"message":"Upgrade to GitHub Pro or make this repository public to enable this feature.","status":"403"}'
 
+# The same answer, but recorded rather than composed. Every other live case here
+# is a body we wrote to the shape we expected; this one is the bytes GitHub
+# actually returned for this repo, captured on TWO-95 (2026-08-20) by the only
+# person on the team holding a credential, and pasted in whole — the real header
+# set, the real documentation_url, the trailing newline. It is kept verbatim and
+# built by hand instead of through http_response() so that nothing in this file's
+# idea of the format can launder the evidence.
+#
+# It duplicates plan-403's assertion on purpose, and it is worth being exact
+# about how little it adds on its own: the composed body was a guess at the
+# message, and this one is the message. That is the whole of it. The status line
+# and header shape here are no different from the composed case, so this pins the
+# wording GitHub actually uses and nothing about the parse.
+n=$((n + 1))
+observed="$WORK/live-plan-403-observed.http"
+{
+  printf 'HTTP/2.0 403 Forbidden\r\n'
+  printf 'X-Accepted-Github-Permissions: administration=read\r\n'
+  printf 'Content-Type: application/json; charset=utf-8\r\n'
+  printf '\r\n'
+  printf '%s\n' '{"message":"Upgrade to GitHub Pro or make this repository public to enable this feature.","documentation_url":"https://docs.github.com/rest/branches/branch-protection#get-branch-protection","status":"403"}'
+} > "$observed"
+out="$(cd "$FAKE_REPO" && PATH="$STUB:$PATH" GH_STUB_RESPONSE="$observed" "$SCRIPT" 2>&1)"
+status=$?
+check_case live-plan-403-observed 1 \
+  "GitHub's plan for this repository has no branch protection" "$status" "$out"
+
+# The paste on TWO-95 was elided down to the two headers that carried the
+# argument, and the case above therefore has the same three-line header block as
+# every composed case here. A real GitHub response carries a dozen or more. That
+# difference is invisible while the body is found by scanning for the blank line,
+# and fatal the moment someone "simplifies" that into a fixed offset — which
+# reads as correct against every other case in this file.
+#
+# So: the same recorded answer behind a header block of realistic length. This is
+# the case that fails if the header skip is ever hardcoded.
+n=$((n + 1))
+manyhdr="$WORK/live-plan-403-headers.http"
+{
+  printf 'HTTP/2.0 403 Forbidden\r\n'
+  printf 'Server: GitHub.com\r\n'
+  printf 'Date: Wed, 20 Aug 2026 02:50:01 GMT\r\n'
+  printf 'Content-Type: application/json; charset=utf-8\r\n'
+  printf 'X-Accepted-Github-Permissions: administration=read\r\n'
+  printf 'X-GitHub-Media-Type: github.v3; format=json\r\n'
+  printf 'X-RateLimit-Limit: 5000\r\n'
+  printf 'X-RateLimit-Remaining: 4998\r\n'
+  printf 'X-GitHub-Request-Id: C4E1:1F2A:8A0B21:1148E0C:68A5\r\n'
+  printf 'Strict-Transport-Security: max-age=31536000\r\n'
+  printf 'Referrer-Policy: origin-when-cross-origin\r\n'
+  printf 'Vary: Accept, Authorization, Cookie, X-GitHub-OTP\r\n'
+  printf '\r\n'
+  printf '%s\n' '{"message":"Upgrade to GitHub Pro or make this repository public to enable this feature.","documentation_url":"https://docs.github.com/rest/branches/branch-protection#get-branch-protection","status":"403"}'
+} > "$manyhdr"
+out="$(cd "$FAKE_REPO" && PATH="$STUB:$PATH" GH_STUB_RESPONSE="$manyhdr" "$SCRIPT" 2>&1)"
+status=$?
+check_case live-plan-403-many-headers 1 \
+  "GitHub's plan for this repository has no branch protection" "$status" "$out"
+
 expect_live no-permission 2 \
   "Administration: read" \
   '403 Forbidden' \
@@ -346,12 +405,18 @@ out="$(cd "$FAKE_REPO" && PATH="$STUB:$PATH" GH_STUB_RESPONSE="$WORK/nothing" "$
 status=$?
 check_case live-no-response 2 "no HTTP response" "$status" "$out"
 
-# The header parsing is modelled on what `gh api -i` documents itself as printing
-# — status line, headers, blank line, body — and no one here has a credential to
-# check that against the real thing. So the cases that matter most are the ones
-# where the model is *wrong*: a misread response must come out as "could not
-# determine", never as a verdict. A wrong guess about the format is then a
-# nuisance, not a false red about a branch nobody read, which is TWO-96 again.
+# The header parsing was modelled on what `gh api -i` documents itself as
+# printing — status line, headers, blank line, body — and for a while nobody here
+# held a credential to check that against the real thing. TWO-95 checked it: the
+# live-plan-403-observed case above is the recorded response, and the model was
+# right. So this is now one confirmed format, not an assumption.
+#
+# One observation is not every response, so the cases below stay exactly as they
+# were. They are the ones where the model is *wrong*: a misread response must come
+# out as "could not determine", never as a verdict. A wrong guess about the format
+# is then a nuisance, not a false red about a branch nobody read, which is TWO-96
+# again. Deleting them because the format has been seen once would be reading the
+# evidence backwards.
 n=$((n + 1))
 malformed="$WORK/live-malformed.http"
 printf 'HTTP/2.0 200 OK\r\nContent-Type: application/json\r\n{"enforce_admins":{"enabled":true}}' > "$malformed"
