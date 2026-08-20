@@ -73,11 +73,14 @@ fixture() {
 
   cp "$REPO_ROOT"/.github/workflows/*.yml "$dir/repo/.github/workflows/"
   cp "$REPO_ROOT/docs/ci.md" "$dir/repo/docs/"
-  cp "$REPO_ROOT/ci/verify-pipeline.sh" "$dir/repo/ci/"
-  # The gate lint `--run` performs before its preconditions reads the Lighthouse
-  # budgets, so the fixture needs them too or every case dies on a missing file
-  # before the guard under test is ever reached.
-  cp "$REPO_ROOT/ci/lighthouserc.cjs" "$dir/repo/ci/"
+  # The whole of ci/, not just verify-pipeline.sh. Every case here reaches its
+  # precondition through the same static checks a real `--run` runs first, and
+  # those read whatever else the repo ships in ci/ — ci/lighthouserc.cjs since
+  # 4a564d3, the next one whenever a check learns about a new file. Naming the
+  # files one at a time means that check turns every case red at once, each of
+  # them reporting "refused, but not for the stated reason", which is a lie about
+  # the guard rather than a complaint about this line.
+  cp -R "$REPO_ROOT/ci/." "$dir/repo/ci/"
 
   (
     cd "$dir/repo" || exit 1
@@ -175,6 +178,23 @@ expect_refused() {
   fi
   pass "$slug"
 }
+
+# Preflight, not a case. `--run` runs the static checks on the gate before it
+# reaches any precondition, so a fixture the static checks reject fails every
+# case below with "refused, but not for the stated reason" — an accusation
+# against each working guard in turn, and nothing pointing at the fixture. Ask
+# once, up front, and say what is actually wrong.
+dir="$(fixture preflight)" || { fail 'preflight: fixture failed'; exit 1; }
+run_case "$dir"
+if grep -qF 'the gate is misconfigured' <<< "$RUN_OUT"; then
+  fail 'the fixture does not satisfy the static checks, so no guard below is
+        reachable and none of the results would mean anything. Either the gate
+        really is broken — run ./ci/verify-pipeline.sh --lint to find out — or a
+        static check has started reading a file fixture() does not copy into the
+        throwaway repo. What it could not find:'
+  printf '%s\n' "$RUN_OUT" | grep -F 'FAIL:' | grep -vF 'the gate is misconfigured' | sed 's/^/        /'
+  exit 1
+fi
 
 printf '\n\033[1m==> The run does not have a checkout of its own (TWO-112)\033[0m\n'
 
