@@ -36,6 +36,11 @@
 # every pull request and then read nothing back, which looks exactly like a
 # pipeline that never ran.
 #
+# One `--run` at a time per repository. Every case has a fixed branch name, so a
+# second concurrent run overwrites and then deletes the first one's pull requests.
+# The preconditions refuse to start when another run is live rather than let that
+# happen quietly — see TWO-103.
+#
 # --lint needs nothing but bash, so it runs before the org exists, in a pre-commit
 # hook, or in CI itself. It catches the class of bug where the gate still reports
 # green while it has quietly stopped gating.
@@ -428,6 +433,54 @@ gh api "repos/${REPO_SLUG}/actions/runs?per_page=1" >/dev/null 2>&1 || {
   fail "cannot read the Actions API on ${REPO_SLUG}. The token needs 'Actions: read' — see the permissions listed at the top of this file. Nothing has been pushed."
   exit 1
 }
+
+# Nothing else may already be mid-run. Every case gets a fixed branch name —
+# `ci-verify/pint`, `ci-verify/gate` — so two `--run` executions against one repo
+# share branches. The second push lands on the first run's branch and silently
+# changes its pull request's head commit mid-flight, and whichever `cleanup()`
+# reaches the end first closes and deletes *both* runs' work. The survivor is then
+# told its checks never reported, on a branch that no longer exists, which reads
+# as a dead pipeline and is not one — the same wrong diagnosis the Actions API
+# check directly above just stopped this script handing out. Observed live on
+# 2026-08-20: nine ci-verify pull requests opened and closed under another run
+# while a flake sample was being collected (TWO-103).
+#
+# Per-run branch names would let both runs proceed. That is deliberately not what
+# this does: two people running the acceptance suite against one repo at once is a
+# thing to notice, not a thing to support. So refuse in the first second, like the
+# other preconditions, and name what is already there.
+#
+# A bare remote branch counts as much as an open pull request. A run killed
+# part-way through leaves branches behind with no PR, and the next run's
+# `--force-with-lease` push collides with those just as hard.
+live_run() {
+  local prs branches number head sha ref
+  prs=$(gh pr list --repo "$REPO_SLUG" --state open --limit 100 \
+          --json number,headRefName --jq '.[] | "\(.number)\t\(.headRefName)"' 2>/dev/null || true)
+  while IFS=$'\t' read -r number head; do
+    case "${head:-}" in
+      "${BRANCH_PREFIX}/"*) printf '  pull request #%s on %s\n' "$number" "$head" ;;
+    esac
+  done <<< "$prs"
+
+  branches=$(git ls-remote --heads origin "refs/heads/${BRANCH_PREFIX}/*" 2>/dev/null || true)
+  while read -r sha ref; do
+    [ -n "${ref:-}" ] || continue
+    printf '  branch %s on origin\n' "${ref#refs/heads/}"
+  done <<< "$branches"
+}
+
+LIVE_RUN=$(live_run || true)
+if [ -n "$LIVE_RUN" ]; then
+  fail "another verification run is already live on ${REPO_SLUG}:
+${LIVE_RUN}
+Both runs use these same branch names, so they would overwrite and then delete
+each other's pull requests, and the one left standing would report checks that
+never arrived. Wait for it to finish. If you know it is dead, clear it with
+\`./ci/verify-pipeline.sh --cleanup\` and start again. Nothing has been pushed."
+  exit 1
+fi
+pass "no other verification run is live on ${REPO_SLUG}"
 
 git fetch origin "$BASE_BRANCH" --quiet
 results=()
