@@ -157,11 +157,24 @@ printf '\n\033[1m==> The pipeline stops covering something without going red\033
 # entirely on `dusk` and `budgets` still building for real. Drop the build from one
 # of them and nothing anywhere exercises a real manifest — and every job stays
 # green while it happens, which is precisely why the lint has to say it.
-# `0,/re/` bounds the delete to the first match, which is `dusk`'s — `budgets`
-# keeps its build, so this proves the check reads the job it names rather than
-# just grepping the whole file.
+# The mutation deletes the build from `dusk` and leaves `budgets` alone, so this
+# proves the check reads the job it names rather than grepping the whole file.
+#
+# It addresses the `dusk:` block by name rather than deleting the file's first
+# `npm run build`. Bounding by position was a false green waiting to happen: it
+# quietly assumes no job above `dusk` ever builds, and the moment one does — a
+# `pest` job that builds assets was proposed and nearly merged — the mutation
+# lands on that job instead, `dusk` keeps its build, check 8 correctly passes,
+# and this case stops testing anything while still printing PASS. A self-test
+# that can silently stop self-testing is the exact failure mode check 8 exists
+# to prevent, so it should not be how the self-test is written.
 expect_fail dusk-stops-building 'job `dusk` no longer runs `npm run build`' \
-  sed -i '0,/npm run build/{/npm run build/d}' .github/workflows/ci.yml
+  bash -c "awk '
+    /^  dusk:[[:space:]]*\$/            { inside = 1; print; next }
+    inside && /^  [a-zA-Z0-9_-]+:[[:space:]]*\$/ { inside = 0 }
+    inside && /npm run build/           { next }
+                                        { print }
+  ' .github/workflows/ci.yml > ci.yml.mutated && mv ci.yml.mutated .github/workflows/ci.yml"
 
 printf '\n\033[1m==> Tripwires (warn, do not block)\033[0m\n'
 

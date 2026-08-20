@@ -23,8 +23,19 @@
 #   ./ci/verify-pipeline.sh --run             # actually opens the PRs (lints first)
 #   ./ci/verify-pipeline.sh --cleanup         # delete leftover branches and close PRs
 #
-# Needs: gh, authenticated, with push access. Opens PRs against `main`. Never
-# pushes to `main`, never force-pushes anything, closes every PR it opens.
+# Needs: gh, authenticated. Opens PRs against `main`. Never pushes to `main`,
+# never force-pushes anything, closes every PR it opens.
+#
+# The token needs exactly three fine-grained permissions on this repository, and
+# nothing else — no org admin, no access to any other repo:
+#
+#   Contents:      read and write   (push and delete the ci-verify/* branches)
+#   Pull requests: read and write   (open them, close them)
+#   Actions:       read             (read the job results it asserts on)
+#
+# `Actions: read` is the one that gets left out. Without it the script can open
+# every pull request and then read nothing back, which looks exactly like a
+# pipeline that never ran.
 #
 # --lint needs nothing but bash, so it runs before the org exists, in a pre-commit
 # hook, or in CI itself. It catches the class of bug where the gate still reports
@@ -262,8 +273,26 @@ lint() {
   #    something. If either quietly drops its build step, nothing in the pipeline
   #    exercises a real manifest any more and the gate stops covering a whole
   #    class of breakage without a single job going red. Hence a failure here.
+  #
+  #    The block is read into a variable rather than piped straight into `grep -q`.
+  #    Under `set -o pipefail` that pipeline reports the *producer's* status too,
+  #    and `grep -q` exits the moment it matches, so a large enough job block can
+  #    leave awk writing into a closed pipe and turn a passing check into a red
+  #    one that depends on scheduling. This check is the thing standing between a
+  #    stubbed Vite and no manifest coverage at all; it must not be able to fail
+  #    for a reason that has nothing to do with the workflow.
+  #
+  #    "Job is missing" and "job is present but stopped building" are also reported
+  #    separately. They need different fixes, and a check that says the wrong one
+  #    sends whoever reads it looking in the wrong place.
+  local block
   for job in dusk budgets; do
-    if job_block "$WORKFLOW" "$job" | grep -q 'npm run build'; then
+    block="$(job_block "$WORKFLOW" "$job")" || block=''
+
+    if [ -z "$block" ]; then
+      fail "job \`${job}\` was not found in ${WORKFLOW}. Check 8 expects it to exist and to build assets, because tests/TestCase.php stubs Vite for the PHP suite on the grounds that this job builds for real. If the job was renamed, rename it here too."
+      rc=1
+    elif grep -q 'npm run build' <<< "$block"; then
       pass "\`${job}\` builds assets — the real manifest is still exercised somewhere"
     else
       fail "job \`${job}\` no longer runs \`npm run build\`. tests/TestCase.php stubs Vite for the PHP suite on the grounds that this job builds for real; drop it and nothing tests the manifest, silently."
@@ -309,16 +338,18 @@ lint() {
 
 # The assertions, kept separate from the fetching so they can be exercised without
 # a network, a repository, or forty minutes of runner time — see --assert-selftest.
-# `checks` is one `name=STATE` per line, exactly as `gh pr checks` yields it.
+# `checks` is one `name=STATE` per line, exactly as `branch_checks` yields it.
 assert_checks() {
   local checks expected_job="$2" aggregate="$3" expect_green="$4" why="$5" where="${6:-}"
   checks=$(grep -v '^[[:space:]]*$' <<< "$1" || true)
   if [ -n "$where" ]; then where=" on ${where}"; fi
 
   # A check that never reported is not a pass. If the workflow file has a syntax
-  # error, or Actions is disabled on the repo, `gh pr checks` returns nothing at
+  # error, or Actions is disabled on the repo, the Actions API returns nothing at
   # all — and reading nothing as green is exactly the bug this script exists to
-  # catch, one level up.
+  # catch, one level up. The other two ways to get nothing back — an origin that is
+  # not a GitHub repository, and a token without `Actions: read` — are ruled out in
+  # the preconditions before anything is pushed (TWO-87).
   local absent=""
   for expected in "${EXPECTED_CHECKS[@]}"; do
     grep -q "^${expected}=" <<< "$checks" || absent="${absent} ${expected}"
@@ -610,6 +641,31 @@ command -v gh >/dev/null || { fail "gh is not installed"; exit 1; }
 gh auth status >/dev/null 2>&1 || { fail "gh is not authenticated"; exit 1; }
 [ -z "$(git status --porcelain)" ] || { fail "working tree is dirty — commit or stash first"; exit 1; }
 
+# The owner/repo the Actions API is asked about. Resolved and checked here, in the
+# main shell, rather than inside the assertions: every use of it below sits in a
+# command substitution, and an `exit` in there kills only the subshell and lets the
+# run carry on with an empty value. That is the swallow this section exists to have
+# stopped doing, so it must not be reintroduced one level down.
+repo_slug() {
+  git config --get remote.origin.url \
+    | sed -E 's#^(git@github\.com:|https://([^@/]+@)?github\.com/)##; s#/+$##; s#\.git$##'
+}
+REPO_SLUG=$(repo_slug || true)
+[[ "$REPO_SLUG" =~ ^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$ ]] || {
+  fail "origin is not a GitHub repository: '$(git config --get remote.origin.url 2>/dev/null || echo unset)'. Results come from the GitHub Actions API, so this has to run in a clone whose origin is GitHub — not a workspace clone and not a local mirror. Nothing has been pushed."
+  exit 1
+}
+
+# Prove the credential can read results *before* opening eight pull requests. A
+# token with push access but without `Actions: read` gets all the way through the
+# run and then reads nothing back, which is indistinguishable from a pipeline that
+# never ran — and the two diagnoses point in opposite directions. Half a second
+# here, or forty minutes and the wrong answer there.
+gh api "repos/${REPO_SLUG}/actions/runs?per_page=1" >/dev/null 2>&1 || {
+  fail "cannot read the Actions API on ${REPO_SLUG}. The token needs 'Actions: read' — see the permissions listed at the top of this file. Nothing has been pushed."
+  exit 1
+}
+
 git fetch origin "$BASE_BRANCH" --quiet
 results=()
 
@@ -651,15 +707,85 @@ git checkout -q "$BASE_BRANCH" 2>/dev/null || git checkout -q "origin/${BASE_BRA
 
 # --- assert -----------------------------------------------------------------
 
+# Results come from the Actions API, deliberately not from `gh pr checks`. Two
+# reasons, both of which produced a *silent* wrong answer rather than an error
+# (TWO-87):
+#
+#   * `gh pr checks --json` landed in gh 2.47. Debian ships 2.46, where the flag
+#     does not exist: the command prints usage to stderr and exits, `|| echo ""`
+#     swallows it, and an empty result reads as "no check ever reported" — eight
+#     false failures in forty minutes.
+#   * `gh pr checks` reads the Checks API, which a fine-grained token can only
+#     touch with `Checks: read`. That is a permission nobody thinks to ask for
+#     when the ask is "push access", so the credential arrives unable to read the
+#     thing it was issued to read.
+#
+# The Actions API needs only `Actions: read`, and reports the same job names
+# branch protection matches on.
+
+POLL_INTERVAL=20
+CHECK_TIMEOUT=2400
+
+# $REPO_SLUG is resolved and proven readable in the preconditions above, before
+# anything is pushed.
+
+# The newest run of each workflow on this branch — concurrency cancels the older
+# ones, and a cancelled predecessor is not the result we are asserting on.
+branch_runs() {
+  gh api "repos/${REPO_SLUG}/actions/runs?branch=$1&per_page=50" \
+    --jq '[.workflow_runs[] | select(.event == "pull_request")]
+          | group_by(.workflow_id) | map(max_by(.run_number))
+          | .[] | "\(.id) \(.status)"' 2>/dev/null || true
+}
+
+# "<job>=<STATE>" per line. STATE is SUCCESS / FAILURE / CANCELLED / SKIPPED, or
+# PENDING for a job that has not concluded.
+branch_checks() {
+  local id status
+  while read -r id status; do
+    [ -n "${id:-}" ] || continue
+    gh api "repos/${REPO_SLUG}/actions/runs/${id}/jobs?per_page=100" \
+      --jq '.jobs[] | "\(.name)=\(.conclusion // "pending" | ascii_upcase)"' 2>/dev/null || true
+  done <<< "$(branch_runs "$1")"
+}
+
+# Blocks until every expected check has finished. Returns non-zero on timeout so
+# the caller reports "never reported" rather than reading a half-finished run.
+#
+# "Every run we can see has completed" is not the same condition, and the gap is
+# real: two workflows produce these checks — ci.yml and secret-scan.yml — and the
+# API only lists a run once GitHub has created it. If one workflow's run exists and
+# has finished while the other's has not been created yet, the weaker condition
+# returns immediately and the assertion reports a check that never ran, on a branch
+# where it was about to. Waiting on the check names the assertion actually uses
+# closes that, and costs one extra API read per poll.
+wait_for_checks() {
+  local branch="$1" waited=0 runs pending reported missing
+  while [ "$waited" -lt "$CHECK_TIMEOUT" ]; do
+    runs=$(branch_runs "$branch")
+    pending=$(awk '$2 != "completed"' <<< "$runs" | grep -c . || true)
+    if [ -n "$runs" ] && [ "$pending" -eq 0 ]; then
+      reported=$(branch_checks "$branch" | cut -d= -f1)
+      missing=0
+      for expected in "${EXPECTED_CHECKS[@]}"; do
+        grep -qxF "$expected" <<< "$reported" || missing=1
+      done
+      [ "$missing" -eq 0 ] && return 0
+    fi
+    sleep "$POLL_INTERVAL"
+    waited=$((waited + POLL_INTERVAL))
+  done
+  return 1
+}
 
 check_branch() {
   local branch="$1" expected_job="$2" aggregate="$3" expect_green="$4" why="$5"
 
   # Blocks until every check on the branch has reported.
-  gh pr checks "$branch" --watch --interval 20 >/dev/null 2>&1 || true
+  wait_for_checks "$branch" || true
 
   local checks
-  checks=$(gh pr checks "$branch" --json name,state --jq '.[] | "\(.name)=\(.state)"' 2>/dev/null || echo "")
+  checks=$(branch_checks "$branch")
 
   assert_checks "$checks" "$expected_job" "$aggregate" "$expect_green" "$why" "$branch"
 }
