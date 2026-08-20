@@ -347,6 +347,12 @@ jobs:
       - name: Accessibility — WCAG 2.2 AA
         run: node ci/a11y.mjs
 
+      # include-hidden-files, because `.lighthouseci` starts with a dot and
+      # upload-artifact skips anything under a dot-folder by default. Without it
+      # this artifact contained the a11y report and nothing else — 268 bytes,
+      # every Lighthouse report silently dropped, and the one place you would go
+      # to debug a breached budget was empty (TWO-93). Nothing here is secret:
+      # both paths are generated reports, and the flag only applies to them.
       - name: Upload budget reports
         if: always()
         uses: actions/upload-artifact@v4
@@ -355,6 +361,7 @@ jobs:
           path: |
             .lighthouseci
             ci/a11y-report.json
+          include-hidden-files: true
           retention-days: 14
           if-no-files-found: ignore
 
