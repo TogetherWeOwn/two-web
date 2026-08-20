@@ -65,8 +65,9 @@ fixture() {
   cp "$REPO_ROOT"/.github/workflows/*.yml "$dir/repo/.github/workflows/"
   cp "$REPO_ROOT/docs/ci.md" "$dir/repo/docs/"
   cp "$REPO_ROOT/ci/verify-pipeline.sh" "$dir/repo/ci/"
-  # The lint asserts the budgets job pins its thresholds, so the fixture needs the
-  # thresholds file too — without it every case fails on the fixture, not the mutation.
+  # The gate lint `--run` performs before its preconditions reads the Lighthouse
+  # budgets, so the fixture needs them too or every case dies on a missing file
+  # before the guard under test is ever reached.
   cp "$REPO_ROOT/ci/lighthouserc.cjs" "$dir/repo/ci/"
 
   (
