@@ -220,6 +220,22 @@ lint() {
       || printf '\033[33mwarn: job `%s` reports on pull requests but is not a required check — it can go red while the PR merges\033[0m\n' "$name"
   done <<< "$reported"
 
+  # 8. The PHP suite does not build assets — tests/TestCase.php stubs Vite so Pest
+  #    stays PHP-only and gives the same answer on a clean runner as on a laptop
+  #    with a stale `public/build`. That is only safe while something else still
+  #    builds for real and renders the layout. `dusk` and `budgets` are that
+  #    something. If either quietly drops its build step, nothing in the pipeline
+  #    exercises a real manifest any more and the gate stops covering a whole
+  #    class of breakage without a single job going red. Hence a failure here.
+  for job in dusk budgets; do
+    if job_block "$WORKFLOW" "$job" | grep -q 'npm run build'; then
+      pass "\`${job}\` builds assets — the real manifest is still exercised somewhere"
+    else
+      fail "job \`${job}\` no longer runs \`npm run build\`. tests/TestCase.php stubs Vite for the PHP suite on the grounds that this job builds for real; drop it and nothing tests the manifest, silently."
+      rc=1
+    fi
+  done
+
   return "$rc"
 }
 

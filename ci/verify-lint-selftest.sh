@@ -132,6 +132,18 @@ printf '\n\033[1m==> Docs and protection drift apart\033[0m\n'
 expect_fail docs-stale 'never names the required check `dusk`' \
   bash -c "sed -i 's/\`dusk\`//g' docs/ci.md"
 
+printf '\n\033[1m==> The pipeline stops covering something without going red\033[0m\n'
+
+# The PHP suite stubs Vite (tests/TestCase.php) so Pest needs no build. That rests
+# entirely on `dusk` and `budgets` still building for real. Drop the build from one
+# of them and nothing anywhere exercises a real manifest — and every job stays
+# green while it happens, which is precisely why the lint has to say it.
+# `0,/re/` bounds the delete to the first match, which is `dusk`'s — `budgets`
+# keeps its build, so this proves the check reads the job it names rather than
+# just grepping the whole file.
+expect_fail dusk-stops-building 'job `dusk` no longer runs `npm run build`' \
+  sed -i '0,/npm run build/{/npm run build/d}' .github/workflows/ci.yml
+
 printf '\n\033[1m==> Tripwires (warn, do not block)\033[0m\n'
 
 # The price of requiring leaves instead of the aggregate alone: drop one and it can

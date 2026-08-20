@@ -217,9 +217,16 @@ A pipeline nobody has watched fail is a pipeline nobody knows works.
 `--lint` is the only thing watching the gate, so nothing downstream notices if it
 quietly stops catching anything. `verify-lint-selftest.sh` is the check on the
 check: it mutates a throwaway copy of the workflow one defect at a time and asserts
-`--lint` goes red *for the stated reason*. Nine cases, every one a mistake that has
+`--lint` goes red *for the stated reason*. Ten cases, every one a mistake that has
 actually been made on this repo or proposed for it. Both run in `static`, first,
 before anything slow.
+
+Most of those cases are about the gate reporting a result that is not the pipeline's
+result. One is not: `--lint` also fails if `dusk` or `budgets` stops running
+`npm run build`. The PHP suite stubs Vite so it needs no build artifact (see
+`docs/testing-strategy.md`), which is only sound while those two still build for
+real. Drop it and nothing in the pipeline exercises a real manifest — with every job
+still green, which is why a human will not notice and the lint has to.
 
 It opens one deliberately broken PR per failure mode and asserts that the **named
 job** went red — not merely that something somewhere was unhappy. A `budgets` job
