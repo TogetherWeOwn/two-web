@@ -310,7 +310,9 @@ is clean, the Actions API is readable, and no other run is live.
 `verify-run-preconditions-selftest.sh` is the check on those: it builds a throwaway
 repo whose `origin` reads as GitHub while its bytes go to a bare repo next door,
 stubs `gh`, and asserts each guard refuses for its own reason — and that nothing
-was pushed on the way out.
+was pushed on the way out. Seven cases: one per precondition, two for the live-run
+guard (an open pull request and a leftover branch refuse independently), and a
+negative control proving none of them fires on a normal repository.
 
 ## Release checklist
 
