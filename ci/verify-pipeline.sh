@@ -238,8 +238,26 @@ lint() {
   #    something. If either quietly drops its build step, nothing in the pipeline
   #    exercises a real manifest any more and the gate stops covering a whole
   #    class of breakage without a single job going red. Hence a failure here.
+  #
+  #    The block is read into a variable rather than piped straight into `grep -q`.
+  #    Under `set -o pipefail` that pipeline reports the *producer's* status too,
+  #    and `grep -q` exits the moment it matches, so a large enough job block can
+  #    leave awk writing into a closed pipe and turn a passing check into a red
+  #    one that depends on scheduling. This check is the thing standing between a
+  #    stubbed Vite and no manifest coverage at all; it must not be able to fail
+  #    for a reason that has nothing to do with the workflow.
+  #
+  #    "Job is missing" and "job is present but stopped building" are also reported
+  #    separately. They need different fixes, and a check that says the wrong one
+  #    sends whoever reads it looking in the wrong place.
+  local block
   for job in dusk budgets; do
-    if job_block "$WORKFLOW" "$job" | grep -q 'npm run build'; then
+    block="$(job_block "$WORKFLOW" "$job")" || block=''
+
+    if [ -z "$block" ]; then
+      fail "job \`${job}\` was not found in ${WORKFLOW}. Check 8 expects it to exist and to build assets, because tests/TestCase.php stubs Vite for the PHP suite on the grounds that this job builds for real. If the job was renamed, rename it here too."
+      rc=1
+    elif grep -q 'npm run build' <<< "$block"; then
       pass "\`${job}\` builds assets — the real manifest is still exercised somewhere"
     else
       fail "job \`${job}\` no longer runs \`npm run build\`. tests/TestCase.php stubs Vite for the PHP suite on the grounds that this job builds for real; drop it and nothing tests the manifest, silently."
