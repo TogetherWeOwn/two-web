@@ -666,7 +666,17 @@ gh api "repos/${REPO_SLUG}/actions/runs?per_page=1" >/dev/null 2>&1 || {
   exit 1
 }
 
-git fetch origin "$BASE_BRANCH" --quiet
+# `--prune` is not decoration. Every push below is `--force-with-lease`, which holds
+# the lease against the local `refs/remotes/origin/ci-verify/*`. A previous run's
+# cleanup deletes those branches on the remote but leaves the remote-tracking refs
+# here, so the lease is held against a branch that no longer exists and every push
+# is rejected with "stale info" — a whole run wasted, and the error names neither
+# the cause nor the fix.
+#
+# It has to be a bare `git fetch origin --prune`. Adding `--prune` to a fetch with
+# an explicit refspec prunes only within that refspec, so `git fetch origin main
+# --prune` leaves every stale `ci-verify/*` ref exactly where it was.
+git fetch origin --prune --quiet
 results=()
 
 open_pr() {
