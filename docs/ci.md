@@ -246,7 +246,7 @@ A pipeline nobody has watched fail is a pipeline nobody knows works.
 ```bash
 ./ci/verify-pipeline.sh --lint            # offline, half a second, no gh — runs in `static`
 ./ci/verify-lint-selftest.sh              # proves --lint still catches things — runs in `static`
-./ci/verify-pipeline.sh --assert-selftest # proves --run's assertions say what they claim
+./ci/verify-pipeline.sh --assert-selftest # proves --run's assertions, and its cleanup, say what they claim
 ./ci/verify-pipeline.sh                   # dry run — prints what it would do
 ./ci/verify-pipeline.sh --run             # opens the PRs, waits, asserts, cleans up
 ./ci/verify-pipeline.sh --cleanup         # if a run was interrupted
@@ -270,6 +270,16 @@ recorded check conclusions through the assertions `--run` makes and checks each 
 accepted or rejected as intended. Those assertions otherwise execute only during a
 live run, which is how a wrong one survived review and cost forty minutes of runner
 time to find (TWO-94).
+
+`--assert-selftest` covers cleanup for the same reason, with `gh` and `git` shadowed
+so the real function runs against synthetic responses. Cleanup had the identical
+defect in a blunter form: every call was `|| true` and the `closed PR #N` line
+printed unconditionally, so the acceptance run reported nine pull requests closed
+while closing none, and left three open titled "do not merge". Three cases now hold
+it: all closes succeed, all closes fail, and — the one only a re-read catches —
+`gh pr close` exits 0 while the pull request is still there. Cleanup reads the live
+list at the end rather than trusting its own loop, which also sweeps up anything an
+interrupted earlier run left behind.
 
 Most of those cases are about the gate reporting a result that is not the pipeline's
 result. One is not: `--lint` also fails if `dusk` or `budgets` stops running
