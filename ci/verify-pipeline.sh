@@ -265,6 +265,43 @@ lint() {
     fi
   done
 
+  # 9. The performance budget is still a budget. ci/lighthouserc.cjs asks in prose
+  #    that nobody edit a threshold to make a build go green, and until TWO-93
+  #    nothing checked — a relaxed budget and an enforced one look the same from
+  #    every job in the pipeline. Each entry below must be present, at `error`, at
+  #    exactly this number.
+  #
+  #    LCP and CLS are the CEO's, in writing. Lowering one is their decision, and
+  #    then it is changed here too, in the same commit that says so — that second
+  #    edit is the point, not an obstacle.
+  #
+  #    `server-response-time` is not a CEO budget and is not optional either: it is
+  #    the only thing in the pipeline that sees a slow server. Lighthouse runs with
+  #    `throttlingMethod: 'simulate'`, and Lantern models one server response time
+  #    per origin — the median over every request to it — so on a page that also
+  #    loads a few static files a three-second document response is medianed away
+  #    and simulated LCP never sees it. That is TWO-93, and it passed a homepage
+  #    that took three seconds to answer. Delete this line and it passes one again.
+  local budget_file="./ci/lighthouserc.cjs"
+  if [ -f "$budget_file" ]; then
+    local entry audit value
+    for entry in \
+      "largest-contentful-paint|2000" \
+      "cumulative-layout-shift|0.1" \
+      "server-response-time|600"; do
+      IFS='|' read -r audit value <<< "$entry"
+      if grep -qE "^[[:space:]]*'${audit}':[[:space:]]*\['error',[[:space:]]*\{[[:space:]]*maxNumericValue:[[:space:]]*${value//./\\.}[[:space:]]*," "$budget_file"; then
+        pass "budget \`${audit}\` fails the build above ${value}"
+      else
+        fail "budget \`${audit}\` is not asserted at ${value} as an \`error\` in ${budget_file}. Either it was relaxed, downgraded to a warning, or removed — and the job goes on reporting green either way. If the number genuinely changed, change it in both places in the commit that explains why."
+        rc=1
+      fi
+    done
+  else
+    fail "${budget_file} not found — the \`budgets\` job has no thresholds to enforce"
+    rc=1
+  fi
+
   return "$rc"
 }
 
@@ -335,9 +372,17 @@ break_a11y() {
 }
 
 break_lcp() {
-  # Three seconds of server think-time before anything can paint. LCP cannot come
-  # in under the 2.0s budget no matter how fast the runner is, so this proves the
-  # assertion is wired up without depending on runner luck.
+  # Three seconds of server think-time before anything can paint. A real member on
+  # a real phone waits three seconds; the budget has to say so.
+  #
+  # What catches it is `server-response-time`, not `largest-contentful-paint`, and
+  # that is worth knowing before you go looking. This case ran green for a while
+  # (TWO-93): `simulate` throttling does not report observed timings, it rebuilds
+  # them, and Lantern models one server response time per origin — the median over
+  # every request to it. The document's three seconds sits in a set with four
+  # static files served off disk in a millisecond, the median is a millisecond, and
+  # Lantern then simulates the document at a millisecond too. Simulated LCP comes
+  # in well under 2.0s over a server that took three seconds to answer.
   #
   # In the view rather than as a closure route on purpose: the budgets job runs
   # `route:cache`, and a closure route is not serialisable, so that version would

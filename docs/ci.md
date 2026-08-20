@@ -13,7 +13,7 @@
 | `static` | gate wiring, Pint `--test`, PHPStan level 8 | the gate stops gating, formatting drifts, or types do not hold |
 | `pest` | Pest unit + feature, real Postgres 17 | any test fails |
 | `dusk` | Laravel Dusk, real Chrome, real server | any journey fails |
-| `budgets` | Lighthouse mobile + axe-core at 360px and 1280px | LCP ≥ 2.0s, CLS ≥ 0.1, or any WCAG 2.2 AA violation |
+| `budgets` | Lighthouse mobile + axe-core at 360px and 1280px | LCP ≥ 2.0s, CLS ≥ 0.1, server response ≥ 600ms, or any WCAG 2.2 AA violation |
 | `tests` | aggregates the four | any of them is not green, including *skipped* |
 
 All five are required checks on `main`, plus `gitleaks` from `secret-scan.yml`.
@@ -98,6 +98,28 @@ Set by the CEO. Enforced as **failures, not warnings**.
   slowdown, simulated Slow 4G. Configured in `ci/lighthouserc.cjs`.
 - **CLS < 0.1**, same profile.
 - **WCAG 2.2 AA**, zero violations, in `ci/a11y.mjs`.
+
+One more assertion sits alongside them, and it is not a CEO budget:
+
+- **Server response time < 600ms** for the main document.
+
+That one is there because the LCP budget does not cover a slow server, which is
+not obvious and cost us a green build over a three-second homepage (TWO-93).
+Lighthouse runs with `throttlingMethod: 'simulate'`: it does not report the
+timings Chrome observed, it rebuilds them, and it models a single server response
+time per origin — the median across every request to that origin. The homepage
+asks `127.0.0.1` for a document plus a stylesheet, a script, a font and a favicon,
+and the last four come off disk in a millisecond. Median: one millisecond, applied
+to the document too. A homepage that really took three seconds to answer simulated
+in comfortably under 2.0s. The `server-response-time` audit reads the observed TTFB
+straight off the document's network record and never touches the simulator, so it
+is what actually goes red. 600ms is Lighthouse's own threshold for that audit, well
+clear of the 2.0s budget: a tripwire for a server on the floor, not a second
+performance target.
+
+All three numbers are pinned by `verify-pipeline.sh --lint`, so relaxing one,
+downgrading it to a warning or deleting it fails `static` rather than passing
+quietly.
 
 Measured against a production-shaped build: `composer install --no-dev`,
 `APP_DEBUG=false`, config/route/view caches warm, real built assets. Measuring a
@@ -248,7 +270,7 @@ A pipeline nobody has watched fail is a pipeline nobody knows works.
 `--lint` is the only thing watching the gate, so nothing downstream notices if it
 quietly stops catching anything. `verify-lint-selftest.sh` is the check on the
 check: it mutates a throwaway copy of the workflow one defect at a time and asserts
-`--lint` goes red *for the stated reason*. Ten cases, every one a mistake that has
+`--lint` goes red *for the stated reason*. Thirteen cases, every one a mistake that has
 actually been made on this repo or proposed for it. Both run in `static`, first,
 before anything slow.
 
@@ -273,6 +295,7 @@ caught a real LCP breach, and only one of those means the gate works.
 | A heading hidden with CSS — visible in the HTML, invisible in the browser | `dusk` |
 | An image with no alt text | `budgets` |
 | Three seconds of server think-time before paint | `budgets` |
+| A budget threshold relaxed, downgraded to a warning, or deleted | `static` |
 | Nothing wrong at all | nothing — goes green |
 
 The Dusk case is hidden with CSS rather than deleted on purpose: the HTML still
