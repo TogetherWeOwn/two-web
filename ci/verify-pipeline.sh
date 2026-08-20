@@ -22,8 +22,19 @@
 #   ./ci/verify-pipeline.sh --run        # actually opens the PRs (lints first)
 #   ./ci/verify-pipeline.sh --cleanup    # delete leftover branches and close PRs
 #
-# Needs: gh, authenticated, with push access. Opens PRs against `main`. Never
-# pushes to `main`, never force-pushes anything, closes every PR it opens.
+# Needs: gh, authenticated. Opens PRs against `main`. Never pushes to `main`,
+# never force-pushes anything, closes every PR it opens.
+#
+# The token needs exactly three fine-grained permissions on this repository, and
+# nothing else — no org admin, no access to any other repo:
+#
+#   Contents:      read and write   (push and delete the ci-verify/* branches)
+#   Pull requests: read and write   (open them, close them)
+#   Actions:       read             (read the job results it asserts on)
+#
+# `Actions: read` is the one that gets left out. Without it the script can open
+# every pull request and then read nothing back, which looks exactly like a
+# pipeline that never ran.
 #
 # --lint needs nothing but bash, so it runs before the org exists, in a pre-commit
 # hook, or in CI itself. It catches the class of bug where the gate still reports
@@ -416,14 +427,69 @@ git checkout -q "$BASE_BRANCH" 2>/dev/null || git checkout -q "origin/${BASE_BRA
 
 # --- assert -----------------------------------------------------------------
 
+# Results come from the Actions API, deliberately not from `gh pr checks`. Two
+# reasons, both of which produced a *silent* wrong answer rather than an error
+# (TWO-87):
+#
+#   * `gh pr checks --json` landed in gh 2.47. Debian ships 2.46, where the flag
+#     does not exist: the command prints usage to stderr and exits, `|| echo ""`
+#     swallows it, and an empty result reads as "no check ever reported" — eight
+#     false failures in forty minutes.
+#   * `gh pr checks` reads the Checks API, which a fine-grained token can only
+#     touch with `Checks: read`. That is a permission nobody thinks to ask for
+#     when the ask is "push access", so the credential arrives unable to read the
+#     thing it was issued to read.
+#
+# The Actions API needs only `Actions: read`, and reports the same job names
+# branch protection matches on.
+
+POLL_INTERVAL=20
+CHECK_TIMEOUT=2400
+
+repo_slug() { git config --get remote.origin.url | sed -E 's#(git@github.com:|https://github.com/)##; s#\.git$##'; }
+
+# The newest run of each workflow on this branch — concurrency cancels the older
+# ones, and a cancelled predecessor is not the result we are asserting on.
+branch_runs() {
+  gh api "repos/$(repo_slug)/actions/runs?branch=$1&per_page=50" \
+    --jq '[.workflow_runs[] | select(.event == "pull_request")]
+          | group_by(.workflow_id) | map(max_by(.run_number))
+          | .[] | "\(.id) \(.status)"' 2>/dev/null || true
+}
+
+# "<job>=<STATE>" per line. STATE is SUCCESS / FAILURE / CANCELLED / SKIPPED, or
+# PENDING for a job that has not concluded.
+branch_checks() {
+  local id status
+  while read -r id status; do
+    [ -n "${id:-}" ] || continue
+    gh api "repos/$(repo_slug)/actions/runs/${id}/jobs?per_page=100" \
+      --jq '.jobs[] | "\(.name)=\(.conclusion // "pending" | ascii_upcase)"' 2>/dev/null || true
+  done <<< "$(branch_runs "$1")"
+}
+
+# Blocks until every run on the branch has finished. Returns non-zero on timeout
+# so the caller reports "never reported" rather than reading a half-finished run.
+wait_for_checks() {
+  local branch="$1" waited=0 runs pending
+  while [ "$waited" -lt "$CHECK_TIMEOUT" ]; do
+    runs=$(branch_runs "$branch")
+    pending=$(awk '$2 != "completed"' <<< "$runs" | grep -c . || true)
+    [ -n "$runs" ] && [ "$pending" -eq 0 ] && return 0
+    sleep "$POLL_INTERVAL"
+    waited=$((waited + POLL_INTERVAL))
+  done
+  return 1
+}
+
 check_branch() {
   local branch="$1" expected_job="$2" expect_green="$3" why="$4"
 
   # Blocks until every check on the branch has reported.
-  gh pr checks "$branch" --watch --interval 20 >/dev/null 2>&1 || true
+  wait_for_checks "$branch" || true
 
   local checks
-  checks=$(gh pr checks "$branch" --json name,state --jq '.[] | "\(.name)=\(.state)"' 2>/dev/null || echo "")
+  checks=$(branch_checks "$branch")
 
   # A check that never reported is not a pass. If the workflow file has a syntax
   # error, or Actions is disabled on the repo, `gh pr checks` returns nothing at
