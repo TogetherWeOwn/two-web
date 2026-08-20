@@ -264,6 +264,7 @@ A pipeline nobody has watched fail is a pipeline nobody knows works.
 ./ci/verify-lint-selftest.sh            # proves --lint still catches things — runs in `static`
 ./ci/verify-run-preconditions-selftest.sh  # proves --run still refuses to start — runs in `static`
 ./ci/verify-pipeline.sh                 # dry run — prints what it would do
+cd "$(./ci/scratch-clone.sh)"           # --run needs a checkout of its own — see below
 ./ci/verify-pipeline.sh --run           # opens the PRs, waits, asserts, cleans up
 ./ci/verify-pipeline.sh --cleanup       # if a run was interrupted
 ```
@@ -326,16 +327,59 @@ branch names would let both proceed, and two people running the acceptance suite
 at once is a thing to notice, not a thing to support. If the branches are leftovers
 from a run that was killed, `--cleanup` clears them.
 
-`--run` has five such preconditions, all of which fire in the first second rather
-than forty minutes in: `gh` is authenticated, `origin` is a GitHub repository (not
-a workspace clone — the results come from the GitHub Actions API), the working tree
-is clean, the Actions API is readable, and no other run is live.
+`--run` has six such preconditions, all of which fire in the first second rather
+than forty minutes in: it is running in a checkout of its own (see below), `gh` is
+authenticated, `origin` is a GitHub repository (not a workspace clone — the results
+come from the GitHub Actions API), the working tree is clean, the Actions API is
+readable, and no other run is live.
 `verify-run-preconditions-selftest.sh` is the check on those: it builds a throwaway
 repo whose `origin` reads as GitHub while its bytes go to a bare repo next door,
 stubs `gh`, and asserts each guard refuses for its own reason — and that nothing
-was pushed on the way out. Seven cases: one per precondition, two for the live-run
-guard (an open pull request and a leftover branch refuse independently), and a
-negative control proving none of them fires on a normal repository.
+was pushed on the way out. Eleven cases: one per precondition, two for the live-run
+guard (an open pull request and a leftover branch refuse independently), three for
+the scratch-clone guard (a shared checkout, another run's clone, and that it stays
+quiet outside Paperclip), one pinning that the scratch-clone guard is checked
+*before* the dirty-tree one, and a negative control proving none of them fires on a
+normal repository.
+
+### The workspace checkout is not private to a run
+
+An agent's workspace directory is shared by every run of that agent, and runs
+overlap — one heartbeat can still be finishing while the next has started. So a
+`git checkout`, `git am`, `git rebase` or `git reset --hard` in that directory is a
+write to another run's working tree.
+
+**A run must not do branch work in the workspace checkout.** Clone it:
+
+```bash
+cd "$(./ci/scratch-clone.sh)"
+```
+
+That is `git clone --shared` into `$PAPERCLIP_RUN_SCRATCH_DIR` — no network, no copy
+of the object store, a couple of hundred kilobytes, and Paperclip deletes it when the
+run ends. The clone keeps the source's `origin` (GitHub, which is what `gh` and the
+Actions API need), keeps the path it came from as a remote called `workspace`, copies
+the git identity — which is set per-repository in these workspaces, not globally, so a
+plain clone cannot commit — and stamps the owning run id into `paperclip.runScratch`.
+`--run` refuses to start unless it finds its own id there, which is what makes this a
+gate rather than a note in a document.
+
+This is TWO-103 one level up: the same cause, a fixed name that nobody owns. It bit
+twice on 2026-08-20, both times inside a single agent's own workspace. One tree was
+checked out, `git am`-ed, aborted and hard reset onto a fetched head three minutes
+after a commit; nothing was lost only because the work was already pushed. In the
+other, nine `ci-verify-two97/*` branches were committed and pushed out of a workspace
+after the run that owned it had ended.
+
+`reset --hard` and `checkout` leave a reflog entry for committed work. For
+uncommitted work they leave nothing at all — no undo, no trace, and no way to tell
+afterwards that anything was there. That is why this is a different directory rather
+than a rule to remember.
+
+One caveat with `--shared`: the clone borrows the source's object store rather than
+copying it, so a `git gc --prune` in the source can remove objects the clone was
+reaching through it. Commits pushed to `origin` are safe. A scratch clone kept past
+the end of its run is not — another reason `--run` refuses to use one it does not own.
 
 ## Release checklist
 
