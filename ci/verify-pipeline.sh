@@ -386,6 +386,31 @@ command -v gh >/dev/null || { fail "gh is not installed"; exit 1; }
 gh auth status >/dev/null 2>&1 || { fail "gh is not authenticated"; exit 1; }
 [ -z "$(git status --porcelain)" ] || { fail "working tree is dirty — commit or stash first"; exit 1; }
 
+# The owner/repo the Actions API is asked about. Resolved and checked here, in the
+# main shell, rather than inside the assertions: every use of it below sits in a
+# command substitution, and an `exit` in there kills only the subshell and lets the
+# run carry on with an empty value. That is the swallow this section exists to have
+# stopped doing, so it must not be reintroduced one level down.
+repo_slug() {
+  git config --get remote.origin.url \
+    | sed -E 's#^(git@github\.com:|https://([^@/]+@)?github\.com/)##; s#/+$##; s#\.git$##'
+}
+REPO_SLUG=$(repo_slug || true)
+[[ "$REPO_SLUG" =~ ^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$ ]] || {
+  fail "origin is not a GitHub repository: '$(git config --get remote.origin.url 2>/dev/null || echo unset)'. Results come from the GitHub Actions API, so this has to run in a clone whose origin is GitHub — not a workspace clone and not a local mirror. Nothing has been pushed."
+  exit 1
+}
+
+# Prove the credential can read results *before* opening eight pull requests. A
+# token with push access but without `Actions: read` gets all the way through the
+# run and then reads nothing back, which is indistinguishable from a pipeline that
+# never ran — and the two diagnoses point in opposite directions. Half a second
+# here, or forty minutes and the wrong answer there.
+gh api "repos/${REPO_SLUG}/actions/runs?per_page=1" >/dev/null 2>&1 || {
+  fail "cannot read the Actions API on ${REPO_SLUG}. The token needs 'Actions: read' — see the permissions listed at the top of this file. Nothing has been pushed."
+  exit 1
+}
+
 git fetch origin "$BASE_BRANCH" --quiet
 results=()
 
@@ -446,12 +471,13 @@ git checkout -q "$BASE_BRANCH" 2>/dev/null || git checkout -q "origin/${BASE_BRA
 POLL_INTERVAL=20
 CHECK_TIMEOUT=2400
 
-repo_slug() { git config --get remote.origin.url | sed -E 's#(git@github.com:|https://github.com/)##; s#\.git$##'; }
+# $REPO_SLUG is resolved and proven readable in the preconditions above, before
+# anything is pushed.
 
 # The newest run of each workflow on this branch — concurrency cancels the older
 # ones, and a cancelled predecessor is not the result we are asserting on.
 branch_runs() {
-  gh api "repos/$(repo_slug)/actions/runs?branch=$1&per_page=50" \
+  gh api "repos/${REPO_SLUG}/actions/runs?branch=$1&per_page=50" \
     --jq '[.workflow_runs[] | select(.event == "pull_request")]
           | group_by(.workflow_id) | map(max_by(.run_number))
           | .[] | "\(.id) \(.status)"' 2>/dev/null || true
@@ -463,19 +489,34 @@ branch_checks() {
   local id status
   while read -r id status; do
     [ -n "${id:-}" ] || continue
-    gh api "repos/$(repo_slug)/actions/runs/${id}/jobs?per_page=100" \
+    gh api "repos/${REPO_SLUG}/actions/runs/${id}/jobs?per_page=100" \
       --jq '.jobs[] | "\(.name)=\(.conclusion // "pending" | ascii_upcase)"' 2>/dev/null || true
   done <<< "$(branch_runs "$1")"
 }
 
-# Blocks until every run on the branch has finished. Returns non-zero on timeout
-# so the caller reports "never reported" rather than reading a half-finished run.
+# Blocks until every expected check has finished. Returns non-zero on timeout so
+# the caller reports "never reported" rather than reading a half-finished run.
+#
+# "Every run we can see has completed" is not the same condition, and the gap is
+# real: two workflows produce these checks — ci.yml and secret-scan.yml — and the
+# API only lists a run once GitHub has created it. If one workflow's run exists and
+# has finished while the other's has not been created yet, the weaker condition
+# returns immediately and the assertion reports a check that never ran, on a branch
+# where it was about to. Waiting on the check names the assertion actually uses
+# closes that, and costs one extra API read per poll.
 wait_for_checks() {
-  local branch="$1" waited=0 runs pending
+  local branch="$1" waited=0 runs pending reported missing
   while [ "$waited" -lt "$CHECK_TIMEOUT" ]; do
     runs=$(branch_runs "$branch")
     pending=$(awk '$2 != "completed"' <<< "$runs" | grep -c . || true)
-    [ -n "$runs" ] && [ "$pending" -eq 0 ] && return 0
+    if [ -n "$runs" ] && [ "$pending" -eq 0 ]; then
+      reported=$(branch_checks "$branch" | cut -d= -f1)
+      missing=0
+      for expected in "${EXPECTED_CHECKS[@]}"; do
+        grep -qxF "$expected" <<< "$reported" || missing=1
+      done
+      [ "$missing" -eq 0 ] && return 0
+    fi
     sleep "$POLL_INTERVAL"
     waited=$((waited + POLL_INTERVAL))
   done
@@ -492,9 +533,12 @@ check_branch() {
   checks=$(branch_checks "$branch")
 
   # A check that never reported is not a pass. If the workflow file has a syntax
-  # error, or Actions is disabled on the repo, `gh pr checks` returns nothing at
-  # all — and reading nothing as green is exactly the bug this script exists to
-  # catch, one level up.
+  # error, or Actions is disabled on the repo, the API returns nothing at all — and
+  # reading nothing as green is exactly the bug this script exists to catch, one
+  # level up. The other two ways to get nothing back — an origin that is not a
+  # GitHub repository, and a token without `Actions: read` — are ruled out in the
+  # preconditions before anything is pushed, so if this fires the pipeline really
+  # did not report.
   local absent=""
   for expected in "${EXPECTED_CHECKS[@]}"; do
     grep -q "^${expected}=" <<< "$checks" || absent="${absent} ${expected}"
