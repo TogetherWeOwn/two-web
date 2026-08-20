@@ -112,9 +112,29 @@ job_block() { awk -v id="$2" '$0 ~ "^  " id ":[[:space:]]*$" {j=1;next} j && /^ 
 # be blocked on. `deploy.yml` is `workflow_run`, `main-guard` is push-only: their
 # job ids look like perfectly good required contexts and would each hang every PR
 # forever. Matching a job id is not enough — it has to be a job that *reports*.
+#
+# The awk output goes through a here-string rather than a pipe. See the note on
+# `has_line` below: `awk | grep -q` under `pipefail` is a coin flip.
 triggers_on_pr() {
-  awk '/^on:/{o=1;next} o && /^[a-zA-Z]/{exit} o' "$1" | grep -qE '^\s+pull_request:?'
+  local on
+  on=$(awk '/^on:/{o=1;next} o && /^[a-zA-Z]/{exit} o' "$1")
+  grep -qE '^\s+pull_request:?' <<< "$on"
 }
+
+# grep for a pattern in some text, and say so honestly.
+#
+# Never write `producer | grep -q pattern` in this file. `grep -q` exits the
+# instant it matches; if the producer still has output to write it takes SIGPIPE
+# and dies with 141, and `set -o pipefail` makes the whole pipeline non-zero —
+# so a *successful* match reports as a failure. `if` suppresses errexit but not
+# pipefail, so the branch silently inverts.
+#
+# It is a race, so it depends on how far into the producer's output the match
+# lands and on how fast the machine is: `job_block budgets | grep -q 'npm run
+# build'` matched 65 lines from the end, passed on a laptop every time, and went
+# red on the runner (TWO-87). A check that fails only sometimes, only in CI, and
+# only when it should have passed is worse than no check.
+has_line() { grep -q "$2" <<< "$1"; }
 
 # What one job will actually report as: its `name:` if it sets one, its id if not.
 # Branch protection matches the check-run name, so a job that renames itself stops
@@ -122,8 +142,9 @@ triggers_on_pr() {
 # check" failure as requiring `ci`, but arriving later and looking like flakiness.
 # `^    name:` is job level; step names are deeper and carry a `- `.
 job_reported_name() {
-  local n
-  n=$(job_block "$1" "$2" | grep -m1 -E '^    name:' | sed 's/^    name:[[:space:]]*//' | sed 's/^["'"'"']//; s/["'"'"']$//')
+  local blk n
+  blk=$(job_block "$1" "$2")
+  n=$(grep -m1 -E '^    name:' <<< "$blk" | sed 's/^    name:[[:space:]]*//' | sed 's/^["'"'"']//; s/["'"'"']$//')
   [ -n "$n" ] && echo "$n" || echo "$2"
 }
 
@@ -535,14 +556,20 @@ check_branch() {
 
   # The named job must be the one that failed. Anything else — including a green
   # run — means the gate does not catch this, whatever else it caught.
-  if ! echo "$checks" | grep -q "^${expected_job}=FAILURE$"; then
+  #
+  # `has_line`, not a pipe: these two lines decide the verdict of the entire
+  # acceptance run, and `echo | grep -q` under pipefail can report a match as a
+  # miss. That would print "expected job 'static' to fail" underneath a job that
+  # had failed exactly as intended — the run says the merge gate is broken when
+  # it is working, which is the one wrong answer nobody double-checks.
+  if ! has_line "$checks" "^${expected_job}=FAILURE$"; then
     fail "${why}: expected job '${expected_job}' to fail, got: $(echo "$checks" | tr '\n' ' ')"
     return 1
   fi
   # The aggregate is what branch protection requires. A named job going red while
   # `tests` stays green is the exact failure this whole script exists to catch: it
   # looks like a working pipeline and merges anyway.
-  if ! echo "$checks" | grep -q "^tests=FAILURE$"; then
+  if ! has_line "$checks" "^tests=FAILURE$"; then
     fail "${why}: '${expected_job}' failed but the required 'tests' check did not — the gate would let this merge"
     return 1
   fi
