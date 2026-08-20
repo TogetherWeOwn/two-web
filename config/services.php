@@ -45,9 +45,25 @@ return [
          */
         'redirect' => '/auth/discord/callback',
 
-        // The TWO server. Roles are read per guild, so with this blank nobody can
-        // sign in — which is the safe direction to fail.
-        'guild_id' => env('DISCORD_GUILD_ID'),
+        /*
+         | The TWO server. Roles are read per guild, so a blank one stops every
+         | member at the door — and that outage is invisible until somebody
+         | clicks the button, because nothing at deploy time knows it is missing.
+         |
+         | TWO has exactly one Discord server, this is not a secret, and anyone
+         | can check it without credentials:
+         |   GET https://discord.com/api/v10/guilds/326474832151838730/widget.json
+         |     -> {"id":"326474832151838730","name":"TogetherWeOwn", ...}
+         | So it is a default here and the variable only overrides it. Getting
+         | this wrong now takes actively typing a wrong snowflake rather than
+         | forgetting a line.
+         |
+         | `?:` and not `??`: phpdotenv reads `DISCORD_GUILD_ID=` as an empty
+         | string rather than as absent, and every .env in this repo has that
+         | blank line — with `??` the blank would win and the default would
+         | never fire. tests/Feature/Auth/DiscordGuildIdTest.php pins that.
+         */
+        'guild_id' => env('DISCORD_GUILD_ID') ?: '326474832151838730',
 
         // Role IDs, comma separated. Snowflakes, never names: a renamed role must
         // not quietly hand out or take away the admin panel. Blank means nobody

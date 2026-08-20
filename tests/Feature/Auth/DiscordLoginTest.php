@@ -255,6 +255,23 @@ it('does not white-screen when Discord is down', function () {
     expect(User::query()->count())->toBe(0);
 });
 
+it('refuses to sign anybody in if the server we read roles from is blank', function () {
+    // Fail closed, never open. A blank guild must not mean "skip the role check
+    // and let them in as a member" — it means we cannot tell who they are here.
+    // config/services.php now defaults this so it cannot happen by omission
+    // (see DiscordGuildIdTest), but the controller's guard stays either way.
+    config(['services.discord.guild_id' => '']);
+    stubSocialite();
+
+    $response = $this->get('/auth/discord/callback?code=good&state=x');
+
+    $response->assertRedirect(route('home'));
+    $response->assertSessionHas('auth_error', 'unavailable');
+
+    $this->assertGuest();
+    expect(User::query()->count())->toBe(0);
+});
+
 it('does not white-screen when Discord never answers', function () {
     stubSocialite();
     Http::fake(fn () => throw new ConnectionException('timed out'));

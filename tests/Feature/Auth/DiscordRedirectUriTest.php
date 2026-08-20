@@ -7,9 +7,13 @@
  * string we send is pinned by a test rather than by a line in an environment
  * file somebody has to remember to set correctly.
  *
- * These are the URIs registered on the OAuth application (added by the founder,
- * 2026-08-20). They cannot be read back from Discord — a registered URI and a
- * bogus one are indistinguishable from outside — so this list is a copy, and
+ * These are the *login* URIs registered on the OAuth application (added by the
+ * founder, 2026-08-20). Six rows were registered in total: these three, plus
+ * /join/callback on the same three origins, which belongs to the one-click join
+ * journey and not to this file. Do not delete the /join rows as strays.
+ *
+ * They cannot be read back from Discord — a registered URI and a bogus one are
+ * indistinguishable from outside, settled twice — so this list is a copy, and
  * changing it means changing the application settings too.
  *
  * `localhost` and `127.0.0.1` are different hosts to Discord, which is why both
