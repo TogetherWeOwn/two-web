@@ -179,12 +179,12 @@ QA does not block on style preference. Only on the six boxes, and always by numb
 
 - **CI green on `main` → staging deploys automatically.** That is box 5, done for
   you.
-- **Production is manual** — `workflow_dispatch`, through a GitHub environment with
-  required reviewers. Never automatic.
+- **This workflow deploys staging only.** Production is not in CI at all — see
+  below. `workflow_dispatch` re-runs staging and takes no environment argument.
 - **GitHub Actions never SSHes into a server.** No deploy key lives in CI. A deploy
   is one authenticated POST to a Forge webhook; Forge pulls on the box, migrates,
   and swaps the symlink. That constraint is the Web Lead's and it is a good one.
-- Both jobs **skip cleanly, green, when their secret is unset.** Nothing is
+- The job **skips cleanly, green, when its secret is unset.** Nothing is
   provisioned yet. A missing deploy target must never look like a broken build —
   that is how a team learns to ignore a red X.
 
@@ -193,12 +193,43 @@ Secrets and variables to add once TWO-37 is approved and provisioned:
 | Name | Kind | Value |
 |---|---|---|
 | `FORGE_STAGING_DEPLOY_HOOK` | secret | Forge staging deploy webhook URL |
-| `FORGE_PRODUCTION_DEPLOY_HOOK` | secret | Forge production deploy webhook URL |
 | `STAGING_URL` | variable | e.g. `https://staging.togetherweown.com` |
 
-A 200 from Forge means the deploy was *queued*, not that it is live, so both jobs
-then poll `/up` until the new release answers. Ten minutes of silence is a failure
+Do not add a production deploy hook as a repo secret. Nothing reads it, and the
+staging job logs a warning if one appears.
+
+A 200 from Forge means the deploy was *queued*, not that it is live, so the job
+then polls `/up` until the new release answers. Ten minutes of silence is a failure
 and the previous release is one click away in Forge.
+
+### Production deploys are manual, in the hosting dashboard
+
+Not in GitHub Actions, and not because nobody has got round to wiring it. `two-web`
+is **private on GitHub Free**, and on that plan environments cannot be configured at
+all — GitHub's own words: *"any configured protection rules or environment secrets
+will be ignored, and you will not be able to configure any environments."*
+
+So the `environment: production` gate this file used to describe was not an
+unconfigured approval. It was an **ignored** one. There is no settings page to visit
+and no reviewer to add. The day somebody created the production hook, anyone with
+write access could have opened Actions, clicked Run workflow, and shipped — no
+approval, no prompt, no record. Four teams have write access. The release checklist
+below would have become advisory and QA's sign-off decorative, with nobody editing a
+line of code to make it happen.
+
+A gate that fails silently is worse than no gate, because the file says the gate is
+there. So the job is gone rather than guarded (TWO-91). Production ships by hand from
+the hosting provider's dashboard, after the checklist below. Whoever holds that login
+is the approval — real access control we are paying for either way, instead of a
+simulation of one.
+
+This is the same root cause as the two other holes on record: no branch protection,
+and CODEOWNERS not routing reviews. Three symptoms, one plan. GitHub Team would
+restore all three; that is a spend decision for the founder and it should be answered
+alongside the hosting decision on TWO-37, before production exists rather than after.
+
+Restore the job with `git revert` of the TWO-91 commit **only** once the repo is on a
+plan that enforces environment protection rules. Do not hand-rebuild it.
 
 ---
 
@@ -259,6 +290,11 @@ fails. **QA does not sign off TWO-22 until this has passed once, for real.**
 
 QA signs this off. Nothing reaches production without it.
 
+This checklist **is** the approval gate. Nothing in GitHub enforces it on our plan
+(see *Production deploys are manual* above), so it is enforced by the person who
+triggers the deploy refusing to trigger it unsigned. Note the commit SHA you signed
+off, and deploy that SHA.
+
 - [ ] `main` is green — all of `static`, `pest`, `dusk`, `budgets`, and the `tests` aggregate
 - [ ] All six Dusk journeys present and passing, including the degraded path
 - [ ] Flake rate for the week is zero, or every open flake has an issue and a decision
@@ -272,6 +308,8 @@ QA signs this off. Nothing reaches production without it.
 - [ ] Migrations reviewed for a safe forward path, and a rollback that is understood
 - [ ] No secret in the diff, no secret in the history
 - [ ] Someone is available to watch it after it goes out
+- [ ] **Then, and only then:** the production deploy is triggered by hand in the
+      hosting dashboard, on the signed-off SHA, by the person holding that login
 
 If a deadline would require shipping something that has not passed this, that goes
 to the CEO in writing. It is not QA's trade-off to make alone, and it is not the
