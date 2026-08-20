@@ -32,6 +32,15 @@
 # That is a separate permission from the three ci/verify-pipeline.sh needs; a
 # token that can open PRs cannot necessarily read the protection rule, and the
 # failure is a 404 that reads identically to "the branch is not protected".
+#
+# Exits:
+#   0  the rule was read and it enforces what the pipeline claims
+#   1  the rule was read and it does not, or there is no rule — a finding
+#   2  the rule could not be read — no verdict either way
+#
+# 2 is not a softer 1. A caller that collapses them is back to the bug of TWO-96:
+# treating "I could not check" as "I checked and it is bad" is how a red report
+# gets written about a branch nobody read. Both fail closed; only 1 is evidence.
 
 set -euo pipefail
 
@@ -46,7 +55,10 @@ log()  { printf '\n\033[1m==> %s\033[0m\n' "$*"; }
 
 rc=0
 
-command -v jq >/dev/null || { printf 'FAIL: jq is not installed\n' >&2; exit 1; }
+# Could not check. Never a verdict about the rule — see the exit codes above.
+undetermined() { printf '\033[31mFAIL: %s\033[0m\n' "$*" >&2; exit 2; }
+
+command -v jq >/dev/null || undetermined "jq is not installed, so nothing here can read a protection rule."
 
 # --- the list this repo believes in -----------------------------------------
 #
@@ -58,40 +70,110 @@ required_from_source() {
   sed -n 's/^REQUIRED_CHECKS=(\(.*\))$/\1/p' "$PIPELINE" | tr ' ' '\n' | grep -v '^$' || true
 }
 
-[ -f "$PIPELINE" ] || { printf 'FAIL: %s not found — run this from the repo\n' "$PIPELINE" >&2; exit 1; }
+[ -f "$PIPELINE" ] || undetermined "$(printf '%s not found — run this from the repo' "$PIPELINE")"
 expected=$(required_from_source)
-[ -n "$expected" ] || {
-  printf 'FAIL: could not read REQUIRED_CHECKS out of %s. Refusing to check an empty list against the protection rule: that reports green while asserting nothing.\n' "$PIPELINE" >&2
-  exit 1
+[ -n "$expected" ] || undetermined "$(printf 'could not read REQUIRED_CHECKS out of %s. Refusing to check an empty list against the protection rule: that reports green while asserting nothing.' "$PIPELINE")"
+
+# --- what a response that is not a rule means --------------------------------
+#
+# TWO-96. `gh api` writes the API's error body to *stdout* and its own summary to
+# stderr, so a refused call leaves output that is non-empty and valid JSON. The
+# guard that used to sit here tested the body for emptiness, which those bodies
+# pass, and every assertion below then read a field off an error message, found
+# it absent, and printed a full red report describing an unprotected branch.
+#
+# Five answers arrive down that one path and they do not mean the same thing:
+#
+#   200                                     a rule exists — assert against it
+#   404 Branch not protected                genuinely unprotected — red is right
+#   404 Not Found                           the token cannot see the repo
+#   403 Resource not accessible ...         no `Administration: read`
+#   403 Upgrade to GitHub Pro ...           the plan has no such feature at all
+#
+# Only the second is a finding about this repo's rule. The third and fourth are
+# facts about the reader and support no verdict at all. The fifth is a finding
+# with a different owner and a different remedy — you cannot fix by configuration
+# something the plan does not offer.
+#
+# Matched on the message before the status, because the two 403s and the two 404s
+# differ only in the message, and it is exactly those pairs the old guard could
+# not tell apart.
+not_a_rule() {
+  local status="$1" msg="$2"
+
+  case "$msg" in
+    'Branch not protected'*)
+      printf '\033[31mFAIL: `%s` is not protected. There is no rule, so every job in ci.yml is advisory: a pull request with all six checks red has a green merge button, and the six-box gate holds only while people choose to look.\033[0m\n' \
+        "$BASE_BRANCH" >&2
+      exit 1 ;;
+    'Upgrade to GitHub'*)
+      printf '\033[31mFAIL: GitHub'"'"'s plan for this repository has no branch protection to configure (HTTP %s: %s). This is not a rule someone forgot to set — on this plan the API refuses to hold one, so `main` cannot be protected at all until the plan changes. Nothing in the pipeline gates until then, and the fix is a purchase, not a setting.\033[0m\n' \
+        "${status:-403}" "$msg" >&2
+      exit 1 ;;
+    'Resource not accessible'*|'Must have admin rights'*)
+      undetermined "$(printf 'this token cannot read the protection rule on `%s` (HTTP %s: %s) — it is missing `Administration: read`. That is a fact about the token, not about the branch, so this run cannot conclude the rule is missing *or* present. Grant the permission and run again.' "$BASE_BRANCH" "${status:-403}" "$msg")" ;;
+    'Not Found'*)
+      undetermined "$(printf 'GitHub returned 404 Not Found, which for this endpoint means the token cannot see the repository — a protected branch and an invisible one answer the same way. `Branch not protected` is the reply that would mean unprotected, and this is not it, so this run cannot conclude either way.')" ;;
+  esac
+
+  case "$status" in
+    401)
+      undetermined "$(printf 'GitHub rejected the credential (HTTP 401: %s). Nothing was read, so nothing is concluded.' "${msg:-Bad credentials}")" ;;
+  esac
+
+  undetermined "$(printf 'the response is not a branch protection rule%s%s. It parsed, but it carries none of the keys a rule has, so it is a malformed or unrelated response rather than an empty rule — and an empty rule would be a finding while this is only a reason to stop.' \
+    "${status:+ (HTTP $status)}" "${msg:+: $msg}")"
 }
 
 # --- the rule GitHub actually applies ---------------------------------------
+http_status=""
 if [ -n "$SOURCE" ]; then
-  [ -f "$SOURCE" ] || { printf 'FAIL: %s not found\n' "$SOURCE" >&2; exit 1; }
+  [ -f "$SOURCE" ] || undetermined "$(printf '%s not found' "$SOURCE")"
   json=$(cat "$SOURCE")
   log "Protection rule from ${SOURCE}"
 else
-  command -v gh >/dev/null || { printf 'FAIL: gh is not installed\n' >&2; exit 1; }
-  gh auth status >/dev/null 2>&1 || { printf 'FAIL: gh is not authenticated\n' >&2; exit 1; }
+  command -v gh >/dev/null || undetermined "gh is not installed"
+  gh auth status >/dev/null 2>&1 || undetermined "gh is not authenticated"
 
   slug=$(git config --get remote.origin.url \
     | sed -E 's#^(git@github\.com:|https://([^@/]+@)?github\.com/)##; s#/+$##; s#\.git$##' || true)
-  [[ "$slug" =~ ^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$ ]] || {
-    printf 'FAIL: origin is not a GitHub repository (%s). The protection rule only exists on GitHub, so this has to run in a clone whose origin is GitHub — not a workspace clone and not a local mirror. Save the response with `gh api repos/OWNER/REPO/branches/main/protection > p.json` elsewhere and pass the file.\n' \
-      "$(git config --get remote.origin.url 2>/dev/null || echo unset)" >&2
-    exit 1
-  }
+  [[ "$slug" =~ ^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$ ]] || undetermined "$(printf 'origin is not a GitHub repository (%s). The protection rule only exists on GitHub, so this has to run in a clone whose origin is GitHub — not a workspace clone and not a local mirror. Save the response with `gh api repos/OWNER/REPO/branches/main/protection > p.json` elsewhere and pass the file.' \
+      "$(git config --get remote.origin.url 2>/dev/null || echo unset)")"
 
   log "Protection rule on ${slug}:${BASE_BRANCH}"
-  json=$(gh api "repos/${slug}/branches/${BASE_BRANCH}/protection" 2>/dev/null || true)
-  [ -n "$json" ] || {
-    printf 'FAIL: could not read protection on %s:%s. Either the branch is unprotected — in which case every check on this repo is advisory and a red pull request merges — or the token lacks `Administration: read`. Those two point in opposite directions, so check the permission before concluding the first. `gh api repos/%s/branches/%s/protection` shows which.\n' \
-      "$slug" "$BASE_BRANCH" "$slug" "$BASE_BRANCH" >&2
-    exit 1
-  }
+
+  # `-i` for the status line. It is the only part of the response that says
+  # whether the body is a rule or an apology, and reading the body without it is
+  # TWO-96. `|| true` because gh exits non-zero on a non-2xx *and still prints* —
+  # the exit code says a call failed, the status line says how.
+  response=$(gh api -i "repos/${slug}/branches/${BASE_BRANCH}/protection" 2>/dev/null) || true
+  response=${response//$'\r'/}
+  http_status=$(head -1 <<< "$response" | awk '{print $2}')
+  json=$(sed -e '1,/^$/d' <<< "$response")
+
+  [[ "$http_status" =~ ^[0-9]{3}$ ]] || undetermined "$(printf 'gh returned no HTTP response for repos/%s/branches/%s/protection — no status line, so the request never reached GitHub or gh failed before sending it. Silence is not an answer about the rule.' \
+    "$slug" "$BASE_BRANCH")"
+
+  if [ "$http_status" != "200" ]; then
+    not_a_rule "$http_status" "$(jq -r '.message // ""' <<< "$json" 2>/dev/null || true)"
+  fi
 fi
 
-jq -e . >/dev/null 2>&1 <<< "$json" || { printf 'FAIL: protection response is not JSON\n' >&2; exit 1; }
+jq -e . >/dev/null 2>&1 <<< "$json" || undetermined "protection response is not JSON"
+
+# A body can be valid JSON, an object even, and still not be a rule — an error
+# body is the common case, and the file form reaches it too: the usage above
+# tells you to save the response with `gh api ... > p.json`, and on a failed call
+# that file holds the apology. Stop here rather than fall through, because every
+# assertion below would read its field off that object, find it absent, and
+# report an unprotected branch that nobody looked at.
+jq -e 'type == "object" and (
+         has("url") or has("required_status_checks") or has("required_pull_request_reviews")
+         or has("enforce_admins") or has("allow_force_pushes") or has("allow_deletions")
+         or has("required_linear_history") or has("required_conversation_resolution")
+         or has("lock_branch") or has("block_creations")
+       )' >/dev/null 2>&1 <<< "$json" \
+  || not_a_rule "$http_status" "$(jq -r 'if type == "object" then (.message // "") else "" end' <<< "$json" 2>/dev/null || true)"
 
 # 1. Required status checks exist at all. Without this block every job in the
 #    pipeline is advisory: they all run, they all report, and a pull request with
