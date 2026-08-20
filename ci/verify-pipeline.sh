@@ -829,8 +829,17 @@ cleanup_selftest() {
 # --- the breakages ----------------------------------------------------------
 # Each writes exactly one deliberate defect into the working tree. Deterministic on
 # purpose: a verification that itself flakes teaches nothing.
+#
+# Each also names the paths it touches in TOUCHED, and open_pr stages those and
+# nothing else. `git add -A` would stage whatever happened to be in the tree —
+# including a file some other process wrote while this script was mid-run — and a
+# "deliberately broken" pull request carrying an unrelated change proves nothing
+# about which change reddened the job. Naming the paths also gives open_pr something
+# to check the result against: a sed whose anchor has moved leaves those paths
+# unchanged, and the case that used to prove something quietly stops.
 
 break_pint() {
+  TOUCHED=(app/CiVerifyBadFormatting.php)
   # Laravel preset wants braces, spacing and a trailing newline. This has none.
   cat > app/CiVerifyBadFormatting.php <<'PHP'
 <?php
@@ -843,6 +852,7 @@ PHP
 }
 
 break_phpstan() {
+  TOUCHED=(app/CiVerifyTypeError.php)
   # Declared to return string, returns int. Level 8 catches this immediately.
   cat > app/CiVerifyTypeError.php <<'PHP'
 <?php
@@ -860,6 +870,7 @@ PHP
 }
 
 break_pest() {
+  TOUCHED=(tests/Feature/CiVerifyFailingTest.php)
   cat > tests/Feature/CiVerifyFailingTest.php <<'PHP'
 <?php
 
@@ -870,6 +881,7 @@ PHP
 }
 
 break_tokens() {
+  TOUCHED=(resources/css/two.css)
   # One hex nudged in the vendored design system. Nothing in this repo checks
   # contrast — two-design does, and that guarantee only holds while our copy is
   # byte-identical. Without the digest test this is completely silent: the page
@@ -879,6 +891,7 @@ break_tokens() {
 }
 
 break_dusk() {
+  TOUCHED=(resources/views/home.blade.php)
   # Hide the heading with CSS. The HTML still contains the text, so the *feature*
   # test's assertSee passes and only the real browser notices it is invisible —
   # which is the whole reason we pay for Dusk. A breakage that also trips `tests`
@@ -887,12 +900,14 @@ break_dusk() {
 }
 
 break_a11y() {
+  TOUCHED=(resources/views/home.blade.php)
   # An image with no alt text. wcag2a `image-alt` — a real barrier, and a rule axe
   # detects with total reliability. Invisible to every other job.
   sed -i 's#</x-layouts.app>#    <img src="/favicon.ico" width="16" height="16">\n</x-layouts.app>#' resources/views/home.blade.php
 }
 
 break_slowserver() {
+  TOUCHED=(resources/views/home.blade.php)
   # Three seconds of server think-time before anything can paint. A real member on
   # a real phone waits three seconds; the budget has to say so.
   #
@@ -967,6 +982,7 @@ break_secret() {
 }
 
 break_lcp() {
+  TOUCHED=(public/ci-verify-hero.bmp resources/views/home.blade.php)
   # An oversized hero image above the fold. This is the case that actually exercises
   # the CEO's LCP < 2.0s budget, and it exists because `slowserver` above does not:
   # what reddens `budgets` there is `server-response-time`. Without this case the
@@ -1033,6 +1049,7 @@ break_lcp() {
 }
 
 break_gate() {
+  TOUCHED=("$WORKFLOW")
   # Delete the aggregate's `if: always()`. Every job still passes, every test still
   # passes, and the pipeline stops being a gate: a red `static` now *skips* `tests`,
   # and GitHub counts a skipped required check as a passed one. Nothing else in the
@@ -1339,8 +1356,25 @@ open_pr() {
   local slug="$1" title="$2"
   local branch="${BRANCH_PREFIX}/${slug}"
   git checkout -q -B "$branch" "origin/${BASE_BRANCH}"
-  "break_${slug}" 2>/dev/null || true
-  git add -A
+
+  # A breakage that fails is not a breakage that got skipped. break_lcp checks the
+  # anchor it seds against and says so when it has moved — under the old
+  # `2>/dev/null || true` that message went to /dev/null and the script opened a
+  # pull request that was not broken, which reads as the pipeline failing to catch
+  # something. Let it speak and let it stop the run.
+  TOUCHED=()
+  "break_${slug}" || { fail "break_${slug} could not apply its breakage. Fix the case; a pull request opened from here would prove nothing."; exit 1; }
+
+  # Stage what the case declared, then check the tree agrees. Two failure modes,
+  # both of which produce a green-looking run that verified nothing: a sed whose
+  # anchor moved changes no file, and a concurrent write puts someone else's edit
+  # in a commit whose message says it is one deliberate defect.
+  git add -- "${TOUCHED[@]}"
+  [ -n "$(git diff --cached --name-only)" ] || { fail "break_${slug} changed nothing under ${TOUCHED[*]}. The case is a no-op — an anchor it edits has probably moved."; exit 1; }
+  local stray
+  stray=$(git status --porcelain --untracked-files=all | grep -E '^(\?\?| M| D)' || true)
+  [ -z "$stray" ] || { fail "break_${slug} left changes outside ${TOUCHED[*]}: $(tr '\n' ';' <<< "$stray"). Something else is writing to this working tree. Stop rather than push a commit that says it is one deliberate defect and is not."; exit 1; }
+
   git commit -q -m "ci-verify: ${title}" -m "Deliberately broken. Opened by ci/verify-pipeline.sh to prove the merge gate works. Close it, do not merge it."
   git push -q -u origin "$branch" --force-with-lease
   gh pr create --base "$BASE_BRANCH" --head "$branch" \
@@ -1362,7 +1396,7 @@ done
 log "Opening the clean pull request"
 git checkout -q -B "${BRANCH_PREFIX}/clean" "origin/${BASE_BRANCH}"
 printf '\n<!-- ci-verify: a no-op change so a clean PR has something to build. -->\n' >> README.md
-git add -A
+git add -- README.md
 git commit -q -m "ci-verify: a clean PR goes green"
 git push -q -u origin "${BRANCH_PREFIX}/clean" --force-with-lease
 gh pr create --base "$BASE_BRANCH" --head "${BRANCH_PREFIX}/clean" \
