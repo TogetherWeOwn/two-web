@@ -188,6 +188,11 @@ caught the spread, which has no key to match. The check now runs the same
 to miss. If `ci/lighthouserc.cjs` cannot be loaded at all, `--lint` goes red for
 that too — a budget that cannot be read is not being enforced.
 
+One known gap, so nobody has to rediscover it: a duplicate entry that is *identical*
+to the pinned one passes, because the effective budget is still the right budget.
+Verified, not assumed. It goes red the moment either line is edited, which is the
+moment a second entry starts mattering.
+
 Each budget also has a live case behind it in `verify-pipeline.sh`, which matters
 because the two performance cases go red for different reasons and only one of them
 is about LCP:
@@ -367,6 +372,14 @@ cd "$(./ci/scratch-clone.sh)"              # --run needs a checkout of its own �
 Everything above the last two proves the *jobs* go red for the right reasons. That
 is not the same as proving a red job blocks the merge — see "Reading the rule, not
 the list" above for the fact none of them ever read it.
+
+`--run` is the expensive one, and it got more expensive when the `lcp` case split
+off `slowserver`: **eleven pull requests** now, ten deliberate breakages and one
+clean control, each waiting on a full CI run. Budget most of an hour and do not
+start one you cannot sit with. One of the eleven also pushes a 1.6 MB image on
+purpose — the `lcp` breakage below — and since TWO-109 `--cleanup` deletes the
+`ci-verify/*` refs as well as closing the pull requests, so that blob does not
+outlive the run.
 
 `--lint` is the only thing watching the gate, so nothing downstream notices if it
 quietly stops catching anything. `verify-lint-selftest.sh` is the check on the
