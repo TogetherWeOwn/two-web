@@ -238,11 +238,12 @@ plan that enforces environment protection rules. Do not hand-rebuild it.
 A pipeline nobody has watched fail is a pipeline nobody knows works.
 
 ```bash
-./ci/verify-pipeline.sh --lint       # offline, half a second, no gh — runs in `static`
-./ci/verify-lint-selftest.sh         # proves --lint still catches things — runs in `static`
-./ci/verify-pipeline.sh              # dry run — prints what it would do
-./ci/verify-pipeline.sh --run        # opens the PRs, waits, asserts, cleans up
-./ci/verify-pipeline.sh --cleanup    # if a run was interrupted
+./ci/verify-pipeline.sh --lint          # offline, half a second, no gh — runs in `static`
+./ci/verify-lint-selftest.sh            # proves --lint still catches things — runs in `static`
+./ci/verify-run-preconditions-selftest.sh  # proves --run still refuses to start — runs in `static`
+./ci/verify-pipeline.sh                 # dry run — prints what it would do
+./ci/verify-pipeline.sh --run           # opens the PRs, waits, asserts, cleans up
+./ci/verify-pipeline.sh --cleanup       # if a run was interrupted
 ```
 
 `--lint` is the only thing watching the gate, so nothing downstream notices if it
@@ -285,6 +286,31 @@ mode that lets a broken PR merge while looking perfectly healthy.
 
 Run it when the repo lands, and again after any change to `ci.yml` that alters what
 fails. **QA does not sign off TWO-22 until this has passed once, for real.**
+
+### One `--run` at a time
+
+Every case uses a fixed branch name — `ci-verify/pint`, `ci-verify/gate`. Two runs
+at once therefore share branches: the second push lands on the first run's branch
+and silently changes its PR's head commit mid-flight, and whichever `cleanup()`
+finishes first closes and deletes *both* runs' work. The survivor is then told its
+checks never reported on a branch that no longer exists — a dead-pipeline diagnosis
+for something that was never about the pipeline. This happened on 2026-08-20:
+nine `ci-verify/*` PRs opened and closed under an unrelated run (TWO-103).
+
+So `--run` refuses to start when any `ci-verify/*` pull request is open or any
+`ci-verify/*` branch is on the remote, and names what it found. Unique per-run
+branch names would let both proceed, and two people running the acceptance suite
+at once is a thing to notice, not a thing to support. If the branches are leftovers
+from a run that was killed, `--cleanup` clears them.
+
+`--run` has five such preconditions, all of which fire in the first second rather
+than forty minutes in: `gh` is authenticated, `origin` is a GitHub repository (not
+a workspace clone — the results come from the GitHub Actions API), the working tree
+is clean, the Actions API is readable, and no other run is live.
+`verify-run-preconditions-selftest.sh` is the check on those: it builds a throwaway
+repo whose `origin` reads as GitHub while its bytes go to a bare repo next door,
+stubs `gh`, and asserts each guard refuses for its own reason — and that nothing
+was pushed on the way out.
 
 ## Release checklist
 

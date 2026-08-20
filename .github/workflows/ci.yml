@@ -50,6 +50,16 @@ jobs:
       - name: Gate wiring self-test
         run: ./ci/verify-lint-selftest.sh
 
+      # And the checks that stop the acceptance run before it wastes forty minutes
+      # answering the wrong question — an unauthenticated gh, a workspace clone for
+      # an origin, a dirty tree, an unreadable Actions API, or another `--run`
+      # already live on the same fixed branch names (TWO-103). A precondition that
+      # has quietly stopped firing is indistinguishable from one with nothing to
+      # complain about, so it needs the same treatment `--lint` gets. Throwaway
+      # repo, stub gh, no network.
+      - name: Run preconditions self-test
+        run: ./ci/verify-run-preconditions-selftest.sh
+
       - uses: shivammathur/setup-php@v2
         with:
           php-version: ${{ env.PHP_VERSION }}
