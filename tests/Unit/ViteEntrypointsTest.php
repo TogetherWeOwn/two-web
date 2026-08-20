@@ -64,8 +64,18 @@ function viteConfiguredInputs(): array
 
 it('declares an input in vite.config.js for every entrypoint a view asks for', function () {
     $inputs = viteConfiguredInputs();
+    $directives = viteDirectiveEntrypoints();
 
     expect($inputs)->not->toBe([], 'vite.config.js has no `input:` list — nothing would be built at all.');
+
+    // Without this, the test passes by finding nothing. Every entrypoint in the app
+    // is named by one line in one Blade file, and this test reaches it through a
+    // regex over a hardcoded directory — move `resources/views`, or write the
+    // directive in a spelling the pattern does not cover, and the loop below runs
+    // zero times and reports green. That is worth guarding against precisely
+    // because this test is what pays for Tests\TestCase stubbing Vite: if it
+    // silently checks nothing, the trade is silently off.
+    expect($directives)->not->toBe([], 'No @vite directive was found in any Blade view. Either the app genuinely has none, or this test has stopped finding them — check the pattern before assuming the former.');
 
     $undeclared = [];
 
