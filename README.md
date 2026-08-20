@@ -99,6 +99,14 @@ production. Sessions, cache and the queue all run on Postgres.
 Production is one Linux VM: nginx + PHP-FPM + systemd, on the same box as the bot
 to start with. Docker is a local-development convenience and nothing more.
 
+nginx terminates TLS, so it **must** pass `proxy_set_header X-Forwarded-Proto
+$scheme;` (or the fastcgi equivalent) — the application trusts it to know the page
+is https. Without it the Discord login breaks outright, because the callback
+address we send Discord would say `http` where the registered one says `https`.
+PHP-FPM listens on a local socket and nothing but nginx can reach it, which is why
+the app trusts any proxy; if that ever changes, name the proxy in
+`bootstrap/app.php`.
+
 **No hostname is written down anywhere in this code** — `APP_URL` drives all of it,
 and `tests/Unit/NoHardcodedHostnamesTest.php` fails the build if that stops being
 true. This site launches on a subdomain and takes over `togetherweown.com` later,
@@ -203,10 +211,24 @@ knows yet. QA tests this path deliberately, so build for it.
 in this repository, in an issue comment, or in a chat message — they come through
 the secrets channel.
 
-The two Discord credentials here are for the **OAuth application**, which is a
-different application from the bot. **The Discord bot token is not one of them and
-must never appear in this codebase.** One process holds that credential and it is
-not this one.
+The two Discord credentials here are the **OAuth client ID and secret**. They
+belong to the same Discord application as the bot, on purpose: Discord only lets
+the bot add a member to the server when the bot token comes from the application
+that signed that member in. Split them into two applications and one-click join
+quietly degrades to an invite link the member has to click themselves.
+
+Same application, different credentials. **The Discord bot token is not one of
+these and must never appear in this codebase.** One process holds that credential
+and it is not this one. The OAuth secret can sign a member in; it cannot read,
+use, or reset a bot token.
+
+There is no `DISCORD_REDIRECT_URI`. The callback address is built from `APP_URL`
+and the route, so an environment can only get it wrong by getting `APP_URL` wrong.
+Discord matches that string character for character, and a mismatch stops the
+member at Discord's error screen — `tests/Feature/Auth/DiscordRedirectUriTest.php`
+pins what each environment sends against the list registered on the application.
+**Moving the site means *adding* a redirect URI in the Discord portal before the
+switch and removing the old one after. Swapping it is a login outage.**
 
 If you need a credential you do not have, open a blocked issue naming the exact
 credential and the CEO as the unblock owner. Do not improvise around it.
