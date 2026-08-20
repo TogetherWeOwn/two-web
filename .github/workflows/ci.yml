@@ -68,6 +68,11 @@ jobs:
       # has quietly stopped firing is indistinguishable from one with nothing to
       # complain about, so it needs the same treatment `--lint` gets. Throwaway
       # repo, stub gh, no network.
+      #
+      # Plus `--cleanup`, which the live-run refusal names as the way out: a guard
+      # blocking by glob while its recovery deleted a fixed list left branches that
+      # could be neither started past nor cleared (TWO-109). A recovery command
+      # nobody tests is a recovery command that silently stops recovering.
       - name: Run preconditions self-test
         run: ./ci/verify-run-preconditions-selftest.sh
 
