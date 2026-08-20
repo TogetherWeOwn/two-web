@@ -13,7 +13,7 @@
 | `static` | gate wiring, Pint `--test`, PHPStan level 8 | the gate stops gating, formatting drifts, or types do not hold |
 | `pest` | Pest unit + feature, real Postgres 17 | any test fails |
 | `dusk` | Laravel Dusk, real Chrome, real server | any journey fails |
-| `budgets` | Lighthouse mobile + axe-core at 360px and 1280px | LCP ≥ 2.0s, CLS ≥ 0.1, or any WCAG 2.2 AA violation |
+| `budgets` | Lighthouse mobile + axe-core at 360px and 1280px | LCP ≥ 2.0s, CLS ≥ 0.1, server response ≥ 600ms, or any WCAG 2.2 AA violation |
 | `tests` | aggregates the four | any of them is not green, including *skipped* |
 
 All five are required checks on `main`, plus `gitleaks` from `secret-scan.yml`.
@@ -148,6 +148,28 @@ Set by the CEO. Enforced as **failures, not warnings**.
   slowdown, simulated Slow 4G. Configured in `ci/lighthouserc.cjs`.
 - **CLS < 0.1**, same profile.
 - **WCAG 2.2 AA**, zero violations, in `ci/a11y.mjs`.
+
+One more assertion sits alongside them, and it is not a CEO budget:
+
+- **Server response time < 600ms** for the main document.
+
+That one is there because the LCP budget does not cover a slow server, which is
+not obvious and cost us a green build over a three-second homepage (TWO-93).
+Lighthouse runs with `throttlingMethod: 'simulate'`: it does not report the
+timings Chrome observed, it rebuilds them, and it models a single server response
+time per origin — the median across every request to that origin. The homepage
+asks `127.0.0.1` for a document plus a stylesheet, a script, a font and a favicon,
+and the last four come off disk in a millisecond. Median: one millisecond, applied
+to the document too. A homepage that really took three seconds to answer simulated
+in comfortably under 2.0s. The `server-response-time` audit reads the observed TTFB
+straight off the document's network record and never touches the simulator, so it
+is what actually goes red. 600ms is Lighthouse's own threshold for that audit, well
+clear of the 2.0s budget: a tripwire for a server on the floor, not a second
+performance target.
+
+All three numbers are pinned by `verify-pipeline.sh --lint`, so relaxing one,
+downgrading it to a warning or deleting it fails `static` rather than passing
+quietly.
 
 Measured against a production-shaped build: `composer install --no-dev`,
 `APP_DEBUG=false`, config/route/view caches warm, real built assets. Measuring a
@@ -288,14 +310,15 @@ plan that enforces environment protection rules. Do not hand-rebuild it.
 A pipeline nobody has watched fail is a pipeline nobody knows works.
 
 ```bash
-./ci/verify-pipeline.sh --lint            # offline, half a second, no gh — runs in `static`
-./ci/verify-lint-selftest.sh              # proves --lint still catches things — runs in `static`
-./ci/verify-pipeline.sh --assert-selftest # proves --run's assertions, and its cleanup, say what they claim
-./ci/verify-pipeline.sh                   # dry run — prints what it would do
-./ci/verify-pipeline.sh --run             # opens the PRs, waits, asserts, cleans up
-./ci/verify-pipeline.sh --cleanup         # if a run was interrupted
-./ci/verify-protection-selftest.sh        # proves the protection check catches holes — runs in `static`
-./ci/verify-protection.sh                 # reads the live rule — by hand, needs Administration: read
+./ci/verify-pipeline.sh --lint             # offline, half a second, no gh — runs in `static`
+./ci/verify-lint-selftest.sh               # proves --lint still catches things — runs in `static`
+./ci/verify-pipeline.sh --assert-selftest  # proves --run's assertions, and its cleanup, say what they claim
+./ci/verify-run-preconditions-selftest.sh  # proves --run still refuses to start — runs in `static`
+./ci/verify-pipeline.sh                    # dry run — prints what it would do
+./ci/verify-pipeline.sh --run              # opens the PRs, waits, asserts, cleans up
+./ci/verify-pipeline.sh --cleanup          # if a run was interrupted
+./ci/verify-protection-selftest.sh         # proves the protection check catches holes — runs in `static`
+./ci/verify-protection.sh                  # reads the live rule — by hand, needs Administration: read
 ```
 
 The first six prove the *jobs* go red for the right reasons. That is not the same
@@ -305,15 +328,22 @@ for the fact those six never read.
 `--lint` is the only thing watching the gate, so nothing downstream notices if it
 quietly stops catching anything. `verify-lint-selftest.sh` is the check on the
 check: it mutates a throwaway copy of the workflow one defect at a time and asserts
-`--lint` goes red *for the stated reason*. Twelve cases, every one a mistake that has
-actually been made on this repo or proposed for it. Both run in `static`, first,
+`--lint` goes red *for the stated reason*. Fourteen mutation cases, every one a mistake
+that has actually been made on this repo or proposed for it. Both run in `static`, first,
 before anything slow.
 
-A thirteenth case is not about `--lint` at all: it runs `--assert-selftest`, which feeds
-recorded check conclusions through the assertions `--run` makes and checks each is
-accepted or rejected as intended. Those assertions otherwise execute only during a
-live run, which is how a wrong one survived review and cost forty minutes of runner
-time to find (TWO-94).
+Three further cases do not mutate the workflow at all. One runs the unmutated repo and
+asserts it still lints green. One greps `verify-pipeline.sh` for `producer | grep -q
+pattern` and fails on a hit: `grep -q` exits the instant it matches, a producer with
+output still buffered takes SIGPIPE, `set -o pipefail` hands 141 up as the pipeline's
+status, and a check that *found what it was looking for* reports red. That is invisible
+in review and reproduces on maybe one run in three, so the ban is only a ban while
+something enforces it (TWO-87).
+
+The third runs `--assert-selftest`, which feeds recorded check conclusions through the
+assertions `--run` makes and checks each is accepted or rejected as intended. Those
+assertions otherwise execute only during a live run, which is how a wrong one survived
+review and cost forty minutes of runner time to find (TWO-94).
 
 `--assert-selftest` covers cleanup for the same reason, with `gh` and `git` shadowed
 so the real function runs against synthetic responses. Cleanup had the identical
@@ -346,6 +376,7 @@ caught a real LCP breach, and only one of those means the gate works.
 | A heading hidden with CSS — visible in the HTML, invisible in the browser | `dusk` |
 | An image with no alt text | `budgets` |
 | Three seconds of server think-time before paint | `budgets` |
+| A budget threshold relaxed, downgraded to a warning, or deleted | `static` |
 | Deleting the aggregate's `if: always()` | `static` — see below |
 | Nothing wrong at all | nothing — goes green |
 
@@ -407,6 +438,33 @@ forty-minute live run, so it survived review and cost a full run to find.
 
 Run it when the repo lands, and again after any change to `ci.yml` that alters what
 fails. **QA does not sign off TWO-22 until this has passed once, for real.**
+
+### One `--run` at a time
+
+Every case uses a fixed branch name — `ci-verify/pint`, `ci-verify/gate`. Two runs
+at once therefore share branches: the second push lands on the first run's branch
+and silently changes its PR's head commit mid-flight, and whichever `cleanup()`
+finishes first closes and deletes *both* runs' work. The survivor is then told its
+checks never reported on a branch that no longer exists — a dead-pipeline diagnosis
+for something that was never about the pipeline. This happened on 2026-08-20:
+nine `ci-verify/*` PRs opened and closed under an unrelated run (TWO-103).
+
+So `--run` refuses to start when any `ci-verify/*` pull request is open or any
+`ci-verify/*` branch is on the remote, and names what it found. Unique per-run
+branch names would let both proceed, and two people running the acceptance suite
+at once is a thing to notice, not a thing to support. If the branches are leftovers
+from a run that was killed, `--cleanup` clears them.
+
+`--run` has five such preconditions, all of which fire in the first second rather
+than forty minutes in: `gh` is authenticated, `origin` is a GitHub repository (not
+a workspace clone — the results come from the GitHub Actions API), the working tree
+is clean, the Actions API is readable, and no other run is live.
+`verify-run-preconditions-selftest.sh` is the check on those: it builds a throwaway
+repo whose `origin` reads as GitHub while its bytes go to a bare repo next door,
+stubs `gh`, and asserts each guard refuses for its own reason — and that nothing
+was pushed on the way out. Seven cases: one per precondition, two for the live-run
+guard (an open pull request and a leftover branch refuse independently), and a
+negative control proving none of them fires on a normal repository.
 
 ## Release checklist
 

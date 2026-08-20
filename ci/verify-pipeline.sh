@@ -359,6 +359,43 @@ lint() {
     fi
   fi
 
+  # 10. The performance budget is still a budget. ci/lighthouserc.cjs asks in prose
+  #    that nobody edit a threshold to make a build go green, and until TWO-93
+  #    nothing checked — a relaxed budget and an enforced one look the same from
+  #    every job in the pipeline. Each entry below must be present, at `error`, at
+  #    exactly this number.
+  #
+  #    LCP and CLS are the CEO's, in writing. Lowering one is their decision, and
+  #    then it is changed here too, in the same commit that says so — that second
+  #    edit is the point, not an obstacle.
+  #
+  #    `server-response-time` is not a CEO budget and is not optional either: it is
+  #    the only thing in the pipeline that sees a slow server. Lighthouse runs with
+  #    `throttlingMethod: 'simulate'`, and Lantern models one server response time
+  #    per origin — the median over every request to it — so on a page that also
+  #    loads a few static files a three-second document response is medianed away
+  #    and simulated LCP never sees it. That is TWO-93, and it passed a homepage
+  #    that took three seconds to answer. Delete this line and it passes one again.
+  local budget_file="./ci/lighthouserc.cjs"
+  if [ -f "$budget_file" ]; then
+    local entry audit value
+    for entry in \
+      "largest-contentful-paint|2000" \
+      "cumulative-layout-shift|0.1" \
+      "server-response-time|600"; do
+      IFS='|' read -r audit value <<< "$entry"
+      if grep -qE "^[[:space:]]*'${audit}':[[:space:]]*\['error',[[:space:]]*\{[[:space:]]*maxNumericValue:[[:space:]]*${value//./\\.}[[:space:]]*," "$budget_file"; then
+        pass "budget \`${audit}\` fails the build above ${value}"
+      else
+        fail "budget \`${audit}\` is not asserted at ${value} as an \`error\` in ${budget_file}. Either it was relaxed, downgraded to a warning, or removed — and the job goes on reporting green either way. If the number genuinely changed, change it in both places in the commit that explains why."
+        rc=1
+      fi
+    done
+  else
+    fail "${budget_file} not found — the \`budgets\` job has no thresholds to enforce"
+    rc=1
+  fi
+
   return "$rc"
 }
 
@@ -821,6 +858,54 @@ gh api "repos/${REPO_SLUG}/actions/runs?per_page=1" >/dev/null 2>&1 || {
   fail "cannot read the Actions API on ${REPO_SLUG}. The token needs 'Actions: read' — see the permissions listed at the top of this file. Nothing has been pushed."
   exit 1
 }
+
+# Nothing else may already be mid-run. Every case gets a fixed branch name —
+# `ci-verify/pint`, `ci-verify/gate` — so two `--run` executions against one repo
+# share branches. The second push lands on the first run's branch and silently
+# changes its pull request's head commit mid-flight, and whichever `cleanup()`
+# reaches the end first closes and deletes *both* runs' work. The survivor is then
+# told its checks never reported, on a branch that no longer exists, which reads
+# as a dead pipeline and is not one — the same wrong diagnosis the Actions API
+# check directly above just stopped this script handing out. Observed live on
+# 2026-08-20: nine ci-verify pull requests opened and closed under another run
+# while a flake sample was being collected (TWO-103).
+#
+# Per-run branch names would let both runs proceed. That is deliberately not what
+# this does: two people running the acceptance suite against one repo at once is a
+# thing to notice, not a thing to support. So refuse in the first second, like the
+# other preconditions, and name what is already there.
+#
+# A bare remote branch counts as much as an open pull request. A run killed
+# part-way through leaves branches behind with no PR, and the next run's
+# `--force-with-lease` push collides with those just as hard.
+live_run() {
+  local prs branches number head sha ref
+  prs=$(gh pr list --repo "$REPO_SLUG" --state open --limit 100 \
+          --json number,headRefName --jq '.[] | "\(.number)\t\(.headRefName)"' 2>/dev/null || true)
+  while IFS=$'\t' read -r number head; do
+    case "${head:-}" in
+      "${BRANCH_PREFIX}/"*) printf '  pull request #%s on %s\n' "$number" "$head" ;;
+    esac
+  done <<< "$prs"
+
+  branches=$(git ls-remote --heads origin "refs/heads/${BRANCH_PREFIX}/*" 2>/dev/null || true)
+  while read -r sha ref; do
+    [ -n "${ref:-}" ] || continue
+    printf '  branch %s on origin\n' "${ref#refs/heads/}"
+  done <<< "$branches"
+}
+
+LIVE_RUN=$(live_run || true)
+if [ -n "$LIVE_RUN" ]; then
+  fail "another verification run is already live on ${REPO_SLUG}:
+${LIVE_RUN}
+Both runs use these same branch names, so they would overwrite and then delete
+each other's pull requests, and the one left standing would report checks that
+never arrived. Wait for it to finish. If you know it is dead, clear it with
+\`./ci/verify-pipeline.sh --cleanup\` and start again. Nothing has been pushed."
+  exit 1
+fi
+pass "no other verification run is live on ${REPO_SLUG}"
 
 # `--prune` is not decoration. Every push below is `--force-with-lease`, which holds
 # the lease against the local `refs/remotes/origin/ci-verify/*`. A previous run's

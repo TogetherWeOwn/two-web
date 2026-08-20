@@ -39,6 +39,7 @@ fixture() {
   cp "$REPO_ROOT"/.github/workflows/*.yml "$dir/.github/workflows/"
   cp "$REPO_ROOT/docs/ci.md" "$dir/docs/"
   cp "$REPO_ROOT/ci/verify-pipeline.sh" "$dir/ci/"
+  cp "$REPO_ROOT/ci/lighthouserc.cjs" "$dir/ci/"
   echo "$dir"
 }
 
@@ -175,6 +176,23 @@ expect_fail dusk-stops-building 'job `dusk` no longer runs `npm run build`' \
     inside && /npm run build/           { next }
                                         { print }
   ' .github/workflows/ci.yml > ci.yml.mutated && mv ci.yml.mutated .github/workflows/ci.yml"
+
+# A threshold nudged upwards until the build goes green. ci/lighthouserc.cjs asks
+# people in prose not to do this and, until TWO-93, nothing checked. The number is
+# the CEO's; moving it is a decision made in writing, not a line in a feature PR.
+expect_fail budget-relaxed 'budget `largest-contentful-paint`' \
+  sed -i 's/maxNumericValue: 2000/maxNumericValue: 4000/' ci/lighthouserc.cjs
+
+# The TTFB gate deleted. Nothing else in the pipeline notices a slow server: under
+# `throttlingMethod: 'simulate'` a three-second document response is medianed away
+# before LCP is ever computed (TWO-93). Remove this line and the LCP budget goes on
+# reporting green over a homepage that takes three seconds to answer.
+expect_fail ttfb-gate-removed 'budget `server-response-time`' \
+  sed -i "/'server-response-time':/d" ci/lighthouserc.cjs
+
+# The same gate downgraded to a warning, which reads like keeping it and is not.
+expect_fail ttfb-downgraded 'budget `server-response-time`' \
+  sed -i "s/'server-response-time': \['error'/'server-response-time': ['warn'/" ci/lighthouserc.cjs
 
 printf '\n\033[1m==> Tripwires (warn, do not block)\033[0m\n'
 
