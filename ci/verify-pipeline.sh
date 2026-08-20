@@ -416,12 +416,25 @@ lint() {
   #    that took three seconds to answer. Delete this line and it passes one again.
   local budget_file="./ci/lighthouserc.cjs"
   if [ -f "$budget_file" ]; then
-    local entry audit value
+    local entry audit value asserted
     for entry in \
       "largest-contentful-paint|2000" \
       "cumulative-layout-shift|0.1" \
       "server-response-time|600"; do
       IFS='|' read -r audit value <<< "$entry"
+
+      # Count before matching. A JavaScript object literal keeps the *last*
+      # duplicate key, so appending a second entry for the same audit relaxes the
+      # budget while the pinned line above it sits there untouched and still
+      # matching the grep below. That is the one edit this check exists to stop,
+      # and it is also the variant that looks most like an accident.
+      asserted=$(grep -cE "^[[:space:]]*'${audit}':" "$budget_file" || true)
+      if [ "$asserted" -ne 1 ]; then
+        fail "budget \`${audit}\` is asserted ${asserted} times in ${budget_file}. JavaScript keeps the last one, so every pinned line above it is decorative — the effective threshold is whichever entry comes last. There should be exactly one."
+        rc=1
+        continue
+      fi
+
       if grep -qE "^[[:space:]]*'${audit}':[[:space:]]*\['error',[[:space:]]*\{[[:space:]]*maxNumericValue:[[:space:]]*${value//./\\.}[[:space:]]*," "$budget_file"; then
         pass "budget \`${audit}\` fails the build above ${value}"
       else

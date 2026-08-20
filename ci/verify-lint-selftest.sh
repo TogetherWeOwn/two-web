@@ -194,6 +194,15 @@ expect_fail ttfb-gate-removed 'budget `server-response-time`' \
 expect_fail ttfb-downgraded 'budget `server-response-time`' \
   sed -i "s/'server-response-time': \['error'/'server-response-time': ['warn'/" ci/lighthouserc.cjs
 
+# A second entry appended for an audit that already has one. The pinned line is
+# left exactly as it was — and a JavaScript object literal keeps the *last*
+# duplicate key, so lhci loads the new one and the CEO's LCP budget is gone. The
+# three cases above all edit the pinned line in place; this one does not touch it,
+# which is why it slipped past the first version of the check (QA on TWO-93). It is
+# also the variant that looks least like tampering and most like a bad merge.
+expect_fail budget-duplicated 'budget `largest-contentful-paint` is asserted 2 times' \
+  sed -i "/'server-response-time':/a\\        'largest-contentful-paint': ['warn', { maxNumericValue: 99999 }]," ci/lighthouserc.cjs
+
 printf '\n\033[1m==> Tripwires (warn, do not block)\033[0m\n'
 
 # The price of requiring leaves instead of the aggregate alone: drop one and it can
