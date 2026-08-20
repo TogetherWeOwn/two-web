@@ -184,6 +184,39 @@ printf '\n\033[1m==> Tripwires (warn, do not block)\033[0m\n'
 expect_warn unrequired-job 'job `budgets` reports on pull requests but is not a required check' \
   bash -c 'sed -i "s/^REQUIRED_CHECKS=(.*)$/REQUIRED_CHECKS=(tests static pest dusk gitleaks)/" ci/verify-pipeline.sh'
 
+printf '\n\033[1m==> The lint cannot fail for reasons that are not about the workflow\033[0m\n'
+
+# `producer | grep -q pattern` is banned in verify-pipeline.sh, and this is the
+# only way to keep it banned — the defect is invisible in review and reproduces
+# on maybe one run in three.
+#
+# `grep -q` exits the instant it matches. If the producer still has output to
+# write it takes SIGPIPE and dies with 141, `set -o pipefail` hands that up as
+# the pipeline's status, and `if` suppresses errexit but not pipefail — so a
+# check that *found what it was looking for* takes the else branch and reports
+# red. Whether it happens depends on how far into the producer's output the
+# match lands and how fast the machine is.
+#
+# It has already cost this repo a day: `job_block budgets | grep -q 'npm run
+# build'` matched 65 lines from the end of the block, passed every time on a
+# laptop, and went red on the runner (TWO-87). Every one of these greps is
+# looking for a reason to fail the merge gate, so every one of them can invent
+# one. Use a here-string, or `has_line`.
+n=$((n + 1))
+# Comment lines are skipped — the ban is documented in the file it applies to,
+# in prose that necessarily quotes the thing being banned. Indented as well as
+# column-zero `#`, because the explanation sits inside the function it warns
+# about.
+offenders=$(grep -nE '\|[[:space:]]*grep[[:space:]]+-[a-zA-Z]*[qm]' "$REPO_ROOT/ci/verify-pipeline.sh" \
+  | grep -vE '^[0-9]+:[[:space:]]*#' || true)
+if [ -z "$offenders" ]; then
+  pass "no-pipe-into-early-exit-grep"
+else
+  fail "no-pipe-into-early-exit-grep: verify-pipeline.sh pipes into a grep that exits early. Under \`set -o pipefail\` the producer takes SIGPIPE and a successful match reports as a failure. Use a here-string or \`has_line\`."
+  printf '%s\n' "$offenders" | sed 's/^/        /'
+  rc=1
+fi
+
 printf '\n\033[1m==> The unmutated repo still passes\033[0m\n'
 n=$((n + 1))
 if ( cd "$(fixture clean)" && ./ci/verify-pipeline.sh --lint >/dev/null 2>&1 ); then

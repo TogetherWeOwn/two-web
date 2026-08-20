@@ -134,9 +134,33 @@ job_block() { awk -v id="$2" '$0 ~ "^  " id ":[[:space:]]*$" {j=1;next} j && /^ 
 # be blocked on. `deploy.yml` is `workflow_run`, `main-guard` is push-only: their
 # job ids look like perfectly good required contexts and would each hang every PR
 # forever. Matching a job id is not enough — it has to be a job that *reports*.
+#
+# The awk output goes through a here-string rather than a pipe. See the note on
+# `has_line` below: `awk | grep -q` under `pipefail` is a coin flip.
 triggers_on_pr() {
-  awk '/^on:/{o=1;next} o && /^[a-zA-Z]/{exit} o' "$1" | grep -qE '^\s+pull_request:?'
+  local on
+  on=$(awk '/^on:/{o=1;next} o && /^[a-zA-Z]/{exit} o' "$1")
+  grep -qE '^\s+pull_request:?' <<< "$on"
 }
+
+# grep for a pattern in some text, and say so honestly.
+#
+# Never write `producer | grep -q pattern` in this file. `grep -q` exits the
+# instant it matches; if the producer still has output to write it takes SIGPIPE
+# and dies with 141, and `set -o pipefail` makes the whole pipeline non-zero —
+# so a *successful* match reports as a failure. `if` suppresses errexit but not
+# pipefail, so the branch silently inverts. `grep -m1` exits early for the same
+# reason and is banned in the same place.
+#
+# It is a race, so it depends on how far into the producer's output the match
+# lands and on how fast the machine is: `job_block budgets | grep -q 'npm run
+# build'` matched 65 lines from the end, passed on a laptop every time, and went
+# red on the runner (TWO-87). A check that fails only sometimes, only in CI, and
+# only when it should have passed is worse than no check.
+#
+# `verify-lint-selftest.sh` greps this file for the shape and fails on a hit,
+# which is the only way a ban on something invisible in review stays a ban.
+has_line() { grep -q -- "$2" <<< "$1"; }
 
 # What one job will actually report as: its `name:` if it sets one, its id if not.
 # Branch protection matches the check-run name, so a job that renames itself stops
@@ -144,8 +168,9 @@ triggers_on_pr() {
 # check" failure as requiring `ci`, but arriving later and looking like flakiness.
 # `^    name:` is job level; step names are deeper and carry a `- `.
 job_reported_name() {
-  local n
-  n=$(job_block "$1" "$2" | grep -m1 -E '^    name:' | sed 's/^    name:[[:space:]]*//' | sed 's/^["'"'"']//; s/["'"'"']$//')
+  local blk n
+  blk=$(job_block "$1" "$2")
+  n=$(grep -m1 -E '^    name:' <<< "$blk" | sed 's/^    name:[[:space:]]*//' | sed 's/^["'"'"']//; s/["'"'"']$//')
   [ -n "$n" ] && echo "$n" || echo "$2"
 }
 
@@ -165,10 +190,11 @@ pr_reported_names() {
 # only thing that catches an aggregate whose guard has been removed, so both the
 # step's existence and the requiredness of the job carrying it are load-bearing.
 gate_lint_jobs() {
-  local job
+  local job blk
   while read -r job; do
     [ -n "$job" ] || continue
-    if job_block "$1" "$job" | grep -q -- 'verify-pipeline.sh --lint'; then
+    blk=$(job_block "$1" "$job")
+    if has_line "$blk" 'verify-pipeline.sh --lint'; then
       job_reported_name "$1" "$job"
     fi
   done <<< "$(job_ids "$1")"
@@ -546,7 +572,7 @@ cleanup_selftest() {
   if [ "$cleanup_rc" -eq 0 ]; then
     fail "cleanup: every close failed -> it exited 0. That is the TWO-94 bug: nine reported closed, three still open."
     rc=1
-  elif printf '%s' "$out" | grep -q 'closed PR #'; then
+  elif has_line "$out" 'closed PR #'; then
     fail "cleanup: every close failed -> it still printed 'closed PR #'. The line has to track the close, not the loop."
     printf '%s\n' "$out" | sed 's/^/        /'
     rc=1
