@@ -61,6 +61,16 @@ jobs:
       - name: Protection check self-test
         run: ./ci/verify-protection-selftest.sh
 
+      # And the checks that stop the acceptance run before it wastes forty minutes
+      # answering the wrong question — an unauthenticated gh, a workspace clone for
+      # an origin, a dirty tree, an unreadable Actions API, or another `--run`
+      # already live on the same fixed branch names (TWO-103). A precondition that
+      # has quietly stopped firing is indistinguishable from one with nothing to
+      # complain about, so it needs the same treatment `--lint` gets. Throwaway
+      # repo, stub gh, no network.
+      - name: Run preconditions self-test
+        run: ./ci/verify-run-preconditions-selftest.sh
+
       - uses: shivammathur/setup-php@v2
         with:
           php-version: ${{ env.PHP_VERSION }}
@@ -358,6 +368,12 @@ jobs:
       - name: Accessibility — WCAG 2.2 AA
         run: node ci/a11y.mjs
 
+      # include-hidden-files, because `.lighthouseci` starts with a dot and
+      # upload-artifact skips anything under a dot-folder by default. Without it
+      # this artifact contained the a11y report and nothing else — 268 bytes,
+      # every Lighthouse report silently dropped, and the one place you would go
+      # to debug a breached budget was empty (TWO-93). Nothing here is secret:
+      # both paths are generated reports, and the flag only applies to them.
       - name: Upload budget reports
         if: always()
         uses: actions/upload-artifact@v4
@@ -366,6 +382,7 @@ jobs:
           path: |
             .lighthouseci
             ci/a11y-report.json
+          include-hidden-files: true
           retention-days: 14
           if-no-files-found: ignore
 
