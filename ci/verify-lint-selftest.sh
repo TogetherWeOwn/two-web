@@ -198,6 +198,93 @@ else
   rc=1
 fi
 
+printf '\n\033[1m==> The verdict, against job output recorded from a real run\033[0m\n'
+
+# `check_branch` turns job results into the pass/fail verdict of the whole
+# acceptance run. Everything above tests the lint, which is the cheap half; this
+# tests the half that costs forty minutes and nine pull requests to exercise for
+# real, and whose wrong answers are the expensive ones.
+#
+# The fixtures are the actual job output of the first live run on 2026-08-20
+# (TWO-87), copied from the Actions API, not invented.
+#
+# `check_branch` is extracted rather than sourced because verify-pipeline.sh runs
+# its driver at the top level; sourcing it would try to open pull requests.
+CHECK_BRANCH_SRC="$(sed -n '/^check_branch() {/,/^}$/p' "$REPO_ROOT/ci/verify-pipeline.sh")"
+
+# Run check_branch against canned results. Echoes nothing; returns its verdict.
+verdict() {
+  local expected_job="$1" aggregate="$2" checks="$3"
+  local required="${4:-tests static pest dusk budgets gitleaks}"
+  (
+    set -euo pipefail
+    # shellcheck disable=SC2206
+    REQUIRED_CHECKS=($required)
+    EXPECTED_CHECKS=(static pest dusk budgets tests gitleaks)
+    FIXTURE="$checks"
+    fail() { printf 'FAIL: %s\n' "$*" >&2; }
+    pass() { printf 'PASS: %s\n' "$*"; }
+    has_line() { grep -q "$2" <<< "$1"; }
+    wait_for_checks() { return 0; }
+    branch_checks() { printf '%s\n' "$FIXTURE"; }
+    eval "$CHECK_BRANCH_SRC"
+    check_branch "a-branch" "$expected_job" "no" "why" "$aggregate"
+  ) >/dev/null 2>&1
+}
+
+# expect_verdict <slug> <pass|reject> <expected job> <aggregate> <checks> [required]
+expect_verdict() {
+  local slug="$1" want="$2"; shift 2
+  local got
+  n=$((n + 1))
+  if verdict "$@"; then got=pass; else got=reject; fi
+  if [ "$got" = "$want" ]; then pass "$slug"; else
+    fail "$slug: check_branch returned '${got}', wanted '${want}'"
+    rc=1
+  fi
+}
+
+GATE_CHECKS='static=FAILURE
+pest=SUCCESS
+dusk=SUCCESS
+budgets=SUCCESS
+tests=SKIPPED
+gitleaks=SUCCESS'
+
+NORMAL_CHECKS='static=FAILURE
+pest=SUCCESS
+dusk=SUCCESS
+budgets=SUCCESS
+tests=FAILURE
+gitleaks=SUCCESS'
+
+# The ordinary shape: a leaf goes red and drags the aggregate red with it.
+expect_verdict ordinary-breakage pass static FAILURE "$NORMAL_CHECKS"
+
+# The `gate` case. Its mutation deletes `if: always()`, which is *what makes the
+# aggregate skip* — so the old blanket `tests=FAILURE` assertion could never be
+# satisfied here. On the first live run this printed "the gate would let this
+# merge" under a `static` job that had failed exactly as intended: the script
+# reporting the merge gate broken while it was working.
+expect_verdict gate-aggregate-skipped pass static SKIPPED "$GATE_CHECKS"
+
+# The same fixture under the old expectation, pinned so nobody restores it.
+expect_verdict gate-under-old-assertion reject static FAILURE "$GATE_CHECKS"
+
+# A skipped aggregate counts as *passed* on GitHub, so the only thing blocking
+# that PR is the named job being required in its own right. Trim it out of
+# REQUIRED_CHECKS and the gate genuinely has stopped holding — this must reject.
+expect_verdict gate-named-job-not-required reject static SKIPPED "$GATE_CHECKS" \
+  "tests pest dusk budgets gitleaks"
+
+# The failure this script exists to catch: the named job is green, so whatever
+# else went wrong, the gate does not catch this breakage.
+expect_verdict named-job-green reject static FAILURE "$(sed 's/^static=FAILURE$/static=SUCCESS/' <<< "$NORMAL_CHECKS")"
+
+# A check that never reported is not a pass — an absent required context blocks
+# a PR forever, and reading silence as green is this script's original sin.
+expect_verdict check-never-reported reject static FAILURE "$(grep -v '^dusk=' <<< "$NORMAL_CHECKS")"
+
 printf '\n\033[1m==> The unmutated repo still passes\033[0m\n'
 n=$((n + 1))
 if ( cd "$(fixture clean)" && ./ci/verify-pipeline.sh --lint >/dev/null 2>&1 ); then

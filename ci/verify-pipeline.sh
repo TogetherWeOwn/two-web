@@ -72,7 +72,11 @@ REQUIRED_CHECKS=(tests static pest dusk budgets gitleaks)
 # an empty result as green, which is the same bug one level up.
 EXPECTED_CHECKS=(static pest dusk budgets tests gitleaks)
 
-# Each case: <slug>|<expected failing job>|<what it proves>
+# Each case: <slug>|<expected failing job>|<what it proves>[|<aggregate state>]
+#
+# <aggregate state> is what `tests` is expected to report, and defaults to
+# `FAILURE`. Only `gate` overrides it, and that is not a special case being
+# papered over — it is the point of the case. See below.
 CASES=(
   "pint|static|badly formatted PHP is rejected"
   "phpstan|static|a type error is rejected"
@@ -81,7 +85,24 @@ CASES=(
   "dusk|dusk|a broken page is caught in a real browser"
   "a11y|budgets|a WCAG 2.2 AA violation is rejected"
   "lcp|budgets|an LCP breach is rejected"
-  "gate|static|a pull request that disarms the merge gate is rejected"
+  # The mutation deletes `if: always()` from the aggregate. That is *what makes
+  # `tests` skip* when `static` goes red — so demanding `tests=FAILURE` here
+  # asserts the mutation did not do the only thing it does, and the case can
+  # never pass. It failed for exactly this reason on the first live run (TWO-87)
+  # and read as "the gate would let this merge", which is the one output of this
+  # script nobody would think to double-check.
+  #
+  # SKIPPED is the correct expectation, and asserting it is worth more than
+  # asserting FAILURE would have been. GitHub counts a skipped required check as
+  # a *passed* one, so on this branch the aggregate is not protecting anything.
+  # The PR is blocked anyway, because `static` is required in its own right and
+  # `static` is red — `--lint` runs there and catches the missing `if: always()`.
+  #
+  # That is the entire argument for requiring the leaf jobs rather than the
+  # aggregate alone (see REQUIRED_CHECKS above). This case is the live proof of
+  # it: the gate survives its own guard being disarmed. Assert the skip, and the
+  # proof holds.
+  "gate|static|a pull request that disarms the merge gate is rejected|SKIPPED"
 )
 
 log()  { printf '\n\033[1m==> %s\033[0m\n' "$*"; }
@@ -409,10 +430,10 @@ if [ "$MODE" != "--run" ]; then
   lint || { fail "the gate would report green while not gating. Fix ${WORKFLOW} before anything is merged behind it."; exit 1; }
   log "Dry run. Nothing will be pushed. Re-run with --run to execute."
   for entry in "${CASES[@]}"; do
-    IFS='|' read -r slug job why <<< "$entry"
-    printf '  %-10s -> expects job %-8s : %s\n' "$slug" "$job" "$why"
+    IFS='|' read -r slug job why agg <<< "$entry"
+    printf '  %-10s -> expects job %-8s (tests=%-7s) : %s\n' "$slug" "$job" "${agg:-FAILURE}" "$why"
   done
-  printf '  %-10s -> expects job %-8s : %s\n' "clean" "tests" "a clean PR goes green"
+  printf '  %-10s -> expects job %-8s (tests=%-7s) : %s\n' "clean" "tests" "SUCCESS" "a clean PR goes green"
   exit 0
 fi
 
@@ -447,7 +468,7 @@ open_pr() {
 # rather than end to end. Six sequential CI runs is most of an hour.
 log "Opening the broken pull requests"
 for entry in "${CASES[@]}"; do
-  IFS='|' read -r slug job why <<< "$entry"
+  IFS='|' read -r slug job why agg <<< "$entry"
   branch=$(open_pr "$slug" "$why")
   echo "  $branch"
 done
@@ -522,7 +543,7 @@ wait_for_checks() {
 }
 
 check_branch() {
-  local branch="$1" expected_job="$2" expect_green="$3" why="$4"
+  local branch="$1" expected_job="$2" expect_green="$3" why="$4" aggregate="${5:-FAILURE}"
 
   # Blocks until every check on the branch has reported.
   wait_for_checks "$branch" || true
@@ -569,10 +590,32 @@ check_branch() {
   # The aggregate is what branch protection requires. A named job going red while
   # `tests` stays green is the exact failure this whole script exists to catch: it
   # looks like a working pipeline and merges anyway.
-  if ! has_line "$checks" "^tests=FAILURE$"; then
-    fail "${why}: '${expected_job}' failed but the required 'tests' check did not — the gate would let this merge"
+  #
+  # `$aggregate` is FAILURE for every case but `gate`, which expects SKIPPED —
+  # its mutation deletes the `if: always()` that lets the aggregate fail at all.
+  if ! has_line "$checks" "^tests=${aggregate}$"; then
+    if [ "$aggregate" = "FAILURE" ]; then
+      fail "${why}: '${expected_job}' failed but the required 'tests' check did not — the gate would let this merge"
+    else
+      fail "${why}: expected the aggregate to be ${aggregate} here, got: $(echo "$checks" | tr '\n' ' ')"
+    fi
     return 1
   fi
+
+  # When the aggregate is skipped it is not protecting anything — GitHub counts a
+  # skipped required check as passed. What blocks the PR is the named job being
+  # required in its own right, so that is worth asserting rather than assuming.
+  # If someone ever trims REQUIRED_CHECKS back to the aggregate alone, this is
+  # the line that notices the gate has quietly stopped holding.
+  if [ "$aggregate" = "SKIPPED" ]; then
+    if ! has_line "$(printf '%s\n' "${REQUIRED_CHECKS[@]}")" "^${expected_job}$"; then
+      fail "${why}: the aggregate was skipped (which GitHub counts as passed) and '${expected_job}' is not a required check — nothing would block this merge"
+      return 1
+    fi
+    pass "${why} (rejected by required job '${expected_job}'; aggregate skipped, as this mutation intends)"
+    return 0
+  fi
+
   pass "${why} (rejected by '${expected_job}')"
   return 0
 }
@@ -580,8 +623,8 @@ check_branch() {
 log "Waiting for CI on all seven pull requests"
 ok=0
 for entry in "${CASES[@]}"; do
-  IFS='|' read -r slug job why <<< "$entry"
-  check_branch "${BRANCH_PREFIX}/${slug}" "$job" "no" "$why" || ok=1
+  IFS='|' read -r slug job why agg <<< "$entry"
+  check_branch "${BRANCH_PREFIX}/${slug}" "$job" "no" "$why" "${agg:-FAILURE}" || ok=1
 done
 check_branch "${BRANCH_PREFIX}/clean" "tests" "yes" "the happy path" || ok=1
 
