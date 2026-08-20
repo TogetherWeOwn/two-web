@@ -88,6 +88,35 @@ rather than as a misconfiguration, so it is worth catching early.
 Plus: no direct pushes to `main`, PR required, no self-approval, and dismiss stale
 approvals on new commits.
 
+### Reading the rule, not the list
+
+Everything above is what this repo *believes* is required. `--lint` checks that
+belief against `ci.yml` and against this document. None of the three is the rule
+GitHub enforces, and the difference is not academic: in the TWO-22 acceptance run
+the `ci-verify/gate` branch merged past a *skipped* aggregate and was stopped only
+because `static` is required in its own right — an argument that holds only if
+`static` really is a required context, which nothing was reading.
+
+```
+./ci/verify-protection.sh                       # reads the live rule on `main`
+./ci/verify-protection.sh saved-response.json   # re-check a recorded rule, offline
+```
+
+It fails on: a check in the list that is not required (it runs, it reports, and a
+PR merges over it red), a required context no job produces (every PR pending
+forever), zero required approvals (self-merge, spelled differently), stale
+approvals surviving a push, `enforce_admins` off, and force-push or delete allowed
+on `main`.
+
+Live mode needs **`Administration: read`** — a fourth permission, separate from the
+three `verify-pipeline.sh` needs, and a 404 from a token without it is
+indistinguishable from "the branch is not protected". Check the permission before
+believing the second reading.
+
+It does not run on pull requests, for that reason. Its self-test does, in `static`.
+Run the live check by hand after any change to the protection rule, and as part of
+release sign-off.
+
 ---
 
 ## The budgets
@@ -212,7 +241,13 @@ A pipeline nobody has watched fail is a pipeline nobody knows works.
 ./ci/verify-pipeline.sh              # dry run — prints what it would do
 ./ci/verify-pipeline.sh --run        # opens the PRs, waits, asserts, cleans up
 ./ci/verify-pipeline.sh --cleanup    # if a run was interrupted
+./ci/verify-protection-selftest.sh   # proves the protection check catches holes — runs in `static`
+./ci/verify-protection.sh            # reads the live rule — by hand, needs Administration: read
 ```
+
+The first five prove the *jobs* go red for the right reasons. That is not the same
+as proving a red job blocks the merge — see "Reading the rule, not the list" above
+for the fact those five never read.
 
 `--lint` is the only thing watching the gate, so nothing downstream notices if it
 quietly stops catching anything. `verify-lint-selftest.sh` is the check on the
