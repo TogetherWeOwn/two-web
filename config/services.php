@@ -75,6 +75,23 @@ return [
 
         'api_base' => env('DISCORD_API_BASE', 'https://discord.com/api/v10'),
         'timeout' => (int) env('DISCORD_TIMEOUT_SECONDS', 5),
+
+        /*
+         | The plain invite link, and the floor under one-click join (TOG-80).
+         |
+         | One-click routes through the bot, so it is only up while the bot is
+         | up. Every way that can fail — bot down, action not switched on,
+         | Discord refusing, member cancelling — ends by showing this link
+         | instead. Losing one-click is a downgrade; losing the click is losing
+         | the recruit.
+         |
+         | No default. Unlike the guild id, an invite code cannot be derived from
+         | anything public and it expires if it is created with an expiry, so a
+         | stale constant compiled into the repo would be worse than an empty one
+         | the join page can notice and report. Create it non-expiring, with no
+         | use limit.
+         */
+        'invite_url' => env('DISCORD_INVITE_URL'),
     ],
 
     /*
@@ -85,6 +102,28 @@ return [
         'url' => env('BOT_ENDPOINT_URL'),
         'secret' => env('BOT_SHARED_SECRET'),
         'timeout' => (int) env('BOT_TIMEOUT_SECONDS', 5),
+
+        /*
+         | Which shared secret signed the request, sent as X-TWO-Key-Id. The bot
+         | keeps a ring of them so one caller's key can be rotated without an
+         | outage: add the new id there, switch this, retire the old one.
+         |
+         | An unknown key id and a bad signature are the same response by design,
+         | so getting this wrong presents as a flat 401 with no hint. It is not a
+         | secret — it names one.
+         */
+        'key_id' => env('BOT_KEY_ID', 'web-local'),
+
+        /*
+         | guild.add_member gets its own, shorter budget than the generic 5s: a
+         | member is standing in front of the join page waiting for it.
+         |
+         | 2s here, and the bot spends at most 1500ms of it on Discord, so it
+         | returns a typed error inside our window rather than both sides timing
+         | out and this one having to guess (INTERNAL_ACTIONS.md §5). Raising
+         | this without raising the bot's budget buys nothing.
+         */
+        'add_member_timeout' => (int) env('BOT_ADD_MEMBER_TIMEOUT_SECONDS', 2),
     ],
 
 ];
