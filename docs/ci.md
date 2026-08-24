@@ -379,21 +379,22 @@ caught a real LCP breach, and only one of those means the gate works.
 | Three seconds of server think-time before paint | `budgets` |
 | A budget threshold relaxed, downgraded to a warning, or deleted | `static` |
 | Deleting the aggregate's `if: always()` | `static` — see below |
+| A credential committed to a tracked file | `gitleaks` — see below |
 | Nothing wrong at all | nothing — goes green |
 
 The Dusk case is hidden with CSS rather than deleted on purpose: the HTML still
 contains the text, so the feature test passes and only the real browser notices.
 A breakage that trips `pest` too would prove nothing about the browser job.
 
-Seven of the eight cases also assert that the aggregate `tests` check went red, not
+Seven of the nine cases also assert that the aggregate `tests` check went red, not
 merely the named job. A job failing while the required check stays green is the one
 failure mode that lets a broken PR merge while looking perfectly healthy.
 
 ### Which required check stops a gate-disarming pull request
 
-The eighth case is the exception, and it is worth understanding rather than
-memorising. It is the one case where `tests` is **not** what stops the pull request,
-and it cannot be.
+The `gate` case is the first of two exceptions, and it is worth understanding rather
+than memorising. It is the one case where `tests` is **not** what stops the pull
+request, and it cannot be.
 
 That case deletes `if: always()` from the aggregate. Deleting it is exactly what
 makes the aggregate *skip* when a need goes red — so on that pull request `tests`
@@ -431,6 +432,54 @@ Two checks keep that argument from rotting, and they read different things:
 - `./ci/verify-protection.sh` reads *the live rule* — see
   [Reading the rule, not the list](#reading-the-rule-not-the-list). Check 9 proves
   we intend `static` to be required; only that proves GitHub agrees.
+
+### Which required check stops a committed credential
+
+The `secret` case is the second exception, and it is the same argument stripped down
+to its last plank. `gitleaks` is not a job in `ci.yml` — it comes from
+`secret-scan.yml` — so it is in no aggregate's `needs:` and nothing it does can make
+`tests` red. On that pull request every job in `ci.yml` is green, `tests` is green,
+and the only thing standing between a committed credential and `main` is that
+`gitleaks` is a required check in its own right.
+
+So the case asserts three things:
+
+- `gitleaks` is red;
+- `gitleaks` is a required check — with it off the list, *every* required check on
+  that pull request is green and the credential merges;
+- `tests` is **green**, not merely not-red. A breakage that also took a `ci.yml` job
+  down would satisfy the first two lines while proving nothing about the secret
+  scan, which is why the credential goes in a root-level `.txt` no other job reads.
+  Same reasoning as hiding the Dusk heading with CSS instead of deleting it.
+
+The value it commits is fake and is shaped to match **our** `discord-bot-token` rule
+in `.gitleaks.toml`, not one of gitleaks' stock patterns. That is deliberate: the
+string is verifiably *not* a finding under the default rule set alone, so a run in
+which `.gitleaks.toml` stopped being read — renamed, unparsed, or allowlisted into
+silence — goes green here and the case catches it. A stock AWS key would have gone
+red in that run and told us nothing.
+
+`break_secret()` assembles that value from three fragments at runtime rather than
+holding it as a literal, and that is not style. `gitleaks git .` reads the whole
+history and `ci/verify-pipeline.sh` is part of it, so a credential-shaped literal in
+that file is a finding *in that file*: the pull request adding this case would fail
+the check it exists to prove, and after a merge every pull request against `main`
+would fail it forever, because the string would be in the history. Deleting the line
+later does not help. The only other way out is an allowlist entry, and widening the
+allowlist to make room for a secret-scan test is exactly the trade `.gitleaks.toml`
+tells you not to make. If someone inlines it for readability, `gitleaks` goes red on
+that pull request and names the file — re-split it, do not allowlist it.
+
+What that trade costs, said plainly: this case does not prove `useDefault = true` is
+still on. One check-run conclusion is one bit, so a pull request that trips both rule
+sources cannot say which one fired, and the repo-specific rules are the half with no
+other coverage anywhere. That gap is real and is not covered by anything today.
+
+Until this case existed, `gitleaks` was the one required check with no live proof it
+fails — a check nobody had watched work, guarding the one kind of breakage a revert
+does not undo (TOG-20). It was seen catching a real finding by hand when it was
+first wired up (TWO-39), which is exactly the standard the rest of this file was
+built to replace.
 
 `./ci/verify-pipeline.sh --assert-selftest` tests these assertions themselves,
 offline, against recorded check conclusions — including the exact ones from the
