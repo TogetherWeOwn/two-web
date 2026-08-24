@@ -384,7 +384,7 @@ outlive the run.
 `--lint` is the only thing watching the gate, so nothing downstream notices if it
 quietly stops catching anything. `verify-lint-selftest.sh` is the check on the
 check: it mutates a throwaway copy of the workflow one defect at a time and asserts
-`--lint` goes red *for the stated reason*. Nineteen cases, every one a mistake that has
+`--lint` goes red *for the stated reason*. Twenty cases, every one a mistake that has
 actually been made on this repo or proposed for it. Both run in `static`, first,
 before anything slow.
 
