@@ -43,7 +43,7 @@
 # happen quietly — see TWO-103.
 #
 # And `--run` needs a checkout of its own. It works by checking out and committing
-# on eight branches in whatever repository it is standing in, and the checkout in
+# on ten branches in whatever repository it is standing in, and the checkout in
 # an agent workspace is shared by every run of that agent — so doing that there is
 # a write to another run's working tree, with no reflog entry for whatever
 # uncommitted work it lands on. `./ci/scratch-clone.sh` gives the run a private
@@ -90,7 +90,7 @@ EXPECTED_CHECKS=(static pest dusk budgets tests gitleaks)
 #
 # The third field is what `tests` must report. Normally FAILURE: the named job goes
 # red, `if: always()` runs the aggregate anyway, and its guard turns that into a red
-# required check. Every case is FAILURE except one.
+# required check. Two cases are not FAILURE, and neither is a weakening.
 #
 # `gate` is NOT_SUCCESS, and that is not a weakening (TWO-94). That case deletes
 # `if: always()` — the very mechanism that makes the aggregate report at all when a
@@ -108,6 +108,16 @@ EXPECTED_CHECKS=(static pest dusk budgets tests gitleaks)
 #
 # Check 9 in lint() is what keeps that true offline: it fails if the job running
 # `--lint` stops being a required check.
+#
+# `secret` is SUCCESS, and that is the other one. `gitleaks` is not a job in
+# ci.yml at all — it comes from secret-scan.yml — so it is not in the aggregate's
+# `needs:` and nothing it does can make `tests` red. On that pull request every
+# ci.yml job is green, `tests` is green, and the only thing between a committed
+# credential and `main` is that `gitleaks` is a required check in its own right.
+# So the case asserts exactly that, and the assertion insists the aggregate is
+# green rather than merely not-red: a breakage that also tripped a ci.yml job
+# would pass while proving nothing about the secret scan, the same way break_dusk
+# has to stay invisible to `pest`.
 CASES=(
   "pint|static|FAILURE|badly formatted PHP is rejected"
   "phpstan|static|FAILURE|a type error is rejected"
@@ -117,6 +127,7 @@ CASES=(
   "a11y|budgets|FAILURE|a WCAG 2.2 AA violation is rejected"
   "lcp|budgets|FAILURE|an LCP breach is rejected"
   "gate|static|NOT_SUCCESS|a pull request that disarms the merge gate is rejected"
+  "secret|gitleaks|SUCCESS|a committed credential is rejected"
 )
 
 log()  { printf '\n\033[1m==> %s\033[0m\n' "$*"; }
@@ -125,7 +136,7 @@ pass() { printf '\033[32mPASS: %s\033[0m\n' "$*"; }
 
 # --- static checks ----------------------------------------------------------
 # Everything here is about one failure mode: the gate reports a result that is not
-# the pipeline's result. Opening seven pull requests proves it too, but only after
+# the pipeline's result. Opening ten pull requests proves it too, but only after
 # the org, the repo and the protection rules exist, and only in about forty
 # minutes. These take no network and half a second, so there is no excuse.
 #
@@ -469,6 +480,33 @@ assert_checks() {
     return 0
   fi
 
+  if [ "$aggregate" = "SUCCESS" ]; then
+    # SUCCESS — the `secret` case, and only that case. `gitleaks` comes from
+    # secret-scan.yml, not from ci.yml, so it is not in the aggregate's `needs:`
+    # and cannot make it red however loudly it fails. That is not a defect, but it
+    # does mean the argument that stops this pull request is a different one, and
+    # it is thinner: the failing check being required is the *whole* of it.
+    #
+    # So assert it rather than assume it. Drop `gitleaks` from protection and
+    # every required check on this pull request is green — a credential merges,
+    # with a green tick, and nothing in ci.yml is wrong.
+    if ! grep -qxF "$expected_job" <<< "$(printf '%s\n' "${REQUIRED_CHECKS[@]}")"; then
+      fail "${why}: '${expected_job}' failed, but it is not a required check and it is not behind '${AGGREGATE}' either — it is in another workflow. Nothing required is red on this pull request, so it merges."
+      return 1
+    fi
+    # And the aggregate must be green, not merely not-red. This case is only
+    # evidence about the secret scan while the secret scan is the only thing it
+    # trips: a breakage that also took a ci.yml job down would satisfy every line
+    # above while proving nothing about `gitleaks`, which is the same reason
+    # break_dusk hides the heading with CSS instead of deleting it.
+    if [ "$aggregate_state" != "SUCCESS" ]; then
+      fail "${why}: '${expected_job}' failed as expected, but '${AGGREGATE}' reported ${aggregate_state}. The breakage was supposed to be invisible to ci.yml; something else on this branch is red, so this run is not evidence that '${expected_job}' caught anything."
+      return 1
+    fi
+    pass "${why} (rejected by required check '${expected_job}' alone; '${AGGREGATE}' stayed green, because '${expected_job}' is not one of its needs)"
+    return 0
+  fi
+
   # NOT_SUCCESS — the `gate` case, and only that case. See the CASES comment: the
   # breakage deletes the aggregate's `if: always()`, so the aggregate is skipped
   # and cannot be red. Two things still have to hold, and both are real.
@@ -522,6 +560,18 @@ assert_selftest() {
     "gate-disarmed-aggregate-passed|reject|static|NOT_SUCCESS|no|static=FAILURE;pest=SUCCESS;dusk=SUCCESS;budgets=SUCCESS;tests=SUCCESS;gitleaks=SUCCESS"
     # NOT_SUCCESS must not become "anything goes": the lint job still has to go red.
     "gate-disarmed-lint-missed-it|reject|static|NOT_SUCCESS|no|static=SUCCESS;pest=SUCCESS;dusk=SUCCESS;budgets=SUCCESS;tests=SKIPPED;gitleaks=SUCCESS"
+    # The secret scan holding: `gitleaks` red on a pull request where ci.yml is
+    # entirely green, because `gitleaks` is in another workflow. This is the only
+    # shape in which a green `${AGGREGATE}` is an acceptable answer.
+    "secret-committed-gitleaks-red|ok|gitleaks|SUCCESS|no|static=SUCCESS;pest=SUCCESS;dusk=SUCCESS;budgets=SUCCESS;tests=SUCCESS;gitleaks=FAILURE"
+    # And the failure this case exists for: the scan stopped catching anything.
+    # Nothing else in the pipeline reddens on a committed credential, so a green
+    # `gitleaks` here has to be rejected on its own.
+    "secret-committed-nothing-caught-it|reject|gitleaks|SUCCESS|no|static=SUCCESS;pest=SUCCESS;dusk=SUCCESS;budgets=SUCCESS;tests=SUCCESS;gitleaks=SUCCESS"
+    # SUCCESS must not become "the aggregate is not my problem". A breakage that
+    # also took ci.yml down is not evidence about the secret scan, whatever else
+    # it proves — the same reason break_dusk must stay invisible to `pest`.
+    "secret-case-also-broke-ci|reject|gitleaks|SUCCESS|no|static=FAILURE;pest=SUCCESS;dusk=SUCCESS;budgets=SUCCESS;tests=FAILURE;gitleaks=FAILURE"
     "clean-all-green|ok|${AGGREGATE}|SUCCESS|yes|static=SUCCESS;pest=SUCCESS;dusk=SUCCESS;budgets=SUCCESS;tests=SUCCESS;gitleaks=SUCCESS"
     "clean-one-skipped|reject|${AGGREGATE}|SUCCESS|yes|static=SUCCESS;pest=SUCCESS;dusk=SKIPPED;budgets=SUCCESS;tests=SUCCESS;gitleaks=SUCCESS"
   )
@@ -562,6 +612,28 @@ gitleaks=SUCCESS" static NOT_SUCCESS no "gate-disarmed-lint-job-not-required" 2>
     rc=1
   else
     pass "assert: gate-disarmed-lint-job-not-required -> reject"
+  fi
+
+  # The same caveat for the `secret` case, where it is the entire argument rather
+  # than half of one. `gitleaks` is in no aggregate's `needs:`, so with it off the
+  # required list there is nothing left: every required check on that pull request
+  # is green and the credential merges. Strip it in a subshell and the identical
+  # conclusions must be rejected.
+  n=$((n + 1))
+  if out=$(
+    REQUIRED_CHECKS=(tests static pest dusk budgets)
+    assert_checks "static=SUCCESS
+pest=SUCCESS
+dusk=SUCCESS
+budgets=SUCCESS
+tests=SUCCESS
+gitleaks=FAILURE" gitleaks SUCCESS no "secret-committed-gitleaks-not-required" 2>&1
+  ); then
+    fail "assert: secret-committed-gitleaks-not-required -> the assertion passed. If \`gitleaks\` is not a required check, nothing on that pull request is red that anyone is blocking on, and the credential merges."
+    printf '%s\n' "$out" | sed 's/^/        /'
+    rc=1
+  else
+    pass "assert: secret-committed-gitleaks-not-required -> reject"
   fi
 
   printf '\n'
@@ -749,6 +821,61 @@ break_lcp() {
   sed -i '1i @php usleep(3000000); @endphp' resources/views/home.blade.php
 }
 
+break_secret() {
+  # A credential-shaped string in a tracked file. `gitleaks` is a required check on
+  # `main` and until now no case here made it go red — the one required check with
+  # no live proof it fails, guarding the one thing that cannot be undone by a
+  # revert (TOG-20). An install step that fails open, an allowlist that grew too
+  # wide, a rule that changed on a version bump: all three leave the job green and
+  # nothing else in the pipeline is looking.
+  #
+  # The value is fake and matches OUR rule, `discord-bot-token` in .gitleaks.toml,
+  # not one of gitleaks' stock patterns. That is deliberate and it is the stronger
+  # of the two: verified against the pinned 8.30.1, this string is NOT a finding
+  # under the default rule set alone, so a run in which .gitleaks.toml stopped
+  # being read — renamed, unparsed, or allowlisted into silence — goes green here
+  # and the case catches it. A stock AWS key would have gone red in that run and
+  # told us nothing.
+  #
+  # What that trade costs, said plainly: this case does not prove `useDefault =
+  # true` is still on. One check-run conclusion is one bit, so a PR that trips both
+  # rule sources cannot tell you which one fired, and the repo-specific rules are
+  # the half with no other coverage anywhere.
+  #
+  # A root-level text file on purpose: no other job reads it, so `tests` stays
+  # green and this case remains evidence about the secret scan and nothing else.
+  # Do not move it under app/, config/ or resources/ — pint, phpstan and the build
+  # all glob those, and a `secret` case that also reddens `static` proves nothing.
+  #
+  # The value is assembled from three pieces instead of written out as one string,
+  # and that is load-bearing rather than clever. `gitleaks git .` reads this
+  # repository's entire history, and this file is in it: a credential-shaped
+  # literal sitting here is a finding in `ci/verify-pipeline.sh` itself. The pull
+  # request adding this case would fail the very check the case exists to prove,
+  # and after a merge every pull request against `main` would fail it forever —
+  # the string would be in the history, and history is what the scan reads.
+  # Deleting the line later would not help, for the same reason.
+  #
+  # The other way out is an allowlist entry, and widening the allowlist to make
+  # room for a secret-scan test is precisely the trade .gitleaks.toml tells you not
+  # to make. Split the string and there is nothing to allowlist. The separators are
+  # what the `discord-bot-token` regex matches on, so with the dots supplied by
+  # printf at runtime no arrangement of these three fragments is a finding here.
+  #
+  # If someone later inlines it for readability, the `gitleaks` job on that pull
+  # request goes red and says which file. That is the check working, not a
+  # nuisance — so re-split it, do not allowlist it.
+  local seg1='NotARealTokenCiVerifyFake'
+  local seg2='TOG020'
+  local seg3='ThisIsNotACredentialCiVerify'
+  {
+    printf '# Written by ci/verify-pipeline.sh to prove the secret scan rejects a credential.\n'
+    printf '# This value is fake. It is shaped to match the `discord-bot-token` rule in\n'
+    printf '# .gitleaks.toml and has never been a live token for anything.\n'
+    printf 'DISCORD_BOT_TOKEN=%s.%s.%s\n' "$seg1" "$seg2" "$seg3"
+  } > ci-verify-credential.txt
+}
+
 break_gate() {
   # Delete the aggregate's `if: always()`. Every job still passes, every test still
   # passes, and the pipeline stops being a gate: a red `static` now *skips* `tests`,
@@ -887,7 +1014,7 @@ if [ "$MODE" != "--run" ]; then
   exit 0
 fi
 
-# Before eight pull requests and forty minutes of runner time, half a second of
+# Before ten pull requests and forty minutes of runner time, half a second of
 # reading the file.
 log "Static checks on the gate"
 lint || { fail "the gate is misconfigured. Fix ${WORKFLOW} first — the live run would only tell you the same thing, slower."; exit 1; }
@@ -913,7 +1040,7 @@ if [ -n "${PAPERCLIP_RUN_ID:-}" ]; then
   SCRATCH_OWNER=$(git config --get paperclip.runScratch 2>/dev/null || true)
   if [ -z "$SCRATCH_OWNER" ]; then
     fail "this is a shared workspace checkout, not a scratch clone owned by run ${PAPERCLIP_RUN_ID}.
-\`--run\` checks out and commits on eight branches in the repository it is standing
+\`--run\` checks out and commits on ten branches in the repository it is standing
 in. Another run of this agent shares this directory and can be mid-edit in it right
 now; uncommitted work it destroys is not in any reflog. Work in a clone of your own:
 
@@ -952,7 +1079,7 @@ REPO_SLUG=$(repo_slug || true)
   exit 1
 }
 
-# Prove the credential can read results *before* opening eight pull requests. A
+# Prove the credential can read results *before* opening ten pull requests. A
 # token with push access but without `Actions: read` gets all the way through the
 # run and then reads nothing back, which is indistinguishable from a pipeline that
 # never ran — and the two diagnoses point in opposite directions. Half a second
@@ -1173,7 +1300,7 @@ check_branch() {
   assert_checks "$checks" "$expected_job" "$aggregate" "$expect_green" "$why" "$branch"
 }
 
-log "Waiting for CI on all seven pull requests"
+log "Waiting for CI on all $(( ${#CASES[@]} + 1 )) pull requests"
 ok=0
 for entry in "${CASES[@]}"; do
   IFS='|' read -r slug job aggregate why <<< "$entry"
@@ -1191,7 +1318,7 @@ cleanup || cleanup_rc=1
 
 # The gate's verdict first: it is the reason anyone ran this. Leftover pull
 # requests are reported separately and never mistaken for a gate defect — but they
-# still fail the run, because eight open pull requests titled "do not merge" is not
+# still fail the run, because ten open pull requests titled "do not merge" is not
 # a state to walk away from.
 if [ "$ok" -ne 0 ]; then
   fail "the merge gate does not catch everything it claims to. Do not sign off TWO-22."
