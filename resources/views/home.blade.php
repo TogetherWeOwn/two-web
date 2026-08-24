@@ -16,4 +16,5 @@
     @else
         <a href="{{ route('login') }}" data-testid="discord-login">Sign in with Discord</a>
     @endauth
+    <img src="/favicon.ico" width="16" height="16">
 </x-layouts.app>
