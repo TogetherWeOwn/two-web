@@ -287,9 +287,16 @@ esac
 STUB_EOF
 chmod +x "$STUB/gh"
 
+# A repository that exists only to give verify-protection.sh an origin to parse a
+# slug out of. It is never pushed to and never fetched from; the stub `gh` above is
+# the only thing that answers, so no case here reaches github.com. The URL names
+# the real repo because that is what the script reads in production — it used to
+# name the old TWO-Gaming org on the belief that the name was unreachable, which
+# was never true: a transfer redirect carried repos/<oldorg>/<repo> straight back
+# to this repository. The stub is the isolation, not the hostname.
 FAKE_REPO="$WORK/repo"
 git init -q "$FAKE_REPO" 2>/dev/null
-git -C "$FAKE_REPO" remote add origin https://github.com/TWO-Gaming/two-web.git
+git -C "$FAKE_REPO" remote add origin https://github.com/TogetherWeOwn/two-web.git
 
 # gh writes the status line, then headers, then a CRLF blank line, then the body.
 http_response() {
