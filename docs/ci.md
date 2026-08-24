@@ -481,6 +481,42 @@ does not undo (TOG-20). It was seen catching a real finding by hand when it was
 first wired up (TWO-39), which is exactly the standard the rest of this file was
 built to replace.
 
+### What the first live run of this case found
+
+The first `--run` after the case landed did what the case was added to do, and then
+found a second thing nobody was looking for. Both are worth keeping.
+
+The `secret` case passed: `gitleaks` went red on its pull request, alone, with `tests`
+still green. And the **clean** pull request went red on `gitleaks` at the same time —
+reporting `ci-verify-credential.txt` at a commit that belonged to a *different* pull
+request, one whose branch the clean run had never touched.
+
+`gitleaks git .` does not scan the branch you are on. It scans **every ref in the
+clone**, and `fetch-depth: 0` fetches all of them. So while `ci-verify/secret` sat on
+origin — which is the whole of its job — every open pull request in the repository
+scanned it and went red, each naming a file its author had never created and could
+not remove by changing their own branch. The comment in `secret-scan.yml` asserted
+the opposite ("walks every commit reachable from HEAD"), and had done since the job
+was written; the scan had simply never had a secret on a sibling branch to find.
+
+Confirmed against the pinned 8.30.1 on a two-branch repository built for the purpose:
+with the credential on a side branch and `HEAD` clean, `git log -p HEAD` matches
+nothing and the scan still reports `2 commits scanned` and `leaks found: 1`.
+
+The fix is `--log-opts=HEAD` on the scan. It restores the documented behaviour and
+keeps the property `fetch-depth: 0` is there for — a secret added and then deleted
+earlier in HEAD's own history is still caught, verified in the same repository. It
+narrows what a pull request scan reads; it does not narrow what can reach `main`,
+because anything merging to `main` is in HEAD's history for both the pull request
+scan and the `push: main` scan. What it gives up is a secret on a branch that never
+approaches `main`, which a per-pull-request required check was never the right
+instrument for — the author it blocks is not the author who can fix it.
+
+This is the argument for the whole file in miniature. The gate had a mode in which it
+went red for a reason unrelated to the change under review, and no amount of reading
+it found that; opening a pull request that deliberately breaks one thing, and then
+insisting the *clean* one comes back green, is what found it.
+
 `./ci/verify-pipeline.sh --assert-selftest` tests these assertions themselves,
 offline, against recorded check conclusions — including the exact ones from the
 acceptance run. That exists because the wrong assertion here was only reachable by a

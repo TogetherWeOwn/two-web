@@ -26,16 +26,30 @@
 # Needs: gh, authenticated. Opens PRs against `main`. Never pushes to `main`,
 # never force-pushes anything, closes every PR it opens.
 #
-# The token needs exactly three fine-grained permissions on this repository, and
+# The token needs exactly four fine-grained permissions on this repository, and
 # nothing else — no org admin, no access to any other repo:
 #
 #   Contents:      read and write   (push and delete the ci-verify/* branches)
 #   Pull requests: read and write   (open them, close them)
 #   Actions:       read             (read the job results it asserts on)
+#   Workflows:     write            (push the `gate` case, which edits ci.yml)
 #
 # `Actions: read` is the one that gets left out. Without it the script can open
 # every pull request and then read nothing back, which looks exactly like a
 # pipeline that never ran.
+#
+# `Workflows: write` is the one this list itself left out until TOG-20, when a run
+# on a token minted from it lost exactly one case:
+#
+#   ! [remote rejected] ci-verify/gate -> ci-verify/gate (refusing to allow a
+#     GitHub App to create or update workflow `.github/workflows/ci.yml` without
+#     `workflows` permission)
+#
+# GitHub gates pushes that touch `.github/workflows/**` on that permission
+# separately from `Contents: write`, and `break_gate` edits ci.yml by design — that
+# is the case. The push fails about ninety seconds in, names the permission but not
+# which case wanted it, and the other nine cases carry on, so the run ends with one
+# case missing rather than an obvious refusal at the top.
 #
 # One `--run` at a time per repository. Every case has a fixed branch name, so a
 # second concurrent run overwrites and then deletes the first one's pull requests.
