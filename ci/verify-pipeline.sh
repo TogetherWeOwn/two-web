@@ -927,6 +927,7 @@ break_slowserver() {
 }
 
 break_secret() {
+  TOUCHED=(ci-verify-credential.txt)
   # A credential-shaped string in a tracked file. `gitleaks` is a required check on
   # `main` and until now no case here made it go red — the one required check with
   # no live proof it fails, guarding the one thing that cannot be undone by a
