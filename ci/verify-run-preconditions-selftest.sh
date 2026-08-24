@@ -11,8 +11,9 @@
 #
 # So: build a throwaway repository whose `origin` *reads* as GitHub while its bytes
 # go to a bare repo next door, put a stub `gh` on PATH, and assert each guard fires
-# for its own reason and stays quiet otherwise. No network, no real repository, and
-# nothing that could reach TWO-Gaming/two-web even if it tried.
+# for its own reason and stays quiet otherwise. No network and no real repository:
+# the `insteadOf` at $FAKE_ORIGIN diverts every transfer and the stub `gh` answers
+# every API call, so nothing here reaches github.com whatever the URL says.
 #
 # The stub answers `gh pr list --json ... --jq ...` by running the real jq over a
 # fixture file, so the filter tested here is the filter verify-pipeline.sh ships.
@@ -61,9 +62,18 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/run-precond-selftest.XXXXXX")"
 trap 'rm -rf "$WORK"' EXIT
 
-# What `git config --get remote.origin.url` reports. Never contacted: an
-# `insteadOf` rewrite sends every actual transfer to the bare repo in the fixture.
-FAKE_ORIGIN="https://github.com/TWO-Gaming/two-web.git"
+# What `git config --get remote.origin.url` reports. Never contacted: the
+# `insteadOf` set alongside it sends every actual transfer to the bare repo in the
+# fixture, and `gh` is a stub, so no byte leaves the machine.
+#
+# It says TogetherWeOwn because that is what a real scratch clone's origin says,
+# and the assertion strings below quote the slug back. This used to name the old
+# TWO-Gaming org, described as unreachable — it was not: GitHub carries
+# repos/<oldorg>/<repo> on a transfer redirect, so that URL resolved to this very
+# repository. Isolation never came from the URL. Do not re-point this at a name
+# picked for being fake; point it at the repo being simulated and keep the
+# `insteadOf` on the line below, which is the thing actually holding.
+FAKE_ORIGIN="https://github.com/TogetherWeOwn/two-web.git"
 
 # The run id every fixture is stamped with, and the one run_case exports unless a
 # case says otherwise. Real ones are UUIDs; the only thing verify-pipeline.sh does
@@ -415,7 +425,7 @@ printf '\n\033[1m==> The Actions API cannot be read\033[0m\n'
 dir="$(fixture actions-api)" || { fail 'actions-api: fixture failed'; rc=1; }
 printf '1\n' > "$dir/api-status"
 PRE_EXISTING='no-such-ref'
-expect_refused actions-api 'cannot read the Actions API on TWO-Gaming/two-web' "$dir"
+expect_refused actions-api 'cannot read the Actions API on TogetherWeOwn/two-web' "$dir"
 
 printf '\n\033[1m==> One probe of the two could not be read\033[0m\n'
 
