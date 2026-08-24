@@ -1,43 +1,54 @@
 # Who gets asked to review what, in two-web.
 #
-# Handles are GitHub teams in the two-gaming org, not individuals, so a review
-# request never dies because one account is asleep. A team that does not exist,
-# or that does not have write access to this repo, makes its rule silently
-# invalid — so every team named here has to be created in the org first.
+# Handles here are individual GitHub accounts, not teams. The TogetherWeOwn org
+# has no teams and one member with write access, so a team would be a group of
+# one and would only add a layer to keep in sync. When a second person has write
+# access, promote the functions that genuinely have two people to real teams —
+# the path rules below are already split along those lines, so that change is one
+# handle per line and nothing else.
+#
+# This file is advisory. The org is on the free plan and this repo is private, so
+# branch protection and rulesets are unavailable and GitHub cannot *require* a
+# code owner's approval here. What it still does, and the reason to keep it
+# accurate, is auto-request the owner as a reviewer when a PR opens.
+#
+# A rule naming an account without write access to this repo is silently dropped
+# by GitHub — no warning, no reviewer. That is exactly how this file broke: it
+# named teams in the old two-gaming org, none of which exist here.
 
-# Default: the Web Lead owns the application.
-*                             @two-gaming/web-lead
+# Default: the application.
+*                             @Rick7C2
 
-# Anything a member sees. Frontend reviews the markup, styles and JS; the Web
-# Lead still sees it because views call into the backend.
-/resources/views/             @two-gaming/frontend @two-gaming/web-lead
-/resources/js/                @two-gaming/frontend
-/resources/css/               @two-gaming/frontend
-/vite.config.js               @two-gaming/frontend
+# Anything a member sees: markup, styles and JS. Views call into the backend, so
+# frontend and backend concerns meet here.
+/resources/views/             @Rick7C2
+/resources/js/                @Rick7C2
+/resources/css/               @Rick7C2
+/vite.config.js               @Rick7C2
 # No tailwind.config.js on purpose: Tailwind 4 is configured from
 # resources/css/app.css, which the rule above already covers.
 
 # Backend: schema, policies, and the request path.
-/app/                         @two-gaming/web-lead
-/routes/                      @two-gaming/web-lead
-/database/                    @two-gaming/web-lead
-/config/                      @two-gaming/web-lead
+/app/                         @Rick7C2
+/routes/                      @Rick7C2
+/database/                    @Rick7C2
+/config/                      @Rick7C2
 
-# Tests and CI are QA's as well. "Make CI green" is the easiest thing in the
-# repo to get wrong on purpose.
-/tests/                       @two-gaming/qa @two-gaming/web-lead
-/.github/workflows/           @two-gaming/qa @two-gaming/web-lead
-/phpunit.xml                  @two-gaming/qa
-/phpunit.dusk.xml             @two-gaming/qa
-/phpstan.neon                 @two-gaming/qa
-/pint.json                    @two-gaming/qa
+# Tests and CI. "Make CI green" is the easiest thing in the repo to get wrong on
+# purpose, so these paths are called out even though the owner is the same.
+/tests/                       @Rick7C2
+/.github/workflows/           @Rick7C2
+/phpunit.xml                  @Rick7C2
+/phpunit.dusk.xml             @Rick7C2
+/phpstan.neon                 @Rick7C2
+/pint.json                    @Rick7C2
 
-# The boundary with the bot. The website reads the bot's contract and must
-# never hold the bot token; changes here get the Founding Engineer's eyes.
+# The boundary with the bot. The website reads the bot's contract and must never
+# hold the bot token.
 # app/Services/Discord/ does not exist yet — it arrives with TWO-24.
-/config/services.php          @two-gaming/web-lead @two-gaming/founding-engineer
-/app/Services/Discord/        @two-gaming/web-lead @two-gaming/founding-engineer
+/config/services.php          @Rick7C2
+/app/Services/Discord/        @Rick7C2
 
 # Secrets posture.
-/.env.example                 @two-gaming/web-lead @two-gaming/founding-engineer
-/.gitignore                   @two-gaming/web-lead @two-gaming/founding-engineer
+/.env.example                 @Rick7C2
+/.gitignore                   @Rick7C2
