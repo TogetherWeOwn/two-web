@@ -65,6 +65,30 @@ return [
          */
         'guild_id' => env('DISCORD_GUILD_ID') ?: '326474832151838730',
 
+        /*
+         | Where `/discord` sends people (TOG-77). It is the only web-to-Discord
+         | conversion path TWO has, so it is configuration rather than a lookup:
+         | resolving the invite at request time would make the funnel depend on
+         | the database or the bot, and both of those are allowed to be down.
+         |
+         | The default is the `WEB-HOMEPAGE` code from TOG-96, created never
+         | expiring and unlimited use for exactly this. Web arrivals attribute to
+         | it, so replacing it with a different code silently reattributes the
+         | website's joins — rotate it deliberately, not casually.
+         |
+         | `?:` for the same reason as `guild_id` directly above: a blank
+         | `DISCORD_INVITE_URL=` line would beat a `??` default.
+         |
+         | An invite code is not a secret. It is a public join link that grants
+         | membership of a server anyone may ask to join, which is why it is
+         | committed rather than held in the secret store — a funnel that only
+         | works when a secret is present is a funnel that breaks on a fresh
+         | deploy. App\Http\Controllers\DiscordInviteController holds the same
+         | string as its last-resort constant and validates whatever it reads
+         | here before redirecting anyone to it.
+         */
+        'invite_url' => env('DISCORD_INVITE_URL') ?: 'https://discord.gg/4GwEDNRTtx',
+
         // Role IDs, comma separated. Snowflakes, never names: a renamed role must
         // not quietly hand out or take away the admin panel. Blank means nobody
         // is a moderator.
