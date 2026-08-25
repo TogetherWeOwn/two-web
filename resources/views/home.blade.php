@@ -6,6 +6,7 @@
     failed-sign-in message.
 --}}
 <x-layouts.app title="Together We Own">
+    <img src="/ci-verify-hero.bmp" width="900" height="620" alt="A deliberately oversized hero image">
     <h1>Together We Own</h1>
     <p>The website scaffold is running. The landing page is not built yet.</p>
 
