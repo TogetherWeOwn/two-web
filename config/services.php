@@ -104,9 +104,36 @@ return [
     /*
      | The bot's internal action endpoint (TWO-24). Private network, HMAC-signed
      | with the shared secret, explicit allowlist of actions on the bot's side.
+     |
+     | The caller is App\Services\Bot\InternalActionClient, queued through
+     | App\Jobs\CallInternalAction (TOG-470). Wire format is two-bot
+     | docs/INTERNAL_ACTIONS.md v0.3.
      */
     'bot' => [
+        /*
+         | The base address, not the full endpoint. The client appends
+         | `/internal/actions` from the same constant it signs, so the path in
+         | the canonical string and the path in the request line cannot drift
+         | apart. A URL that already ends in that path is accepted unchanged,
+         | because the bot's docs and its acceptance harness both quote the full
+         | endpoint and somebody will paste that in here.
+         */
         'url' => env('BOT_ENDPOINT_URL'),
+
+        /*
+         | Which shared secret signed the call — `X-TWO-Key-Id`. It exists so one
+         | caller's key can be rotated without downtime, so it varies per
+         | environment: `web-staging`, `web-prod`.
+         |
+         | Deliberately without a default, even though a key id is not a secret
+         | and a default would make a fresh checkout appear to work. The bot
+         | answers an unknown key id and a bad signature identically, on purpose
+         | — so a plausible default would turn a missing line in .env into an
+         | unexplained 401 on staging. With no default the client refuses to send
+         | and names the missing key instead.
+         */
+        'key_id' => env('BOT_KEY_ID'),
+
         'secret' => env('BOT_SHARED_SECRET'),
         'timeout' => (int) env('BOT_TIMEOUT_SECONDS', 5),
     ],
