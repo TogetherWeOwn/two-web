@@ -40,6 +40,10 @@ fixture() {
   cp "$REPO_ROOT/docs/ci.md" "$dir/docs/"
   cp "$REPO_ROOT/ci/verify-pipeline.sh" "$dir/ci/"
   cp "$REPO_ROOT/ci/lighthouserc.cjs" "$dir/ci/"
+  # The lint loads lighthouserc.cjs through node now, and that file requires
+  # pages.cjs. Without it every case would go red on a missing module rather than
+  # on the defect it was written for — including `clean`.
+  cp "$REPO_ROOT/ci/pages.cjs" "$dir/ci/"
   echo "$dir"
 }
 
@@ -193,6 +197,61 @@ expect_fail ttfb-gate-removed 'budget `server-response-time`' \
 # The same gate downgraded to a warning, which reads like keeping it and is not.
 expect_fail ttfb-downgraded 'budget `server-response-time`' \
   sed -i "s/'server-response-time': \['error'/'server-response-time': ['warn'/" ci/lighthouserc.cjs
+
+# The number kept, the aggregation swapped. One word, and every budget goes from
+# median-of-3 to best-of-3: with `optimistic`, @lhci/utils/src/assertions.js takes
+# `Math.min` over the runs for any `max*` assertion. The threshold still reads 600
+# in the diff, so this is the quietest way to relax a budget there is.
+expect_fail budget-aggregation-swapped 'budget `server-response-time` is not asserted' \
+  sed -i "s/maxNumericValue: 600, aggregationMethod: 'median'/maxNumericValue: 600, aggregationMethod: 'optimistic'/" ci/lighthouserc.cjs
+
+# The aggregation deleted rather than swapped. Same effect: lhci defaults
+# `aggregationMethod` to `'optimistic'`, so `'median'` is load-bearing and removing
+# it is best-of-3 by another route. This used to be caught by luck — the old grep
+# needed a trailing comma and `{ maxNumericValue: 2000 }` has none. Now it is
+# caught on purpose, and this case is what keeps it that way.
+expect_fail budget-aggregation-removed 'budget `largest-contentful-paint` is not asserted' \
+  sed -i "s/{ maxNumericValue: 2000, aggregationMethod: 'median' }/{ maxNumericValue: 2000 }/" ci/lighthouserc.cjs
+
+# A second entry appended for an audit that already has one. The pinned line is
+# left exactly as it was — and a JavaScript object literal keeps the *last*
+# duplicate key, so lhci loads the new one and the CEO's LCP budget is gone. The
+# three cases above all edit the pinned line in place; this one does not touch it,
+# which is why it slipped past the first version of the check (QA on TWO-93). It is
+# also the variant that looks least like tampering and most like a bad merge.
+#
+# Loosened from `is asserted 2 times` when the lint stopped counting keys and
+# started reading the effective value through node: there is no count to report
+# any more, and the failure now names the budget and prints what lhci actually
+# loads. Same defect, same red, different sentence — and the same expectation as
+# its three siblings below, which is the point of them being siblings.
+expect_fail budget-duplicated 'budget `largest-contentful-paint`' \
+  sed -i "/'server-response-time':/a\\        'largest-contentful-paint': ['warn', { maxNumericValue: 99999 }]," ci/lighthouserc.cjs
+
+# The same duplicate, spelled the three other ways JavaScript allows. The case
+# above counts `'largest-contentful-paint':` — single quotes, literal key — and
+# that is one spelling of four. Each of these loads as the effective budget and
+# each leaves the pinned line untouched and still matching the grep, so `--lint`
+# exits 0 while the CEO's 2000ms LCP budget is a warning at 99999. Confirmed by
+# loading the mutated config through node and printing what lhci would read
+# (QA, TWO-101).
+#
+# The expectation is only that the lint goes red naming the budget, not that it
+# says any particular sentence: how this gets covered is the author's call. Worth
+# saying that a grep widened to accept `["']` closes the first two and cannot
+# close the third — a spread has no key to match. Reading the effective value out
+# of the config with node covers all four at once and cannot drift from what lhci
+# loads, because it is the same require(). `node` is on ubuntu-24.04 before
+# `setup-node` runs, so the `static` job can do this where it already stands.
+expect_fail budget-duplicated-double-quoted 'budget `largest-contentful-paint`' \
+  sed -i "/'server-response-time':/a\\        \"largest-contentful-paint\": ['warn', { maxNumericValue: 99999 }]," ci/lighthouserc.cjs
+
+expect_fail budget-duplicated-computed-key 'budget `largest-contentful-paint`' \
+  sed -i "/'server-response-time':/a\\        ['largest-contentful-paint']: ['warn', { maxNumericValue: 99999 }]," ci/lighthouserc.cjs
+
+# The one that looks most like a merge artefact and least like a key at all.
+expect_fail budget-duplicated-spread 'budget `largest-contentful-paint`' \
+  sed -i "/'server-response-time':/a\\        ...{ 'largest-contentful-paint': ['warn', { maxNumericValue: 99999 }] }," ci/lighthouserc.cjs
 
 printf '\n\033[1m==> Tripwires (warn, do not block)\033[0m\n'
 

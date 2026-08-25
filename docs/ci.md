@@ -169,7 +169,54 @@ performance target.
 
 All three numbers are pinned by `verify-pipeline.sh --lint`, so relaxing one,
 downgrading it to a warning or deleting it fails `static` rather than passing
-quietly.
+quietly. The lint pins **the aggregation as well as the number**, and that is not
+belt-and-braces: lhci defaults `aggregationMethod` to `'optimistic'`, which for a
+`maxNumericValue` assertion compares the *best* of the three runs instead of the
+median. Swapping one word turns every budget into best-of-3 while the threshold in
+the diff still reads 2000, so `aggregationMethod: 'median'` is load-bearing and the
+lint pins the whole options object, not just the number (TWO-101).
+
+It pins it by **loading the config through node and reading the value lhci will
+read**, rather than by matching the text of the file. Matching text was guessing:
+`'largest-contentful-paint'` is one of four ways JavaScript spells that key, and a
+second entry written any of the other three ways — double-quoted, computed, or
+spread in — becomes the effective budget while leaving the pinned line word for word
+intact, because an object literal keeps the last entry for a key. Three of the four
+went straight past the old pattern (QA, TWO-101), and widening it could never have
+caught the spread, which has no key to match. The check now runs the same
+`require()` lhci does and compares what comes back, so there is no fourth spelling
+to miss. If `ci/lighthouserc.cjs` cannot be loaded at all, `--lint` goes red for
+that too — a budget that cannot be read is not being enforced.
+
+One known gap, so nobody has to rediscover it: a duplicate entry that is *identical*
+to the pinned one passes, because the effective budget is still the right budget.
+Verified, not assumed. It goes red the moment either line is edited, which is the
+moment a second entry starts mattering.
+
+Each budget also has a live case behind it in `verify-pipeline.sh`, which matters
+because the two performance cases go red for different reasons and only one of them
+is about LCP:
+
+| Case | What actually reddens `budgets` |
+|---|---|
+| `slowserver` — three seconds of server think-time | `server-response-time`, for the reason above. **Not** `largest-contentful-paint`. |
+| `lcp` — a 1.6 MB uncompressed hero above the fold | `largest-contentful-paint`, and nothing else |
+
+The `lcp` case exists because without it the CEO's headline budget has no live proof
+that it fires at all: `slowserver` is a server-side breach, so a broken
+`largest-contentful-paint` assertion would be invisible to every job in the pipeline.
+Measured on the settings in `ci/lighthouserc.cjs`, varying only the image:
+
+| Above-the-fold image | Simulated LCP | |
+|---|---|---|
+| none | 752ms | |
+| 148 KB | 1653ms | under budget |
+| 1.6 MB | 9153ms | **4.6× over the 2.0s budget** |
+
+CLS stays at 0 and `server-response-time` at single-digit milliseconds throughout, so
+LCP is the only assertion that fails and the case proves the thing it is named for.
+It is deterministic: under `simulate` the number comes from the byte count, not from
+how fast the runner happened to be.
 
 Measured against a production-shaped build: `composer install --no-dev`,
 `APP_DEBUG=false`, config/route/view caches warm, real built assets. Measuring a
@@ -326,11 +373,19 @@ Everything above the last two proves the *jobs* go red for the right reasons. Th
 is not the same as proving a red job blocks the merge — see "Reading the rule, not
 the list" above for the fact none of them ever read it.
 
+`--run` is the expensive one, and it got more expensive when the `lcp` case split
+off `slowserver`: **eleven pull requests** now, ten deliberate breakages and one
+clean control, each waiting on a full CI run. Budget most of an hour and do not
+start one you cannot sit with. One of the eleven also pushes a 1.6 MB image on
+purpose — the `lcp` breakage below — and since TWO-109 `--cleanup` deletes the
+`ci-verify/*` refs as well as closing the pull requests, so that blob does not
+outlive the run.
+
 `--lint` is the only thing watching the gate, so nothing downstream notices if it
 quietly stops catching anything. `verify-lint-selftest.sh` is the check on the
 check: it mutates a throwaway copy of the workflow one defect at a time and asserts
-`--lint` goes red *for the stated reason*. Fourteen mutation cases, every one a mistake
-that has actually been made on this repo or proposed for it. Both run in `static`, first,
+`--lint` goes red *for the stated reason*. Twenty cases, every one a mistake that has
+actually been made on this repo or proposed for it. Both run in `static`, first,
 before anything slow.
 
 Three further cases do not mutate the workflow at all. One runs the unmutated repo and
@@ -376,8 +431,9 @@ caught a real LCP breach, and only one of those means the gate works.
 | A hex nudged in the vendored `resources/css/two.css` | `pest` |
 | A heading hidden with CSS — visible in the HTML, invisible in the browser | `dusk` |
 | An image with no alt text | `budgets` |
-| Three seconds of server think-time before paint | `budgets` |
-| A budget threshold relaxed, downgraded to a warning, or deleted | `static` |
+| Three seconds of server think-time before paint | `budgets` (via `server-response-time`) |
+| A 1.6 MB uncompressed hero image above the fold | `budgets` (via `largest-contentful-paint`) |
+| A budget threshold relaxed, downgraded to a warning, deleted, shadowed by a second entry, or its aggregation swapped | `static` |
 | Deleting the aggregate's `if: always()` | `static` — see below |
 | A credential committed to a tracked file | `gitleaks` — see below |
 | Nothing wrong at all | nothing — goes green |
