@@ -50,7 +50,7 @@ curl -s -H 'accept: application/dns-json' 'https://cloudflare-dns.com/dns-query?
 | `togetherweown.com` | WordPress.com, **empty** — title `Together We Own -`, one outbound link, no sitemap, no store | Cut over to us |
 | `www.togetherweown.com` | Same origin, same challenge — no redirect to the apex | Fix at cutover |
 | `togetherweown.com/discord` | **302 into a live Discord OAuth join flow.** The only working web→Discord path we have | **Must survive. See below** |
-| `togetherweown.com/join` | 301 → `/join/` → **HTTP 200, titled "Page Not Found", `<meta name="robots" content="follow, noindex">`** — a soft 404 | Do not build a `/join` |
+| `togetherweown.com/join` | 301 → `/join/` → **HTTP 200, titled "Page Not Found", `<meta name="robots" content="follow, noindex">`** — a soft 404 | No `/join` *page*; a 301 to `/discord` — see below |
 | `staging.togetherweown.com` | **Already resolves**, proxied, same origin as the apex | Repoint + grey cloud |
 | `two.gg`, `www.two.gg` | **302**, path-preserving, to `https://togetherweown.com/<path>` | Make it 301 |
 | `two.gg/discord` | **301** to `togetherweown.com/discord/` — already correct | Leave it, retarget at cutover |
@@ -160,7 +160,42 @@ Three consequences, in order of how much they will hurt if missed:
    which under our integration rules is the bot's job, not Laravel's. **Flagged to
    the CEO as a conversion question, not decided here.**
 
-The Laravel side of this is **TWO-54**.
+The Laravel side of this is **TWO-54**, and it is now built — **TOG-77**. What
+shipped, so nobody has to read the code to know what the apex will answer:
+
+| Path | Answers | Depends on |
+|---|---|---|
+| `/discord` | `302` → `services.discord.invite_url`, defaulting to the `WEB-HOMEPAGE` invite from TOG-96, with `Cache-Control: no-store` | nothing — no database, no cache, no session, no bot |
+| `/join` | `301` → `/discord` | nothing |
+
+Four properties of that, each pinned by a test in
+`tests/Feature/DiscordFunnelTest.php` so they cannot be undone quietly:
+
+- **No database.** Both routes are registered from `routes/funnel.php` with an
+  empty middleware stack, *outside* the `web` group. This is not tidiness:
+  `SESSION_DRIVER=database` in every environment we ship, so a route in the `web`
+  group opens a Postgres connection in `StartSession` before the controller runs.
+  The test configures a database-backed session and asserts **zero queries**.
+- **No 503 during a deploy.** Both paths are excepted from
+  `PreventRequestsDuringMaintenance`, so `php artisan down` does not take the
+  funnel dark.
+- **Never an open redirect.** The configured invite is refused unless it is an
+  `https` URL on `discord.gg` or `discord.com`, and the hardcoded fallback is
+  served instead. A mistyped `DISCORD_INVITE_URL` cannot turn the most trusted
+  link we own into a way of sending our own members somewhere else.
+- **302, not 301, on `/discord`.** The destination changes when TOG-80 lands. A
+  301 would already be cached in the browser of every member who had used it —
+  the one population we could never reach to correct.
+
+**Point 3 above is still open and this does not close it.** What shipped is the
+plain invite redirect, which is the *worse* funnel the point warns about: an
+extra page and an extra decision versus today's one click. It is what can be
+built without the bot token, and it is strictly better than the 404 that is the
+alternative on cutover day. **One-click parity is TOG-80**, owned by the Founding
+Engineer, and when it lands it replaces this route's happy path and nothing else
+— the invite redirect stays underneath as what TOG-80 falls back to when the bot
+is unreachable. So the ordering constraint is: cutover needs TOG-77 (done),
+not TOG-80.
 
 ---
 
