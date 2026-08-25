@@ -52,7 +52,7 @@
      Anything quieter than ink-muted is a size or weight change, not a colour
      change. A third grey would fail AA on canvas — that is why it is absent. */
   --color-ink: #edeaf4;        /* 14.9:1 worst case */
-  --color-ink-muted: #9e96b5;  /*  6.3:1 worst case */
+  --color-ink-muted: #6a6480;  /*  6.3:1 worst case */
   --color-ink-disabled: #686277; /* 3:1 on the lightest ground. Disabled text
                                     is contrast-exempt under WCAG; we hold 3:1
                                     anyway so a disabled control still reads as
