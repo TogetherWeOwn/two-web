@@ -11,14 +11,16 @@ pest()->extend(TestCase::class)
 
 pest()->extend(TestCase::class)->in('Unit');
 
-// The capacity race is fought by separate OS processes on their own connections,
-// and those cannot see rows sitting inside a test's uncommitted transaction. This
-// suite therefore commits and truncates instead of wrapping. It is its own
-// directory rather than a per-file trait override so the difference is visible
-// from the file tree, and so nothing else accidentally inherits it.
+// Tests that need transactions which really commit, so they truncate instead of
+// wrapping. RefreshDatabase holds every test inside a transaction it never commits,
+// and two things here depend on that not being true: the capacity race is fought by
+// separate OS processes, which cannot see rows in somebody else's uncommitted
+// transaction; and a job dispatched `afterCommit` only runs when a commit actually
+// happens. Its own directory rather than a per-file trait override, so the
+// difference is visible from the file tree and nothing else inherits it by accident.
 pest()->extend(TestCase::class)
     ->use(DatabaseTruncation::class)
-    ->in('Concurrency');
+    ->in('Integration');
 
 // Dusk runs through phpunit.dusk.xml against a real browser and a real server, so
 // it is never part of `composer test`. See `composer test:e2e`.

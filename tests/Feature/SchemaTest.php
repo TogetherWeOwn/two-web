@@ -50,6 +50,11 @@ it('defaults a new event to draft so nothing publishes itself', function () {
     $event = Event::query()->create([
         'title' => 'Friday night Helldivers',
         'starts_at' => now()->addWeek(),
+        // Required since 2026_08_25_000100. The bot needs an end on every
+        // event.upsert, and a job that has to invent one is a bug waiting for a
+        // Friday, so the column closes the gap rather than the job.
+        'ends_at' => now()->addWeek()->addHours(2),
+        'timezone' => 'Europe/London',
     ]);
 
     expect($event->fresh()->status)->toBe(EventStatus::Draft);

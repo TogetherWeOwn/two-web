@@ -1,6 +1,13 @@
 <?php
 
 declare(strict_types=1);
+use App\Enums\RsvpStatus;
+use App\Exceptions\EventAtCapacityException;
+use App\Models\Event;
+use App\Models\User;
+use App\Services\EventService;
+use Illuminate\Contracts\Console\Kernel;
+use Illuminate\Foundation\Application;
 
 /*
  * One competitor in the last-slot race. It is a separate OS process on purpose.
@@ -21,17 +28,17 @@ $root = dirname(__DIR__, 2);
 
 require $root.'/vendor/autoload.php';
 
-/** @var Illuminate\Foundation\Application $app */
+/** @var Application $app */
 $app = require $root.'/bootstrap/app.php';
-$app->make(Illuminate\Contracts\Console\Kernel::class)->bootstrap();
+$app->make(Kernel::class)->bootstrap();
 
 $eventKey = (string) ($argv[1] ?? '');
 $userId = (int) ($argv[2] ?? 0);
 $startAtMs = (int) ($argv[3] ?? 0);
 
 try {
-    $event = App\Models\Event::query()->where('event_key', $eventKey)->firstOrFail();
-    $user = App\Models\User::query()->findOrFail($userId);
+    $event = Event::query()->where('event_key', $eventKey)->firstOrFail();
+    $user = User::query()->findOrFail($userId);
 } catch (Throwable $e) {
     echo json_encode(['outcome' => 'setup_failed', 'exception' => $e::class, 'message' => $e->getMessage()]);
     exit(0);
@@ -44,11 +51,11 @@ while ((int) (microtime(true) * 1000) < $startAtMs) {
 }
 
 try {
-    $rsvp = $app->make(App\Services\EventService::class)
-        ->rsvp($event, $user, App\Enums\RsvpStatus::Going);
+    $rsvp = $app->make(EventService::class)
+        ->rsvp($event, $user, RsvpStatus::Going);
 
     echo json_encode(['outcome' => 'accepted', 'rsvp_id' => $rsvp->id]);
-} catch (App\Exceptions\EventAtCapacityException $e) {
+} catch (EventAtCapacityException $e) {
     echo json_encode(['outcome' => 'at_capacity', 'exception' => $e::class, 'message' => $e->getMessage()]);
 } catch (Throwable $e) {
     echo json_encode(['outcome' => 'error', 'exception' => $e::class, 'message' => $e->getMessage()]);

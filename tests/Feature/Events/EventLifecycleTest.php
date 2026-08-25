@@ -7,7 +7,7 @@ use App\Models\Event;
 use App\Models\Rsvp;
 use App\Models\User;
 use App\Services\EventService;
-use Illuminate\Support\Facades\DB;
+use App\Support\EventInput;
 use Illuminate\Support\Facades\Queue;
 
 beforeEach(function () {
@@ -34,7 +34,7 @@ it('creates an event as a draft so nothing publishes itself', function () {
     $this->actingAs($this->moderator)
         ->postJson(route('events.store'), eventPayload())
         ->assertStatus(201)
-        ->assertJsonPath('status', EventStatus::Draft->value);
+        ->assertJsonPath('data.status', EventStatus::Draft->value);
 
     expect(Event::query()->firstOrFail()->created_by)->toBe($this->moderator->id);
 });
@@ -57,15 +57,15 @@ it('publishes and cancels through the route, by event key not id', function () {
     $this->actingAs($this->moderator)
         ->postJson(route('events.publish', $event))
         ->assertOk()
-        ->assertJsonPath('status', EventStatus::Published->value)
-        ->assertJsonPath('event_key', $event->event_key);
+        ->assertJsonPath('data.status', EventStatus::Published->value)
+        ->assertJsonPath('data.event_key', $event->event_key);
 
     expect($event->fresh()?->status)->toBe(EventStatus::Published);
 
     $this->actingAs($this->moderator)
         ->postJson(route('events.cancel', $event))
         ->assertOk()
-        ->assertJsonPath('status', EventStatus::Cancelled->value);
+        ->assertJsonPath('data.status', EventStatus::Cancelled->value);
 
     expect($event->fresh()?->status)->toBe(EventStatus::Cancelled);
 });
@@ -96,11 +96,20 @@ it('will not re-publish a cancelled event', function () {
 it('records an RSVP for the member who is signed in', function () {
     $event = Event::factory()->create(['status' => EventStatus::Published, 'capacity' => 4]);
 
+    // 201 on the first answer, 200 on a change: one answer per member per event, so
+    // re-answering updates the same row rather than making a second one.
     $this->actingAs($this->member)
         ->putJson(route('events.rsvp.update', $event), ['status' => RsvpStatus::Going->value])
-        ->assertOk()
-        ->assertJsonPath('status', RsvpStatus::Going->value)
-        ->assertJsonPath('synced_to_discord_at', null);
+        ->assertStatus(201)
+        ->assertJsonPath('data.status', RsvpStatus::Going->value)
+        // Committed here, not in Discord yet — and the response says so rather than
+        // claiming a Discord event that does not exist.
+        ->assertJsonPath('data.synced_to_discord_at', null);
+
+    $this->actingAs($this->member)
+        ->putJson(route('events.rsvp.update', $event), ['status' => RsvpStatus::Maybe->value])
+        ->assertStatus(200)
+        ->assertJsonPath('data.status', RsvpStatus::Maybe->value);
 
     expect(Rsvp::query()->where('user_id', $this->member->id)->count())->toBe(1);
 });
@@ -135,7 +144,7 @@ it('still takes a maybe for a full event, because maybe is not a seat', function
 
     $this->actingAs($this->member)
         ->putJson(route('events.rsvp.update', $event), ['status' => RsvpStatus::Maybe->value])
-        ->assertOk();
+        ->assertSuccessful();
 });
 
 it('withdraws an RSVP', function () {
@@ -149,59 +158,54 @@ it('withdraws an RSVP', function () {
     expect(Rsvp::query()->count())->toBe(0);
 });
 
-it('dispatches the Discord write-back after the RSVP is committed, never during', function () {
+it('queues the Discord write-back rather than calling the bot in the request', function () {
     Queue::fake();
 
     $event = Event::factory()->create(['status' => EventStatus::Published]);
 
     app(EventService::class)->rsvp($event, $this->member, RsvpStatus::Going);
 
-    Queue::assertPushed(SyncEventToDiscord::class, fn (SyncEventToDiscord $job): bool => $job->eventKey === $event->event_key);
+    Queue::assertPushed(
+        SyncEventToDiscord::class,
+        fn (SyncEventToDiscord $job): bool => $job->eventKey === $event->event_key && $job->afterCommit === true,
+    );
 });
 
-it('does not dispatch the write-back when the surrounding transaction rolls back', function () {
+it('coalesces a burst of changes into one write-back per event', function () {
     Queue::fake();
 
-    $event = Event::factory()->create(['status' => EventStatus::Published]);
+    $event = Event::factory()->create(['status' => EventStatus::Draft]);
+    $service = app(EventService::class);
 
-    try {
-        DB::transaction(function () use ($event) {
-            app(EventService::class)->rsvp($event, $this->member, RsvpStatus::Going);
+    // Publishing and then cancelling within the debounce window is two changes to
+    // the same Discord event. Twenty members answering in a minute is twenty. Both
+    // must be one edit: the bot's budget is 60 requests a minute for the whole
+    // site, and one popular event would otherwise spend a third of it.
+    $service->publish($event);
+    $service->cancel($event->refresh());
 
-            throw new RuntimeException('something later in the request failed');
-        });
-    } catch (RuntimeException) {
-        // expected
-    }
+    Queue::assertPushed(SyncEventToDiscord::class, 1);
 
-    Queue::assertNothingPushed();
-    expect(Rsvp::query()->count())->toBe(0);
-});
-
-it('coalesces the write-back to one job per event', function () {
-    $event = Event::factory()->create(['status' => EventStatus::Published]);
-
-    // Twenty members answering in a minute must be one Discord edit, not twenty:
-    // the bot's budget is 60 requests a minute across the whole site.
+    // Which is only safe because the job carries the key and re-reads: the single
+    // surviving write-back sends whatever the event says when it runs, not a
+    // snapshot taken when it was queued.
     expect((new SyncEventToDiscord($event->event_key))->uniqueId())->toBe($event->event_key);
 });
 
 it('does not dispatch a write-back for a draft, which Discord has never seen', function () {
     Queue::fake();
 
-    app(EventService::class)->create($this->moderator, App\Support\EventInput::fromValidated(eventPayload()));
+    app(EventService::class)->create($this->moderator, EventInput::fromValidated(eventPayload()));
 
     Queue::assertNothingPushed();
 });
 
-it('dispatches a write-back when a published event is published or cancelled', function () {
+it('dispatches a write-back when an event is cancelled', function () {
     Queue::fake();
 
-    $event = Event::factory()->create(['status' => EventStatus::Draft]);
-    $service = app(EventService::class);
+    $event = Event::factory()->create(['status' => EventStatus::Published]);
 
-    $service->publish($event);
-    $service->cancel($event->refresh());
+    app(EventService::class)->cancel($event);
 
-    Queue::assertPushed(SyncEventToDiscord::class, 2);
+    Queue::assertPushed(SyncEventToDiscord::class, 1);
 });
