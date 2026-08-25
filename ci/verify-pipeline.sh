@@ -31,10 +31,22 @@
 #
 #   Contents:      read and write   (push and delete the ci-verify/* branches)
 #   Pull requests: read and write   (open them, close them)
-#   Actions:       read             (read the job results it asserts on)
+#   Checks:        read             (read the job results it asserts on)
 #   Workflows:     write            (push the `gate` case, which edits ci.yml)
 #
-# `Actions: read` is the one that gets left out. Without it the script can open
+# `Actions: read` is deliberately NOT on that list, and must not be added back.
+# This script used to read `repos/{slug}/actions/runs` and `.../jobs`, which is the
+# one permission that also grants **workflow log download** — and a log carries
+# whatever CI printed, which on a private repo is a much larger blast radius than
+# "did this job go red". TOG-247 refused it permanently on that basis: *"Do not add
+# `actions:read`, and do not accept it later as a convenience."* Every result this
+# script asserts on now comes from the Checks API instead, which answers the only
+# question the assertions ask — did this named job conclude, and how — and grants
+# nothing else. TOG-328 did the port. If you find yourself adding `Actions: read`
+# to make something here work, you are re-opening a closed security decision; port
+# the read to check-runs instead.
+#
+# `Checks: read` is the one that gets left out. Without it the script can open
 # every pull request and then read nothing back, which looks exactly like a
 # pipeline that never ran.
 #
@@ -446,11 +458,14 @@ assert_checks() {
   if [ -n "$where" ]; then where=" on ${where}"; fi
 
   # A check that never reported is not a pass. If the workflow file has a syntax
-  # error, or Actions is disabled on the repo, the Actions API returns nothing at
-  # all — and reading nothing as green is exactly the bug this script exists to
-  # catch, one level up. The other two ways to get nothing back — an origin that is
-  # not a GitHub repository, and a token without `Actions: read` — are ruled out in
-  # the preconditions before anything is pushed (TWO-87).
+  # error, or Actions is disabled on the repo, no check run is ever created and the
+  # Checks API returns an empty list — and reading nothing as green is exactly the
+  # bug this script exists to catch, one level up. The other two ways to get nothing
+  # back — an origin that is not a GitHub repository, and a token without
+  # `Checks: read` — are ruled out in the preconditions before anything is pushed
+  # (TWO-87, and TOG-328 for the move off `Actions: read`). The fourth, a push that
+  # never landed, is not ruled out anywhere and is meant to arrive here: it looks
+  # like a case that was never gated, because it was not.
   local absent=""
   for expected in "${EXPECTED_CHECKS[@]}"; do
     grep -q "^${expected}=" <<< "$checks" || absent="${absent} ${expected}"
@@ -543,6 +558,123 @@ assert_checks() {
   fi
   pass "${why} (rejected by required check '${expected_job}'; '${AGGREGATE}' was ${aggregate_state}, which is not a pass and not what stops this one — TWO-94)"
   return 0
+}
+
+# --- reading the results ------------------------------------------------------
+
+# The fetch layer, kept next to the assertions it feeds and above the mode
+# dispatch, for the same reason assert_checks is up here: so `--assert-selftest`
+# can exercise it with no network. `wait_for_checks` is the one function in this
+# file whose failure mode is *silence* — it returns, the assertions read a
+# half-finished branch, and the run reports a check that never ran. TOG-328 made it
+# carry a condition it used to share with the Actions API, so it is now tested
+# rather than reviewed.
+#
+# $REPO_SLUG is resolved and proven readable in the preconditions, before anything
+# is pushed. Nothing here is called until then.
+
+POLL_INTERVAL=20
+CHECK_TIMEOUT=2400
+
+# The commit the checks are asked about. Check runs hang off a commit, not a
+# branch, so every read below needs a SHA.
+#
+# Read from the *local* ref rather than from the remote or the API, on purpose.
+# This clone is where the branch was just built and pushed from, and it is
+# run-private (the scratch-clone precondition, TWO-112), so the local ref is the
+# commit this run put on the remote — which is the commit whose checks it is
+# entitled to assert on. Resolving through the remote instead would silently follow
+# anything that landed on top, and report someone else's result as this run's.
+#
+# It also spends no API call per poll, and a branch name with a `/` in it — every
+# branch here has one — needs escaping in a `/commits/{ref}/` path and does not
+# here.
+#
+# Empty when the branch does not exist locally, which is what a failed push leaves
+# behind. That is deliberately not an error at this level: it flows through as "no
+# check reported", and assert_checks names the missing checks and fails the case.
+# That is the right report — a case whose branch never reached the remote did not
+# get gated, and the run must not pass.
+branch_head() {
+  git rev-parse --verify --quiet "refs/heads/$1" 2>/dev/null || true
+}
+
+# "<job>=<STATE>" per line. STATE is SUCCESS / FAILURE / CANCELLED / SKIPPED, or
+# PENDING for a check that has not concluded.
+#
+# Shorter than the Actions version it replaces because check runs are already
+# per-job: there is no run to enumerate first and no second call to expand a run
+# into its jobs.
+#
+#   filter=latest    the API default, stated anyway because the whole assertion
+#                    rests on it. It keeps one check run per name — the most
+#                    recent. That is what `group_by(.workflow_id) | max_by(
+#                    .run_number)` was doing in the Actions version: ci.yml cancels
+#                    an in-progress run when the branch is pushed again, and a
+#                    cancelled predecessor is not the result being asserted on.
+#   app.slug         only GitHub Actions. The Actions API could not return anything
+#                    else; check-runs can, because any GitHub App may post one. An
+#                    unrelated app's check run would be a line in this output that
+#                    no job produced — and the clean case asserts *every* line is
+#                    SUCCESS, so a third-party check would fail a green pipeline.
+branch_checks() {
+  local sha
+  sha=$(branch_head "$1")
+  [ -n "$sha" ] || return 0
+  gh api "repos/${REPO_SLUG}/commits/${sha}/check-runs?per_page=100&filter=latest" \
+    --jq '.check_runs[] | select(.app.slug == "github-actions")
+          | "\(.name)=\(.conclusion // "pending" | ascii_upcase)"' 2>/dev/null || true
+}
+
+# Blocks until every expected check has finished. Returns non-zero on timeout so
+# the caller reports "never reported" rather than reading a half-finished run.
+#
+# The Actions version waited on two conditions — every workflow run it could see
+# has completed, *and* every name in EXPECTED_CHECKS has reported — because
+# neither is sufficient alone. Two workflows produce these checks (ci.yml and
+# secret-scan.yml) and the API only lists a run once GitHub has created it, so
+# "every run I can see is done" returns immediately in the window where one
+# workflow has finished and the other has not been created yet. The assertion then
+# reports a check that never ran, on a branch where it was about to.
+#
+# Check runs have no run-level status to read, so that half is gone and the
+# EXPECTED_CHECKS half has to carry the whole load. It can, and the reason is that
+# it was always the load-bearing half: the window above is exactly "a name in
+# EXPECTED_CHECKS is not there yet", and waiting for the name closes it whether the
+# gap came from an uncreated run or an unfinished one.
+#
+# What changes is that presence is no longer enough. In the old form a name could
+# be counted as reported while still PENDING, because the run-completed half was
+# there to rule that out; drop that half and PENDING has to be rejected here or the
+# script reads a half-finished pipeline as a finished one. So the condition is:
+# every expected name is present AND none of them is PENDING. A check run that
+# exists but has not concluded reports `status: queued|in_progress` with a null
+# conclusion, which branch_checks renders as PENDING — that is the replacement
+# signal for the run-level status this used to read.
+#
+# Names not in EXPECTED_CHECKS are not waited on, same as before. A new job in
+# ci.yml is not a reason to block; it is a reason for check 7 in lint() to tell
+# someone to add it to the list.
+# Written as an explicit state read rather than two `grep -q`s and a `&&`: an
+# AND-list whose left side legitimately fails is a `set -e` exit waiting for the
+# day someone calls this outside a `|| true`.
+wait_for_checks() {
+  local branch="$1" waited=0 checks settled state
+  while [ "$waited" -lt "$CHECK_TIMEOUT" ]; do
+    checks=$(branch_checks "$branch")
+    settled=1
+    for expected in "${EXPECTED_CHECKS[@]}"; do
+      state=$(grep -m1 "^${expected}=" <<< "$checks" | cut -d= -f2 || true)
+      if [ -z "$state" ] || [ "$state" = PENDING ]; then
+        settled=0
+        break
+      fi
+    done
+    if [ "$settled" -eq 1 ]; then return 0; fi
+    sleep "$POLL_INTERVAL"
+    waited=$((waited + POLL_INTERVAL))
+  done
+  return 1
 }
 
 # Tests for the assertions above, with synthetic check results.
@@ -655,6 +787,141 @@ gitleaks=FAILURE" gitleaks SUCCESS no "secret-committed-gitleaks-not-required" 2
     fail "the live-run assertions do not say what they claim. Fix them before spending forty minutes on --run."
   else
     printf '\033[1m%d/%d — the live-run assertions accept and reject the right conclusions.\033[0m\n' "$n" "$n"
+  fi
+  return "$rc"
+}
+
+# Tests for the wait, with synthetic check-run output.
+#
+# `wait_for_checks` had no test until TOG-328, and until TOG-328 it did not need
+# one as badly: it read two conditions and the Actions half — "every workflow run
+# on this branch has completed" — was doing most of the work. Check runs have no
+# run-level status, so that half is gone and the EXPECTED_CHECKS half carries all
+# of it. A wait that returns early is silent by construction: the assertions then
+# read a branch mid-flight and report a check that never ran, on a branch where it
+# was about to. That is the exact bug the Actions-era comment claimed to have
+# closed, and nothing offline would have noticed it come back.
+#
+# `branch_checks` is shadowed by a shell function here, so no network, no
+# repository and no SHA. POLL_INTERVAL and CHECK_TIMEOUT are shadowed too: each
+# scenario is a fixed script of polls, and the wait must land on the right one.
+wait_selftest() {
+  local rc=0 n=0 name expect polls out status waited_polls counter
+  counter=$(mktemp "${TMPDIR:-/tmp}/wait-selftest.XXXXXX")
+  trap 'rm -f "$counter"' RETURN
+
+  # Each scenario is a `;`-separated script of poll responses, one per call to
+  # branch_checks, each a `,`-separated set of `name=STATE`. The wait must return
+  # 0 on the poll named by <expect>, or return 1 if <expect> is `timeout`.
+  #
+  # <name>|<expect: poll index, 1-based | timeout>|<polls>
+  local all='static=SUCCESS,pest=SUCCESS,dusk=SUCCESS,budgets=SUCCESS,tests=SUCCESS,gitleaks=SUCCESS'
+  local scenarios=(
+    # The ordinary case: everything settled on the first read.
+    "all-settled-immediately|1|${all}"
+
+    # The load-bearing one. secret-scan.yml has not created its check run yet, so
+    # `gitleaks` is absent entirely while every ci.yml check is green and final.
+    # The weak condition — "everything I can see is done" — returns here, and the
+    # assertions then fail a `gitleaks` that was about to run and pass. It must
+    # wait for the name.
+    "absent-check-is-not-a-finished-branch|2|static=SUCCESS,pest=SUCCESS,dusk=SUCCESS,budgets=SUCCESS,tests=SUCCESS;${all}"
+
+    # The condition the Actions run-status used to supply. Every expected name is
+    # present, so presence alone would return — but one is still running. Reading
+    # a PENDING check as a conclusion is how a half-finished pipeline gets reported
+    # as a finished one.
+    "pending-check-is-not-a-conclusion|2|static=SUCCESS,pest=SUCCESS,dusk=SUCCESS,budgets=SUCCESS,tests=PENDING,gitleaks=SUCCESS;${all}"
+
+    # Both gaps at once, closing one poll at a time — the real shape of a branch
+    # coming up: checks appear pending, conclude, and the second workflow arrives
+    # last.
+    "checks-arrive-and-conclude-over-several-polls|4|static=PENDING;static=SUCCESS,pest=PENDING,dusk=PENDING,budgets=PENDING,tests=PENDING;static=SUCCESS,pest=SUCCESS,dusk=SUCCESS,budgets=SUCCESS,tests=PENDING;${all}"
+
+    # A red branch is a finished branch. Nine of the ten cases end here, so a wait
+    # that only accepts SUCCESS would time out on every one of them and report the
+    # gate as dead while it is working.
+    "failure-is-a-conclusion|1|static=FAILURE,pest=SUCCESS,dusk=SUCCESS,budgets=SUCCESS,tests=FAILURE,gitleaks=SUCCESS"
+
+    # And SKIPPED, which is what the `gate` case produces for the aggregate: the
+    # breakage deletes `if: always()`, so `tests` never runs. Skipped is a
+    # conclusion; waiting for it to become something else waits forever.
+    "skipped-is-a-conclusion|1|static=FAILURE,pest=SUCCESS,dusk=SUCCESS,budgets=SUCCESS,tests=SKIPPED,gitleaks=SUCCESS"
+
+    # A check nobody asked about must not hold the wait up. A new job in ci.yml is
+    # for check 7 in lint() to complain about, not for this to block on.
+    "unexpected-pending-check-is-not-waited-on|1|${all},typos=PENDING"
+
+    # A branch whose push never landed reports nothing, forever. It has to time out
+    # rather than return, because returning would hand assert_checks an empty set
+    # that reads identically to a branch that was gated and passed. This is the
+    # TOG-20 `workflows` shape: one case silently missing from a run of ten.
+    "nothing-ever-reports|timeout|;;;"
+
+    # And the stall: checks exist, they simply never finish. Same requirement.
+    "never-concludes|timeout|static=PENDING,pest=PENDING,dusk=PENDING,budgets=PENDING,tests=PENDING,gitleaks=PENDING;;;"
+  )
+
+  for entry in "${scenarios[@]}"; do
+    IFS='|' read -r name expect polls <<< "$entry"
+    n=$((n + 1))
+
+    # The poll counter lives in a file, not a variable. `wait_for_checks` reads
+    # branch_checks through a command substitution, so the stub runs in a subshell
+    # and an incremented variable dies with it — which reads as a stub that was
+    # never called.
+    : > "$counter"
+    out=$(
+      # Four polls per scenario at most: CHECK_TIMEOUT/POLL_INTERVAL. `sleep` is
+      # shadowed to nothing, so a timeout costs no wall clock.
+      POLL_INTERVAL=1
+      CHECK_TIMEOUT=4
+      SCRIPT="$polls"
+      COUNTER="$counter"
+      sleep() { :; }
+      branch_checks() {
+        local n
+        printf 'x' >> "$COUNTER"
+        n=$(wc -c < "$COUNTER" | tr -d ' ')
+        awk -v n="$n" -v s="$SCRIPT" 'BEGIN{
+          m = split(s, poll, ";")
+          if (n > m) { exit }
+          split(poll[n], one, ",")
+          for (i = 1; i in one; i++) if (one[i] != "") print one[i]
+        }'
+      }
+      wait_for_checks "ci-verify/selftest"
+      printf 'status=%s\n' "$?"
+    )
+    status=${out#status=}
+    waited_polls=$(wc -c < "$counter" | tr -d ' ')
+
+    if [ "$expect" = timeout ]; then
+      if [ "$status" = 0 ]; then
+        fail "wait: ${name} -> returned on poll ${waited_polls}. A wait that gives up quietly hands the assertions an empty result, which reads exactly like a branch that was gated and passed."
+        rc=1
+      else
+        pass "wait: ${name} -> timed out, as it must"
+      fi
+      continue
+    fi
+
+    if [ "$status" != 0 ]; then
+      fail "wait: ${name} -> timed out. It should have returned on poll ${expect}; the branch was settled by then and the run now reports a dead pipeline that is not dead."
+      rc=1
+    elif [ "$waited_polls" != "$expect" ]; then
+      fail "wait: ${name} -> returned on poll ${waited_polls}, expected poll ${expect}. Too early means the assertions read a branch mid-flight and fail a check that was about to pass; too late is forty minutes of nothing."
+      rc=1
+    else
+      pass "wait: ${name} -> returned on poll ${expect}"
+    fi
+  done
+
+  printf '\n'
+  if [ "$rc" -ne 0 ]; then
+    fail "the wait does not wait for what it claims. --run would assert on half-finished branches."
+  else
+    printf '\033[1m%d/%d — the wait returns exactly when the branch is settled.\033[0m\n' "$n" "$n"
   fi
   return "$rc"
 }
@@ -1002,6 +1269,8 @@ if [ "$MODE" = "--assert-selftest" ]; then
   selftest_rc=0
   log "The live-run assertions, against synthetic check results (no network)"
   assert_selftest || selftest_rc=1
+  log "The wait for those results, against synthetic polls (no network)"
+  wait_selftest || selftest_rc=1
   log "Cleanup, against synthetic gh responses (no network)"
   cleanup_selftest || selftest_rc=1
   exit "$selftest_rc"
@@ -1078,7 +1347,7 @@ command -v gh >/dev/null || { fail "gh is not installed"; exit 1; }
 gh auth status >/dev/null 2>&1 || { fail "gh is not authenticated"; exit 1; }
 [ -z "$(git status --porcelain)" ] || { fail "working tree is dirty — commit or stash first"; exit 1; }
 
-# The owner/repo the Actions API is asked about. Resolved and checked here, in the
+# The owner/repo the Checks API is asked about. Resolved and checked here, in the
 # main shell, rather than inside the assertions: every use of it below sits in a
 # command substitution, and an `exit` in there kills only the subshell and lets the
 # run carry on with an empty value. That is the swallow this section exists to have
@@ -1089,17 +1358,24 @@ repo_slug() {
 }
 REPO_SLUG=$(repo_slug || true)
 [[ "$REPO_SLUG" =~ ^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$ ]] || {
-  fail "origin is not a GitHub repository: '$(git config --get remote.origin.url 2>/dev/null || echo unset)'. Results come from the GitHub Actions API, so this has to run in a clone whose origin is GitHub — not a workspace clone and not a local mirror. Nothing has been pushed."
+  fail "origin is not a GitHub repository: '$(git config --get remote.origin.url 2>/dev/null || echo unset)'. Results come from the GitHub Checks API, so this has to run in a clone whose origin is GitHub — not a workspace clone and not a local mirror. Nothing has been pushed."
   exit 1
 }
 
 # Prove the credential can read results *before* opening ten pull requests. A
-# token with push access but without `Actions: read` gets all the way through the
+# token with push access but without `Checks: read` gets all the way through the
 # run and then reads nothing back, which is indistinguishable from a pipeline that
 # never ran — and the two diagnoses point in opposite directions. Half a second
 # here, or forty minutes and the wrong answer there.
-gh api "repos/${REPO_SLUG}/actions/runs?per_page=1" >/dev/null 2>&1 || {
-  fail "cannot read the Actions API on ${REPO_SLUG}. The token needs 'Actions: read' — see the permissions listed at the top of this file. Nothing has been pushed."
+#
+# Asked about `$BASE_BRANCH` because nothing of this run's has been pushed yet, and
+# because it is the one ref name in this script guaranteed to contain no `/` — the
+# ci-verify/* branches do, and a ref with a slash in this path has to be spelled
+# `heads/<name>` for GitHub's router to find the trailing `/check-runs`. An empty
+# `check_runs` array is a fine answer here: this probes the *permission*, and 200
+# with nothing in it is a 200. Only the HTTP status is read.
+gh api "repos/${REPO_SLUG}/commits/${BASE_BRANCH}/check-runs?per_page=1" >/dev/null 2>&1 || {
+  fail "cannot read the Checks API on ${REPO_SLUG}. The token needs 'Checks: read' — see the permissions listed at the top of this file. Nothing has been pushed."
   exit 1
 }
 
@@ -1109,7 +1385,7 @@ gh api "repos/${REPO_SLUG}/actions/runs?per_page=1" >/dev/null 2>&1 || {
 # changes its pull request's head commit mid-flight, and whichever `cleanup()`
 # reaches the end first closes and deletes *both* runs' work. The survivor is then
 # told its checks never reported, on a branch that no longer exists, which reads
-# as a dead pipeline and is not one — the same wrong diagnosis the Actions API
+# as a dead pipeline and is not one — the same wrong diagnosis the Checks API
 # check directly above just stopped this script handing out. Observed live on
 # 2026-08-20: nine ci-verify pull requests opened and closed under another run
 # while a flake sample was being collected (TWO-103).
@@ -1231,76 +1507,33 @@ git checkout -q "$BASE_BRANCH" 2>/dev/null || git checkout -q "origin/${BASE_BRA
 
 # --- assert -----------------------------------------------------------------
 
-# Results come from the Actions API, deliberately not from `gh pr checks`. Two
-# reasons, both of which produced a *silent* wrong answer rather than an error
-# (TWO-87):
+# Results come from the Checks API — `gh api .../check-runs` — and deliberately
+# not from `gh pr checks`, and no longer from the Actions API at all.
 #
-#   * `gh pr checks --json` landed in gh 2.47. Debian ships 2.46, where the flag
-#     does not exist: the command prints usage to stderr and exits, `|| echo ""`
-#     swallows it, and an empty result reads as "no check ever reported" — eight
-#     false failures in forty minutes.
-#   * `gh pr checks` reads the Checks API, which a fine-grained token can only
-#     touch with `Checks: read`. That is a permission nobody thinks to ask for
-#     when the ask is "push access", so the credential arrives unable to read the
-#     thing it was issued to read.
+# Not `gh pr checks`, still, for the reason that made it a *silent* wrong answer
+# rather than an error (TWO-87): `gh pr checks --json` landed in gh 2.47, Debian
+# ships 2.46, and there the command prints usage to stderr and exits — `|| echo ""`
+# swallows it and an empty result reads as "no check ever reported". Eight false
+# failures in forty minutes. `gh api` is the stable surface; the JSON is ours to
+# filter and its absence is an error we can see.
 #
-# The Actions API needs only `Actions: read`, and reports the same job names
-# branch protection matches on.
-
-POLL_INTERVAL=20
-CHECK_TIMEOUT=2400
-
-# $REPO_SLUG is resolved and proven readable in the preconditions above, before
-# anything is pushed.
-
-# The newest run of each workflow on this branch — concurrency cancels the older
-# ones, and a cancelled predecessor is not the result we are asserting on.
-branch_runs() {
-  gh api "repos/${REPO_SLUG}/actions/runs?branch=$1&per_page=50" \
-    --jq '[.workflow_runs[] | select(.event == "pull_request")]
-          | group_by(.workflow_id) | map(max_by(.run_number))
-          | .[] | "\(.id) \(.status)"' 2>/dev/null || true
-}
-
-# "<job>=<STATE>" per line. STATE is SUCCESS / FAILURE / CANCELLED / SKIPPED, or
-# PENDING for a job that has not concluded.
-branch_checks() {
-  local id status
-  while read -r id status; do
-    [ -n "${id:-}" ] || continue
-    gh api "repos/${REPO_SLUG}/actions/runs/${id}/jobs?per_page=100" \
-      --jq '.jobs[] | "\(.name)=\(.conclusion // "pending" | ascii_upcase)"' 2>/dev/null || true
-  done <<< "$(branch_runs "$1")"
-}
-
-# Blocks until every expected check has finished. Returns non-zero on timeout so
-# the caller reports "never reported" rather than reading a half-finished run.
+# Not the Actions API, since TOG-328. `repos/{slug}/actions/runs` and `.../jobs`
+# need `Actions: read`, which also grants workflow *log* download — logs carry
+# whatever CI printed — and TOG-247 refused that permanently. See the note in the
+# header. Check-runs need `Checks: read`, which grants exactly the conclusions.
 #
-# "Every run we can see has completed" is not the same condition, and the gap is
-# real: two workflows produce these checks — ci.yml and secret-scan.yml — and the
-# API only lists a run once GitHub has created it. If one workflow's run exists and
-# has finished while the other's has not been created yet, the weaker condition
-# returns immediately and the assertion reports a check that never ran, on a branch
-# where it was about to. Waiting on the check names the assertion actually uses
-# closes that, and costs one extra API read per poll.
-wait_for_checks() {
-  local branch="$1" waited=0 runs pending reported missing
-  while [ "$waited" -lt "$CHECK_TIMEOUT" ]; do
-    runs=$(branch_runs "$branch")
-    pending=$(awk '$2 != "completed"' <<< "$runs" | grep -c . || true)
-    if [ -n "$runs" ] && [ "$pending" -eq 0 ]; then
-      reported=$(branch_checks "$branch" | cut -d= -f1)
-      missing=0
-      for expected in "${EXPECTED_CHECKS[@]}"; do
-        grep -qxF "$expected" <<< "$reported" || missing=1
-      done
-      [ "$missing" -eq 0 ] && return 0
-    fi
-    sleep "$POLL_INTERVAL"
-    waited=$((waited + POLL_INTERVAL))
-  done
-  return 1
-}
+# The old TWO-87 note listed `Checks: read` as a reason to avoid this API: "a
+# permission nobody thinks to ask for". That is no longer true and was never a
+# safety argument — it was a provisioning one, and provisioning has caught up.
+# `Checks: read` is in the default profile TOG-247 settled on, and it is now first
+# in this file's permission list and probed in the preconditions before anything is
+# pushed, so a credential without it is refused in the first second rather than
+# forty minutes in.
+#
+# The names are the same either way: a check run's `name` for an Actions job is the
+# job name, which is what branch protection matches on and what EXPECTED_CHECKS
+# holds. That is the property the port rests on, and check 7 in lint() is what
+# keeps the three lists agreeing.
 
 check_branch() {
   local branch="$1" expected_job="$2" aggregate="$3" expect_green="$4" why="$5"
@@ -1322,10 +1555,27 @@ for entry in "${CASES[@]}"; do
 done
 check_branch "${BRANCH_PREFIX}/clean" "$AGGREGATE" "SUCCESS" "yes" "the happy path" || ok=1
 
+# The fourth Actions read in this file, and the quietest: `gh run list` is
+# `repos/{slug}/actions/runs` under the covers, so on a token without `Actions:
+# read` it printed nothing and `|| true` swallowed the reason. A run that looked
+# complete simply had no runtime line — and the runtime is not decoration, it is
+# the number the header calls load-bearing: a gate the team will not wait for is a
+# gate they will route around. Ported with the rest (TOG-328).
+#
+# Derived from the same check runs the assertions read, which makes it wall-clock
+# across *both* workflows rather than ci.yml alone — the honest number, since a PR
+# is not clear until gitleaks reports too. `min(started_at)` to `max(completed_at)`
+# over the clean branch's check runs.
 log "Runtime of the clean run (the number the team has to tolerate)"
-gh run list --branch "${BRANCH_PREFIX}/clean" --workflow CI --limit 1 \
-  --json createdAt,updatedAt,conclusion \
-  --jq '.[] | "  conclusion: \(.conclusion)  started: \(.createdAt)  finished: \(.updatedAt)"' || true
+clean_sha=$(branch_head "${BRANCH_PREFIX}/clean")
+if [ -n "$clean_sha" ]; then
+  gh api "repos/${REPO_SLUG}/commits/${clean_sha}/check-runs?per_page=100&filter=latest" \
+    --jq '[.check_runs[] | select(.app.slug == "github-actions")]
+          | select(length > 0)
+          | "  checks: \(length)  conclusions: \([.[].conclusion] | unique | join(","))  started: \([.[].started_at] | min)  finished: \([.[] | select(.completed_at != null) | .completed_at] | max)"' || true
+else
+  printf '  the clean branch is not in this clone — nothing to measure\n'
+fi
 
 cleanup_rc=0
 cleanup || cleanup_rc=1

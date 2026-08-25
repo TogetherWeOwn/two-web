@@ -26,7 +26,7 @@
 #   gh-unauth     `gh` is installed but not logged in
 #   dirty         uncommitted changes in the working tree
 #   local-origin  `origin` is a filesystem clone, not GitHub
-#   actions-api   the credential cannot read the Actions API
+#   checks-api    the credential cannot read the Checks API           (TOG-328)
 #   live-pr       another run's pull request is open        (TWO-103)
 #   live-branch   another run's branch is on the remote     (TWO-103)
 #   clear         a negative control: none of the above fires on a normal repo
@@ -350,7 +350,7 @@ dir="$(fixture clear)" || { fail 'clear: fixture failed'; rc=1; }
 cat > "$dir/prs.json" <<'JSON'
 [
   {"number": 15, "headRefName": "fix/dusk-signout-flake"},
-  {"number": 12, "headRefName": "ci/verify-actions-api"}
+  {"number": 12, "headRefName": "ci/verify-checks-api"}
 ]
 JSON
 run_case "$dir"
@@ -369,7 +369,7 @@ fi
 
 printf '\n\033[1m==> origin is not GitHub\033[0m\n'
 
-# A workspace clone or a local mirror. Results come from the GitHub Actions API,
+# A workspace clone or a local mirror. Results come from the GitHub Checks API,
 # so a run here reads nothing back and calls it a dead pipeline. This is the guard
 # that stopped one such run on 2026-08-20 before it pushed anything.
 n=$((n + 1))
@@ -414,18 +414,24 @@ printf '1\n' > "$dir/auth-status"
 PRE_EXISTING='no-such-ref'
 expect_refused gh-unauth 'gh is not authenticated' "$dir"
 
-printf '\n\033[1m==> The Actions API cannot be read\033[0m\n'
+printf '\n\033[1m==> The Checks API cannot be read\033[0m\n'
 
-# A token with push access but without `Actions: read`. This one is the reason the
-# check exists rather than a nicety: the run pushes fine, opens all eight pull
+# A token with push access but without `Checks: read`. This one is the reason the
+# check exists rather than a nicety: the run pushes fine, opens all ten pull
 # requests, and then reads nothing back — which is byte-for-byte what a pipeline
 # that never ran looks like, and the two diagnoses point in opposite directions
 # (TWO-87). Authenticated `gh`, clean tree, GitHub origin: only the API read is
 # broken, so nothing but this guard can catch it.
-dir="$(fixture actions-api)" || { fail 'actions-api: fixture failed'; rc=1; }
+#
+# This was `actions-api` until TOG-328 moved every result read off the Actions API
+# — `Actions: read` also grants workflow log download, which TOG-247 refused
+# permanently. The guard is the same guard; only the endpoint and the permission it
+# names have changed. The case is renamed with it so a failure here still points at
+# the thing that broke.
+dir="$(fixture checks-api)" || { fail 'checks-api: fixture failed'; rc=1; }
 printf '1\n' > "$dir/api-status"
 PRE_EXISTING='no-such-ref'
-expect_refused actions-api 'cannot read the Actions API on TogetherWeOwn/two-web' "$dir"
+expect_refused checks-api 'cannot read the Checks API on TogetherWeOwn/two-web' "$dir"
 
 printf '\n\033[1m==> One probe of the two could not be read\033[0m\n'
 
