@@ -3,7 +3,8 @@
 Who looked at member data through the admin panel, when, and at whose records.
 
 **Last checked:** 25 August 2026 · **Issues:** TOG-355 (this) · TOG-106 (which
-Discord role means moderator) · TOG-54 (the panel itself)
+Discord role means moderator) · TOG-54 (the panel itself) · TOG-448 (review that
+found the three evasions in §2)
 
 ---
 
@@ -41,9 +42,9 @@ and nobody sees a panel at all.
 ## What is built
 
 Everything below is in the tree and covered by
-`tests/Feature/MemberDataAccessLogTest.php` — thirteen tests, one per clause of
-the requirement. None of it depends on Filament, which is not a dependency of
-this repo yet.
+`tests/Feature/MemberDataAccessLogTest.php` — twenty tests: one per clause of the
+requirement, and one per way the control was found to be evadable in review. None
+of it depends on Filament, which is not a dependency of this repo yet.
 
 | Piece | File |
 |---|---|
@@ -66,6 +67,12 @@ The second parameter is `view` for a screen showing one record and `list` for a
 screen showing a page of them. That is the whole integration. **Do not** ask each
 resource to declare which members it displayed — see the next section for why.
 
+Forgetting that line is not something anyone has to catch by eye. `it lets no
+admin-gated route ship without the access log` walks the route table and fails,
+naming the route, for anything carrying `can:access-admin` without
+`member-access-log`. It passes vacuously today because no admin route exists yet;
+it is the one test here whose job starts later.
+
 ---
 
 ## The three decisions worth defending
@@ -82,6 +89,13 @@ So the recorder listens to Eloquent's `retrieved` event for `User` and `Profile`
 instead. Hydrating a member row is not something a screen can do accidentally and
 invisibly. A new resource is covered the day it is written, by nobody.
 
+**This relocates the risk of forgetting rather than removing it,** and the claim
+is worth making accurately. A new resource on a route group that already carries
+the middleware is covered for free; a new route *group* is not, and forgetting
+there takes out the whole control at once rather than one screen. What makes that
+acceptable is that it is one place instead of dozens — and that the one place is
+pinned by the route-table test above rather than by anyone remembering.
+
 `AccessRecorder::note()` remains for reads Eloquent cannot see: raw queries, and
 the bot's read-only views (TWO-23), which are member data that never becomes a
 `User` row. **If a panel screen ever reads member data outside Eloquent, it must
@@ -89,7 +103,13 @@ call `note()`** — that is the one gap the automatic path has, and it is named
 here so it is a known gap rather than a surprise.
 
 A `Profile` is recorded against `user_id`, not against its own key: the profile
-is data *about* that member, and an investigation asks about the member.
+is data *about* that member, and an investigation asks about the member. A
+partial select — `Profile::query()->select('id', 'bio')` — leaves `user_id`
+unhydrated, so the owner is resolved from the profile's key on the query builder
+rather than read off the model. Reading the property would return null and drop
+the read silently, and what gets served in that case is a bio: contents, not an
+identifier. A select carrying neither the key nor `user_id` cannot be resolved at
+all, and is refused rather than dropped — see §2.
 
 The viewer's own record is excluded. The authenticated user is hydrated on every
 request; without the exclusion, every page view would log a moderator looking at
@@ -106,6 +126,29 @@ This is the control, not a nicety. If a failed write served the data anyway, the
 log would be a best-effort record, and "who looked?" would be answerable only for
 the days it happened to be working — which is not a property you can find out
 about *after* you need it.
+
+The trade is cheaper than it reads, and the reason is worth stating: **this
+middleware is not on `web`.** A broken log table cannot take the member-facing
+site down; the blast radius is admin-panel reads only.
+
+Three things can make a read unrecordable, and all three get the same answer:
+
+| | |
+|---|---|
+| The write throws | The log is down. 503. |
+| The response body is produced after the middleware — `StreamedResponse`, `BinaryFileResponse`, `->download()`, `streamDownload()` — and nothing was recorded | We are past the last moment we could record, and the body has not been generated yet. 503. A screen that reads its members through Eloquent *before* returning the stream, or calls `note()`, is recorded and served normally — so a CSV export is still writable, it just has to be writable in that order. |
+| A profile was read that cannot be attributed to a member | We would be writing a row that names some of the members whose data was served, which is a worse answer than none. 503. |
+
+The failure log line carries the exception class and the SQLSTATE and **never the
+exception message**. A `QueryException`'s message is the failed INSERT with its
+bindings substituted in — the viewer's snowflake and every subject id — and it
+would land in `storage/logs/laravel.log`, which has neither this table's
+retention window nor its handling rules. `it never puts member identifiers in the
+failure log line` pins that, and it breaks the write the way production breaks
+it: table present, one column missing. Dropping the whole table fails at
+statement *preparation* and produces a message with no bindings in it, which is
+the one shape of failure that cannot leak and therefore the one shape that must
+not be what the test uses.
 
 `MEMBER_ACCESS_LOG_ENFORCE` defaults to true in **every** environment including
 local, on purpose. A switch that is off by default is off in the one place it
@@ -176,8 +219,8 @@ deployment change, not an application change.
 
 ## Still open
 
-Two things this does not do, both deliberate, both owned by whoever ships the
-panel beyond staging rather than by this table:
+Things this does not do, all deliberate, all owned by whoever ships the panel
+beyond staging rather than by this table:
 
 1. **The database grant above is not applied.** Until it is, append-only is
    enforced by application code only. Worth doing before the panel is real off
@@ -186,6 +229,19 @@ panel beyond staging rather than by this table:
    dashboards, no rate limiting. The log answers questions when someone asks
    them. If a "who read the whole member list this week" query ever gets written,
    `subject_count` and the GIN index on `subject_user_ids` are there for it.
+3. **Reads outside Eloquent are not seen** — raw SQL, and the bot's read-only
+   views (TWO-23). `note()` is the escape hatch and calling it is a thing to
+   remember, which is the weakness of every escape hatch. Named again here
+   because §1's automatic path is what the rest of this document leans on.
+4. **`retrieved` is the only event listened to.** A model that reaches a screen
+   without being hydrated from the database — cached, serialised into a job
+   payload and back, constructed in memory — carries member data past the
+   recorder. Not reachable today: nothing here caches models.
+
+This list is meant to be exhaustive about the ways the control can be evaded, not
+a sample. Three of the entries that used to belong on it — the failure-path leak,
+streamed responses, and unattributable profile reads — are now behaviours with
+tests instead, which is the direction things should move.
 
 Not open, and not coming back without a reason on a ticket: this is not an
 analytics system, and it does not log anything a member typed.

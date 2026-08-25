@@ -3,7 +3,9 @@
 use App\Models\MemberDataAccessLog;
 use App\Models\Profile;
 use App\Models\User;
+use App\Support\MemberDataAccess\AccessRecorder;
 use Illuminate\Console\Scheduling\Schedule;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Route;
 use Illuminate\Support\Facades\Schema;
 
@@ -145,6 +147,181 @@ it('refuses to serve the read when the access log cannot be written', function (
         ->get("admin/members/{$subject->id}")
         ->assertServiceUnavailable()
         ->assertDontSee('the-member-under-test');
+});
+
+it('never puts member identifiers in the failure log line', function () {
+    // The failure path is the one that runs when something is already wrong, which
+    // is the moment nobody is reading carefully. A QueryException's message is the
+    // failed statement with its bindings substituted in — the viewer's snowflake
+    // and every subject id — and it goes to the ordinary application log, which
+    // has neither this table's retention window nor its handling rules.
+    //
+    // Broken here the way production breaks: the table present and a column gone.
+    // Dropping the whole table fails at statement *preparation* and produces a
+    // message with no bindings in it — the single shape of failure that cannot
+    // leak, and therefore the one shape that must not be what we test with.
+    config()->set('member_access_log.enforce', true);
+
+    $moderator = User::factory()->moderator()->create(['discord_id' => '424242424242424242']);
+    $subject = User::factory()->create();
+
+    panelRoute('admin/members/{id}', fn (string $id) => User::query()->findOrFail($id)->username);
+
+    Schema::dropColumns('member_data_access_logs', ['subject_count']);
+
+    $records = [];
+    Log::listen(function ($message) use (&$records): void {
+        $records[] = [$message->message, $message->context];
+    });
+
+    $this->actingAs($moderator)->get("admin/members/{$subject->id}")->assertServiceUnavailable();
+
+    $logged = json_encode($records);
+
+    expect($records)->not->toBeEmpty()
+        ->and($logged)->toContain('QueryException')          // still says what broke
+        ->and($logged)->toContain('42703')                   // ...and that it was a missing column
+        ->and($logged)->not->toContain('424242424242424242') // never the viewer
+        ->and($logged)->not->toContain('insert into');       // never the statement or its bindings
+});
+
+it('lets no admin-gated route ship without the access log', function () {
+    // The subjects-from-Eloquent decision does not remove the risk of forgetting,
+    // it relocates it: from every panel screen to one line on one middleware
+    // stack. Forgetting that line has the identical failure mode — member data
+    // served at 200 with no row and no error — and takes out the whole control at
+    // once rather than one screen.
+    //
+    // So the line is not something to remember. This is vacuous today, because no
+    // admin route exists yet; it is the only test here whose job starts later.
+    $missing = collect(Route::getRoutes()->getRoutes())
+        ->filter(fn ($route) => collect($route->gatherMiddleware())
+            ->contains(fn ($m) => is_string($m) && str_contains($m, 'can:access-admin')))
+        ->reject(fn ($route) => collect($route->gatherMiddleware())
+            ->contains(fn ($m) => is_string($m) && str_starts_with($m, 'member-access-log')))
+        ->map(fn ($route) => $route->uri())
+        ->values()
+        ->all();
+
+    expect($missing)->toBe([]);
+});
+
+it('refuses to serve a streamed response it could not record', function () {
+    // A StreamedResponse's body is produced at send(), after every middleware has
+    // run. So the recorder flushes against whatever was hydrated *before* the
+    // controller returned — for a straight `stream(fn () => ...)` that is nothing
+    // — and the member data then leaves the server with no row, and no error, and
+    // a flush that returned false indistinguishably from "this page showed no
+    // member data". A CSV export is the likeliest early panel screen and the
+    // highest-value access to have a record of.
+    config()->set('member_access_log.enforce', true);
+
+    $moderator = User::factory()->moderator()->create();
+    $subject = User::factory()->create(['username' => 'streamed-member-token']);
+
+    panelRoute('admin/members/export', fn () => response()->stream(function () {
+        echo User::query()->whereKeyNot(auth()->id())->value('username');
+    }), action: 'list');
+
+    $response = $this->actingAs($moderator)->get('admin/members/export');
+
+    $response->assertServiceUnavailable();
+    expect($response->getContent())->not->toContain('streamed-member-token')
+        ->and(MemberDataAccessLog::query()->count())->toBe(0);
+});
+
+it('records a streamed response whose subjects were declared before it was returned', function () {
+    // The other half of the rule above: refusing is for the case where we cannot
+    // say what was read, not for streaming as such. A screen that reads its
+    // members through Eloquent before returning the stream — or that calls
+    // note() — is recordable and is recorded, and the export still works.
+    $moderator = User::factory()->moderator()->create();
+    $subject = User::factory()->create(['username' => 'streamed-member-token']);
+
+    panelRoute('admin/members/export', function () {
+        $members = User::query()->whereKeyNot(auth()->id())->get();
+
+        return response()->stream(fn () => print ($members->pluck('username')->implode(',')));
+    }, action: 'list');
+
+    $response = $this->actingAs($moderator)->get('admin/members/export');
+
+    $response->assertOk();
+    expect($response->streamedContent())->toContain('streamed-member-token');
+
+    $log = MemberDataAccessLog::query()->sole();
+
+    expect($log->subject_user_ids)->toBe([$subject->id])
+        ->and($log->action)->toBe('list');
+});
+
+it('attributes no read to a request that did not make it', function () {
+    // arm() must inherit nothing and flush() must leave nothing armed. A recorder
+    // that stays armed after flushing goes on collecting on every later request in
+    // the same container, and the next panel request writes those subjects as its
+    // own — a row saying a moderator viewed a member on the panel when the read
+    // happened somewhere else entirely. In an evidence table a false positive
+    // costs the same as a miss.
+    //
+    // PHP-FPM gives a fresh container per request, so this is not reachable in
+    // production today. It is reachable here, which is where this control's
+    // evidence comes from: without it, `it logs nothing on the ordinary site`
+    // passes on where it sits in this file rather than on the recorder.
+    $moderator = User::factory()->moderator()->create();
+    $onPanel = User::factory()->create();
+    $offPanel = User::factory()->create();
+
+    panelRoute('admin/members/{id}', fn (string $id) => (string) User::query()->findOrFail($id)->getKey());
+    Route::middleware(['web', 'auth'])
+        ->get('members/{id}', fn (string $id) => (string) User::query()->findOrFail($id)->getKey())
+        ->name('test.ordinary.member');
+
+    $this->actingAs($moderator)->get("admin/members/{$onPanel->id}")->assertOk();
+    $this->actingAs($moderator)->get("members/{$offPanel->id}")->assertOk();
+    $this->actingAs($moderator)->get("admin/members/{$onPanel->id}")->assertOk();
+
+    $rows = MemberDataAccessLog::query()->orderBy('id')->get();
+
+    expect(app(AccessRecorder::class)->isArmed())->toBeFalse()
+        ->and($rows)->toHaveCount(2)
+        ->and($rows[0]->subject_user_ids)->toBe([$onPanel->id])
+        ->and($rows[1]->subject_user_ids)->toBe([$onPanel->id]);
+});
+
+it('records a partially selected profile against the member it is about', function () {
+    // `select('bio')` hydrates a Profile with no user_id on it, so attributing the
+    // read by reading that property silently drops it — and what got served was
+    // profile *contents*, not an identifier. This is ordinary Eloquent, which is
+    // the path the design says is covered, so it cannot be left as a named gap
+    // alongside the raw-SQL one.
+    $moderator = User::factory()->moderator()->create();
+    $profile = Profile::factory()->for(User::factory()->create())->create(['bio' => 'I mostly play Helldivers.']);
+
+    panelRoute('admin/profiles', fn () => Profile::query()->select('id', 'bio')->get()->pluck('bio')->implode(','), action: 'list');
+
+    $this->actingAs($moderator)->get('admin/profiles')->assertOk()->assertSee('Helldivers');
+
+    expect(MemberDataAccessLog::query()->sole()->subject_user_ids)->toBe([$profile->user_id]);
+});
+
+it('refuses to serve a profile read it cannot attribute to a member', function () {
+    // The residue of the case above: selected without its key *or* its user_id,
+    // so there is nothing to resolve the owner from. What was served is a bio —
+    // contents, not an identifier — and the honest answer to "whose?" is that we
+    // do not know. So it is refused, on the same rule as everything else here: a
+    // read that cannot be recorded is not served.
+    config()->set('member_access_log.enforce', true);
+
+    $moderator = User::factory()->moderator()->create();
+    Profile::factory()->for(User::factory()->create())->create(['bio' => 'I mostly play Helldivers.']);
+
+    panelRoute('admin/profiles', fn () => Profile::query()->select('bio')->get()->pluck('bio')->implode(','), action: 'list');
+
+    $this->actingAs($moderator)->get('admin/profiles')
+        ->assertServiceUnavailable()
+        ->assertDontSee('Helldivers');
+
+    expect(MemberDataAccessLog::query()->count())->toBe(0);
 });
 
 it('keeps no copy of member data beyond the identifiers', function () {

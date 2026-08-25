@@ -4,9 +4,12 @@ namespace App\Http\Middleware;
 
 use App\Support\MemberDataAccess\AccessRecorder;
 use Closure;
+use Illuminate\Database\QueryException;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Log;
+use Symfony\Component\HttpFoundation\BinaryFileResponse;
 use Symfony\Component\HttpFoundation\Response;
+use Symfony\Component\HttpFoundation\StreamedResponse;
 use Symfony\Component\HttpKernel\Exception\ServiceUnavailableHttpException;
 use Throwable;
 
@@ -41,21 +44,72 @@ class RecordMemberDataAccess
         $response = $next($request);
 
         try {
-            $recorder->flush($request);
+            $recorded = $recorder->flush($request);
         } catch (Throwable $e) {
-            // Loud, and without the subjects in it: this line goes to the ordinary
-            // application log, which does not have the access log's retention or
-            // its handling rules.
-            Log::critical('Member data access could not be recorded; refusing to serve the read.', [
-                'route' => $request->route()?->getName(),
-                'exception' => $e->getMessage(),
+            $this->refuse($request, 'Member data access could not be recorded; refusing to serve the read.', [
+                'exception' => $e::class,
+                'sqlstate' => $e instanceof QueryException ? (string) $e->getCode() : null,
             ]);
 
-            if ((bool) config('member_access_log.enforce')) {
-                throw new ServiceUnavailableHttpException(null, 'Member data is temporarily unavailable.');
-            }
+            return $response;
+        }
+
+        // Read, but not attributable to anyone: a profile row selected without
+        // enough of itself to say which member it is about. Refused rather than
+        // dropped, and refused even when other subjects *were* recorded, because
+        // a row that names two of the three members whose data was served is a
+        // worse answer to "who was looked at?" than no answer at all.
+        if ($recorder->hasUnattributableRead()) {
+            $this->refuse($request, 'Member data was read that could not be attributed to a member; refusing to serve the read.', []);
+
+            return $response;
+        }
+
+        // A streamed or file response has not produced its body yet — that happens
+        // at send(), after every middleware has returned — so the flush above ran
+        // against whatever the controller hydrated before handing back the
+        // callback, and for a bare `stream(fn () => ...)` that is nothing at all.
+        // Recording nothing is then indistinguishable from a page that showed no
+        // member data, and the difference is a CSV of the membership leaving with
+        // no row against it.
+        //
+        // We cannot record what has not happened yet, and this is the last moment
+        // we could refuse, so we refuse. A screen that reads its members through
+        // Eloquent before returning the stream — or that calls note() — has
+        // already been recorded by the time we get here and is served normally.
+        if (! $recorded && $this->bodyComesLater($response)) {
+            $this->refuse($request, 'Member data access cannot be recorded for a response whose body is produced after the middleware; refusing to serve the read.', [
+                'response' => $response::class,
+            ]);
         }
 
         return $response;
+    }
+
+    private function bodyComesLater(Response $response): bool
+    {
+        return $response instanceof StreamedResponse || $response instanceof BinaryFileResponse;
+    }
+
+    /**
+     * Loud, and genuinely without the subjects in it.
+     *
+     * This line goes to the ordinary application log, which has neither the access
+     * log's retention window nor its handling rules — so it carries the exception
+     * class and the SQLSTATE and never the message. A QueryException's message is
+     * the failed INSERT with its bindings substituted in: the viewer's snowflake
+     * and every subject id. That is the spill this control exists to prevent, and
+     * it would happen only on the failure path, which is the moment nobody is
+     * reading carefully.
+     *
+     * @param  array<string, string|null>  $context
+     */
+    private function refuse(Request $request, string $message, array $context): void
+    {
+        Log::critical($message, ['route' => $request->route()?->getName()] + $context);
+
+        if ((bool) config('member_access_log.enforce')) {
+            throw new ServiceUnavailableHttpException(null, 'Member data is temporarily unavailable.');
+        }
     }
 }
