@@ -50,7 +50,7 @@ curl -s -H 'accept: application/dns-json' 'https://cloudflare-dns.com/dns-query?
 | `togetherweown.com` | WordPress.com, **empty** — title `Together We Own -`, one outbound link, no sitemap, no store | Cut over to us |
 | `www.togetherweown.com` | Same origin, same challenge — no redirect to the apex | Fix at cutover |
 | `togetherweown.com/discord` | **302 into a live Discord OAuth join flow.** The only working web→Discord path we have | **Must survive. See below** |
-| `togetherweown.com/join` | 301 → `/join/` → **HTTP 200, titled "Page Not Found", `<meta name="robots" content="follow, noindex">`** — a soft 404 | Do not build a `/join` |
+| `togetherweown.com/join` | 301 → `/join/` → **HTTP 200, titled "Page Not Found", `<meta name="robots" content="follow, noindex">`** — a soft 404 | No `/join` *page*; a 301 to `/discord` — see below |
 | `staging.togetherweown.com` | **Already resolves**, proxied, same origin as the apex | Repoint + grey cloud |
 | `two.gg`, `www.two.gg` | **302**, path-preserving, to `https://togetherweown.com/<path>` | Make it 301 |
 | `two.gg/discord` | **301** to `togetherweown.com/discord/` — already correct | Leave it, retarget at cutover |
@@ -60,7 +60,37 @@ curl -s -H 'accept: application/dns-json' 'https://cloudflare-dns.com/dns-query?
 | `togetherweown.com` SPF | `v=spf1 include:_spf.wpcloud.com ~all` | Do not edit blind |
 | `two.gg` mail records | **None at all.** No SPF, no DMARC | Free win, see below |
 | Apex HSTS | `max-age=31536000`, **no `includeSubDomains`** | Keep it that way until cutover |
-| Apex indexing | `<meta name="robots" content="index, follow">`, empty `robots.txt` | An empty site is indexable — TWO-49 |
+| Apex indexing | Depends on the `Accept` header — see below. No `robots.txt` at all | An empty site is indexable — TWO-49, TOG-71 |
+
+### The apex serves two different homepages, and `curl` shows you the wrong one
+
+Corrected 25 August 2026 (TOG-71). The previous version of the row above read
+"`<meta name="robots" content="index, follow">`, empty `robots.txt`". Both halves
+were artefacts of how they were measured.
+
+The apex answers `vary: accept` and honours it. `Accept: */*` — what `curl` and
+`wget` send unless told otherwise — returns the WordPress front page: title
+`Together We Own -`, `index, follow`, a self-canonical, full Rank Math schema.
+`Accept: text/html,…` — what **every browser and Googlebot** sends — returns the
+Bricks coming-soon template: title `Coming Soon – Together We Own`, and **no robots
+meta, no canonical, no `og:url`, no schema at all**.
+
+So the tags recorded in the old row are the ones no crawler will ever be served. Add
+the browser `Accept` header to the browser UA already at the top of this section, or
+you will document a page nobody sees:
+
+```bash
+curl -s -A "$UA" -H 'accept: text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8' \
+  https://togetherweown.com/ | grep -o '<title>[^<]*</title>\|name="robots" content="[^"]*"'
+```
+
+And there is no `robots.txt` to be empty: `/robots.txt` **301s to `/robots.txt/`**,
+which returns a 129 KB HTML page with `content-type: text/html`. Nothing disallows
+anything and the sitemap is never announced.
+
+`ci/live-seo-probe.mjs` measures all of this, sends the right headers, and refuses
+to report a result at all when Cloudflare challenges it. Run that instead of
+re-deriving it by hand.
 
 Five things fall out of that which change the plan:
 
@@ -130,7 +160,42 @@ Three consequences, in order of how much they will hurt if missed:
    which under our integration rules is the bot's job, not Laravel's. **Flagged to
    the CEO as a conversion question, not decided here.**
 
-The Laravel side of this is **TWO-54**.
+The Laravel side of this is **TWO-54**, and it is now built — **TOG-77**. What
+shipped, so nobody has to read the code to know what the apex will answer:
+
+| Path | Answers | Depends on |
+|---|---|---|
+| `/discord` | `302` → `services.discord.invite_url`, defaulting to the `WEB-HOMEPAGE` invite from TOG-96, with `Cache-Control: no-store` | nothing — no database, no cache, no session, no bot |
+| `/join` | `301` → `/discord` | nothing |
+
+Four properties of that, each pinned by a test in
+`tests/Feature/DiscordFunnelTest.php` so they cannot be undone quietly:
+
+- **No database.** Both routes are registered from `routes/funnel.php` with an
+  empty middleware stack, *outside* the `web` group. This is not tidiness:
+  `SESSION_DRIVER=database` in every environment we ship, so a route in the `web`
+  group opens a Postgres connection in `StartSession` before the controller runs.
+  The test configures a database-backed session and asserts **zero queries**.
+- **No 503 during a deploy.** Both paths are excepted from
+  `PreventRequestsDuringMaintenance`, so `php artisan down` does not take the
+  funnel dark.
+- **Never an open redirect.** The configured invite is refused unless it is an
+  `https` URL on `discord.gg` or `discord.com`, and the hardcoded fallback is
+  served instead. A mistyped `DISCORD_INVITE_URL` cannot turn the most trusted
+  link we own into a way of sending our own members somewhere else.
+- **302, not 301, on `/discord`.** The destination changes when TOG-80 lands. A
+  301 would already be cached in the browser of every member who had used it —
+  the one population we could never reach to correct.
+
+**Point 3 above is still open and this does not close it.** What shipped is the
+plain invite redirect, which is the *worse* funnel the point warns about: an
+extra page and an extra decision versus today's one click. It is what can be
+built without the bot token, and it is strictly better than the 404 that is the
+alternative on cutover day. **One-click parity is TOG-80**, owned by the Founding
+Engineer, and when it lands it replaces this route's happy path and nothing else
+— the invite redirect stays underneath as what TOG-80 falls back to when the bot
+is unreachable. So the ordering constraint is: cutover needs TOG-77 (done),
+not TOG-80.
 
 ---
 
@@ -350,6 +415,20 @@ keeping this list short is a standing obligation on every PR.
 6. **(founder — Rules, the token cannot do this)** Retarget the `two.gg` redirect
    rule to the apex.
 7. *(us)* Verify `/discord` in a browser before announcing anything. It is the funnel.
+   **"It returned a 302" is not the bar.** Do a real join: a browser that is not
+   already signed in to Discord, on an account that is not already in the server.
+   A join that works for a signed-in admin proves almost nothing — the admin is
+   already a member, so every interesting step is skipped. Recorded on TOG-77 by
+   whoever measured the WordPress flow, and it is the one part of `/discord` that
+   nothing in this repository can cover: `tests/Feature/DiscordFunnelTest.php`
+   pins what we answer with, and no test we own can prove Discord still honours
+   the code on the other end.
+   *Cheap standing check that needs no account and no browser, good any day of
+   the week — a dead code answers `404`:*
+   `curl -s "https://discord.com/api/v10/invites/<code>?with_counts=true"`
+8. *(us)* Expect new arrivals to land **`pending`** under Rules Screening. A join is
+   not yet an active member, and the funnel has to count the two separately or the
+   conversion rate reads high and means nothing.
 
 **Schedule the founder into the window, do not just notify them.** Step 6 is the only
 step we cannot perform, it sits between the swap and the verification, and until it

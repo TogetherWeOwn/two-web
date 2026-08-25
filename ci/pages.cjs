@@ -8,6 +8,11 @@
 //
 // Authenticated pages (/profile) cannot be measured until the Dusk OAuth stub from
 // TWO-34 can hand this script a session cookie. Tracked there, not forgotten here.
+//
+// `/discord` and `/join` are absent on purpose, not by oversight. Both answer with
+// a redirect and no document, so there is nothing for Lighthouse to score or for
+// axe to walk — adding them fails the budgets job rather than measuring anything.
+// What they must do instead is pinned by tests/Feature/DiscordFunnelTest.php.
 
 const BASE_URL = process.env.CI_BASE_URL || 'http://127.0.0.1:8000';
 
