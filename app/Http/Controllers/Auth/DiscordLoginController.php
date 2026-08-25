@@ -81,8 +81,18 @@ class DiscordLoginController
         $user = $this->upsert($discordUser, $member);
 
         // Auth::login migrates the session id for us, which is what closes session
-        // fixation. There is a test asserting that so we notice if it ever changes.
-        Auth::login($user, remember: true);
+        // fixation.
+        //
+        // Deliberately no `remember: true`. A remember cookie resurrects a member
+        // without going through this method, and this method is the only place
+        // roles are re-read from Discord — so a remembered member would keep the
+        // moderator they were stripped of until the cookie expired, which Laravel
+        // defaults to five years. Permissions here are only ever as fresh as the
+        // last trip through this callback, so nothing may skip it.
+        //
+        // If sessions ever feel too short, raise SESSION_LIFETIME. That keeps one
+        // way in; a remember cookie adds a second one that cannot re-read roles.
+        Auth::login($user);
 
         return redirect()->intended(route('profile'));
     }

@@ -200,6 +200,43 @@ it('lets a moderator through the admin gate and keeps a member out', function ()
         ->and($member->can('access-admin'))->toBeFalse();
 });
 
+// The test above says permissions are refreshed "at the next login". That promise
+// is only worth anything if a login is the *only* way back in. A "remember me"
+// cookie is a second way back in, and it skips the callback where roles are read —
+// so a member stripped of moderator in Discord would keep the admin panel until
+// the cookie expired, which Laravel defaults to five years.
+//
+// This test guards the two facts that make that impossible: no recaller cookie is
+// handed to the browser, and no remember token is written to the row one could be
+// rebuilt from. Both go red if `remember: true` comes back.
+//
+// What it deliberately does NOT claim is an end-to-end "they were not resurrected".
+// The recaller cannot be replayed through the HTTP test client at all: whatever you
+// hand it — the raw Set-Cookie value, the decrypted value, withCookies(),
+// withUnencryptedCookies() — EncryptCookies nulls that cookie before the guard
+// reads it, while an ordinary cookie in the same request survives untouched. So an
+// assertion that they came back a guest passes just as happily with the bug present
+// and would be decoration. The resurrection journey needs a real cookie jar, which
+// means Dusk — flagged to QA on TOG-47 rather than faked here.
+it('does not hand admin back to a member remembered by cookie after their role was taken away', function () {
+    stubSocialite();
+    stubGuildMember(roles: [MEMBER_ROLE, MOD_ROLE]);
+
+    $login = $this->get('/auth/discord/callback?code=good&state=x');
+
+    // They really did sign in, and really are a moderator — otherwise the two
+    // assertions below would be true of a login that simply failed.
+    $this->assertAuthenticated();
+    expect(User::query()->sole()->is_moderator)->toBeTrue();
+
+    // Nothing goes to the browser, and nothing is left in the row, that could bring
+    // them back without another trip through the callback.
+    $recaller = $this->app['auth']->guard()->getRecallerName();
+
+    expect($login->getCookie($recaller))->toBeNull()
+        ->and(User::query()->sole()->remember_token)->toBeNull();
+});
+
 // ---------------------------------------------------------------------------
 // The four ways this goes wrong. Each one is a designed page, never a stack trace.
 // ---------------------------------------------------------------------------
