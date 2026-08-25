@@ -426,6 +426,21 @@ keeping this list short is a standing obligation on every PR.
    *Cheap standing check that needs no account and no browser, good any day of
    the week — a dead code answers `404`:*
    `curl -s "https://discord.com/api/v10/invites/<code>?with_counts=true"`
+
+   Everything on this list that a machine can decide now lives in
+   **`ci/cutover-check.mjs`** (TOG-85), so cutover night is the same check every
+   time rather than a tired reading of a checklist. Run it on both sides of the
+   swap — the expectations invert at the flip:
+
+   ```
+   node ci/cutover-check.mjs --phase before --app https://<new app origin>
+   node ci/cutover-check.mjs --phase after
+   ```
+
+   It exits non-zero on any failure and prints what it *cannot* see: the Discord
+   credential rotation and the WordPress.com plan state are console-only. It does
+   not replace the real join above — it replaces the parts of the list that were
+   being eyeballed.
 8. *(us)* Expect new arrivals to land **`pending`** under Rules Screening. A join is
    not yet an active member, and the funnel has to count the two separately or the
    conversion rate reads high and means nothing.
