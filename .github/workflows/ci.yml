@@ -416,7 +416,6 @@ jobs:
   tests:
     name: tests
     runs-on: ubuntu-24.04
-    if: always()
     needs: [static, pest, dusk, budgets]
     steps:
       - name: Gate
