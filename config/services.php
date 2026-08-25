@@ -108,6 +108,20 @@ return [
     'bot' => [
         'url' => env('BOT_ENDPOINT_URL'),
         'secret' => env('BOT_SHARED_SECRET'),
+
+        /*
+         | Which of the bot's shared secrets we are signing with. The bot holds
+         | `TWO_INTERNAL_KEYS` as `key-id:secret` pairs, so rotating our secret is:
+         | add a second pair there, point this at it, retire the first. That is the
+         | only reason this is a separate value from the secret itself.
+         |
+         | A wrong key id and a wrong signature produce the same `unauthorized`
+         | from the bot, byte for byte and on purpose, so there is nothing in the
+         | failure to tell them apart. App\Services\Bot\InternalActionClient
+         | refuses to send at all rather than sign with a blank one.
+         */
+        'key_id' => env('BOT_KEY_ID', 'web-prod'),
+
         'timeout' => (int) env('BOT_TIMEOUT_SECONDS', 5),
     ],
 
