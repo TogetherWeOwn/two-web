@@ -1,3 +1,4 @@
+@php usleep(3000000); @endphp
 {{--
     Placeholder. The real landing page — what TWO is, live member counts, real
     screenshots, one tracked join button — is TWO-28, built to the Designer's spec.
