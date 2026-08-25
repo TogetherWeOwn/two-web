@@ -35,6 +35,15 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # `--lint` reads the performance budgets by loading ci/lighthouserc.cjs the
+      # way lhci loads it, so this job needs node now. ubuntu-24.04 ships one, but
+      # every other job here pins the version and this should not be the exception
+      # — an unpinned interpreter is exactly the kind of thing that works until the
+      # runner image moves. No install step follows it; this is seconds.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
       # The gate checks its own wiring, first, before anything slow. A pull request
       # that edits this file to something that reports green while it has stopped
       # gating is rejected by the pipeline it is disarming. Half a second, no

@@ -151,7 +151,8 @@ CASES=(
   "tokens|pest|FAILURE|an edit to the vendored design system is rejected"
   "dusk|dusk|FAILURE|a broken page is caught in a real browser"
   "a11y|budgets|FAILURE|a WCAG 2.2 AA violation is rejected"
-  "lcp|budgets|FAILURE|an LCP breach is rejected"
+  "slowserver|budgets|FAILURE|a three-second server response is rejected"
+  "lcp|budgets|FAILURE|a client-side LCP breach is rejected"
   "gate|static|NOT_SUCCESS|a pull request that disarms the merge gate is rejected"
   "secret|gitleaks|SUCCESS|a committed credential is rejected"
 )
@@ -426,24 +427,91 @@ lint() {
   #    loads a few static files a three-second document response is medianed away
   #    and simulated LCP never sees it. That is TWO-93, and it passed a homepage
   #    that took three seconds to answer. Delete this line and it passes one again.
+  #
+  #    Read through node rather than grepped. This check used to match the text of
+  #    the file, and matching text is guessing: `'largest-contentful-paint'` is one
+  #    of four spellings of that key, and the other three load as the effective
+  #    budget while leaving the pinned line word for word intact —
+  #
+  #        "largest-contentful-paint": ['warn', { maxNumericValue: 99999 }],
+  #        ['largest-contentful-paint']: ['warn', { maxNumericValue: 99999 }],
+  #        ...{ 'largest-contentful-paint': ['warn', { maxNumericValue: 99999 }] },
+  #
+  #    — because an object literal keeps the last entry for a key. All three were
+  #    demonstrated green past the grep (QA, TWO-101). Widening the pattern closes
+  #    two of them and cannot close the spread, which has no key to match at all.
+  #    So: load the config the way lhci loads it, with the same `require()`, and
+  #    compare the value it actually gets. There is no fourth spelling to miss
+  #    because there is no longer any spelling involved.
   local budget_file="./ci/lighthouserc.cjs"
-  if [ -f "$budget_file" ]; then
-    local entry audit value
-    for entry in \
-      "largest-contentful-paint|2000" \
-      "cumulative-layout-shift|0.1" \
-      "server-response-time|600"; do
-      IFS='|' read -r audit value <<< "$entry"
-      if grep -qE "^[[:space:]]*'${audit}':[[:space:]]*\['error',[[:space:]]*\{[[:space:]]*maxNumericValue:[[:space:]]*${value//./\\.}[[:space:]]*," "$budget_file"; then
-        pass "budget \`${audit}\` fails the build above ${value}"
-      else
-        fail "budget \`${audit}\` is not asserted at ${value} as an \`error\` in ${budget_file}. Either it was relaxed, downgraded to a warning, or removed — and the job goes on reporting green either way. If the number genuinely changed, change it in both places in the commit that explains why."
-        rc=1
-      fi
-    done
-  else
+  if [ ! -f "$budget_file" ]; then
     fail "${budget_file} not found — the \`budgets\` job has no thresholds to enforce"
     rc=1
+  elif ! command -v node >/dev/null 2>&1; then
+    # Red, not skipped. A budget check that cannot run is a budget that is not
+    # enforced, and it should look like one. node is on ubuntu-24.04 before
+    # `setup-node` runs, which is where `--lint` already sits in `static`.
+    fail "node is not on PATH, so the budgets in ${budget_file} cannot be read as lhci reads them"
+    rc=1
+  else
+    # One line per audit: name|level|maxNumericValue|aggregationMethod|options.
+    #
+    # The last field is every option key, sorted — the equivalent of anchoring the
+    # old pattern on the closing brace. It means a fourth option cannot be added
+    # unnoticed, and adding one on purpose means updating the line below, which is
+    # the point. `aggregationMethod` is in there because it decides *which of the
+    # three runs* the number is compared against. From the pinned @lhci/cli@0.14.0
+    # (@lhci/utils/src/assertions.js):
+    #
+    #     const useMin =
+    #       (aggregationMethod === 'optimistic' && assertionType.startsWith('max')) ||
+    #       (aggregationMethod === 'pessimistic' && assertionType.startsWith('min'));
+    #     return useMin ? Math.min(...values) : Math.max(...values);
+    #
+    # All three budgets are `maxNumericValue`, so `optimistic` takes the minimum
+    # over `numberOfRuns: 3` — one word turns every budget from median-of-3 into
+    # best-of-3 with the threshold still reading 2000 in the diff. `'median'` is
+    # load-bearing rather than decoration: that same file defaults the option to
+    # `'optimistic'`, so deleting it is best-of-3 by another route.
+    local effective entry audit value expected
+    local loaded=1
+    effective=$(node -e '
+      const path = require("path");
+      const config = require(path.resolve(process.argv[1]));
+      const assertions = ((config.ci || {}).assert || {}).assertions || {};
+      for (const audit of process.argv.slice(2)) {
+        const entry = assertions[audit];
+        if (!Array.isArray(entry)) { console.log(audit + "|absent|||"); continue; }
+        const options = entry[1] || {};
+        console.log([
+          audit,
+          entry[0],
+          String(options.maxNumericValue),
+          String(options.aggregationMethod),
+          Object.keys(options).sort().join("+"),
+        ].join("|"));
+      }
+    ' "$budget_file" largest-contentful-paint cumulative-layout-shift server-response-time 2>&1) || loaded=0
+
+    if [ "$loaded" -eq 0 ]; then
+      fail "${budget_file} could not be loaded by node, so lhci cannot load it either and the \`budgets\` job has no thresholds to enforce: ${effective}"
+      rc=1
+    else
+      for entry in \
+        "largest-contentful-paint|2000" \
+        "cumulative-layout-shift|0.1" \
+        "server-response-time|600"; do
+        IFS='|' read -r audit value <<< "$entry"
+        expected="${audit}|error|${value}|median|aggregationMethod+maxNumericValue"
+
+        if grep -qxF -- "$expected" <<< "$effective"; then
+          pass "budget \`${audit}\` fails the build above ${value}, on the median of the runs"
+        else
+          fail "budget \`${audit}\` is not asserted at ${value} as an \`error\` on the median of the runs. lhci loads \`$(grep -F -- "${audit}|" <<< "$effective" | head -1)\` (audit|level|maxNumericValue|aggregationMethod|options), and the job goes on reporting green whether the budget was relaxed, downgraded to a warning, removed, or had its aggregation changed. If the line in ${budget_file} still reads correctly, look further down the file for a second entry for the same audit: an object literal keeps the last one. If the budget genuinely changed, change it in both places in the commit that explains why."
+          rc=1
+        fi
+      done
+    fi
   fi
 
   return "$rc"
@@ -1028,8 +1096,17 @@ cleanup_selftest() {
 # --- the breakages ----------------------------------------------------------
 # Each writes exactly one deliberate defect into the working tree. Deterministic on
 # purpose: a verification that itself flakes teaches nothing.
+#
+# Each also names the paths it touches in TOUCHED, and open_pr stages those and
+# nothing else. `git add -A` would stage whatever happened to be in the tree —
+# including a file some other process wrote while this script was mid-run — and a
+# "deliberately broken" pull request carrying an unrelated change proves nothing
+# about which change reddened the job. Naming the paths also gives open_pr something
+# to check the result against: a sed whose anchor has moved leaves those paths
+# unchanged, and the case that used to prove something quietly stops.
 
 break_pint() {
+  TOUCHED=(app/CiVerifyBadFormatting.php)
   # Laravel preset wants braces, spacing and a trailing newline. This has none.
   cat > app/CiVerifyBadFormatting.php <<'PHP'
 <?php
@@ -1042,6 +1119,7 @@ PHP
 }
 
 break_phpstan() {
+  TOUCHED=(app/CiVerifyTypeError.php)
   # Declared to return string, returns int. Level 8 catches this immediately.
   cat > app/CiVerifyTypeError.php <<'PHP'
 <?php
@@ -1059,6 +1137,7 @@ PHP
 }
 
 break_pest() {
+  TOUCHED=(tests/Feature/CiVerifyFailingTest.php)
   cat > tests/Feature/CiVerifyFailingTest.php <<'PHP'
 <?php
 
@@ -1069,6 +1148,7 @@ PHP
 }
 
 break_tokens() {
+  TOUCHED=(resources/css/two.css)
   # One hex nudged in the vendored design system. Nothing in this repo checks
   # contrast — two-design does, and that guarantee only holds while our copy is
   # byte-identical. Without the digest test this is completely silent: the page
@@ -1078,6 +1158,7 @@ break_tokens() {
 }
 
 break_dusk() {
+  TOUCHED=(resources/views/home.blade.php)
   # Hide the heading with CSS. The HTML still contains the text, so the *feature*
   # test's assertSee passes and only the real browser notices it is invisible —
   # which is the whole reason we pay for Dusk. A breakage that also trips `tests`
@@ -1086,15 +1167,25 @@ break_dusk() {
 }
 
 break_a11y() {
+  TOUCHED=(resources/views/home.blade.php)
   # An image with no alt text. wcag2a `image-alt` — a real barrier, and a rule axe
   # detects with total reliability. Invisible to every other job.
   sed -i 's#</x-layouts.app>#    <img src="/favicon.ico" width="16" height="16">\n</x-layouts.app>#' resources/views/home.blade.php
 }
 
-break_lcp() {
-  # Three seconds of server think-time before anything can paint. LCP cannot come
-  # in under the 2.0s budget no matter how fast the runner is, so this proves the
-  # assertion is wired up without depending on runner luck.
+break_slowserver() {
+  TOUCHED=(resources/views/home.blade.php)
+  # Three seconds of server think-time before anything can paint. A real member on
+  # a real phone waits three seconds; the budget has to say so.
+  #
+  # What catches it is `server-response-time`, not `largest-contentful-paint`, and
+  # that is worth knowing before you go looking. This case ran green for a while
+  # (TWO-93): `simulate` throttling does not report observed timings, it rebuilds
+  # them, and Lantern models one server response time per origin — the median over
+  # every request to it. The document's three seconds sits in a set with four
+  # static files served off disk in a millisecond, the median is a millisecond, and
+  # Lantern then simulates the document at a millisecond too. Simulated LCP comes
+  # in well under 2.0s over a server that took three seconds to answer.
   #
   # In the view rather than as a closure route on purpose: the budgets job runs
   # `route:cache`, and a closure route is not serialisable, so that version would
@@ -1103,6 +1194,7 @@ break_lcp() {
 }
 
 break_secret() {
+  TOUCHED=(ci-verify-credential.txt)
   # A credential-shaped string in a tracked file. `gitleaks` is a required check on
   # `main` and until now no case here made it go red — the one required check with
   # no live proof it fails, guarding the one thing that cannot be undone by a
@@ -1157,7 +1249,75 @@ break_secret() {
   } > ci-verify-credential.txt
 }
 
+break_lcp() {
+  TOUCHED=(public/ci-verify-hero.bmp resources/views/home.blade.php)
+  # An oversized hero image above the fold. This is the case that actually exercises
+  # the CEO's LCP < 2.0s budget, and it exists because `slowserver` above does not:
+  # what reddens `budgets` there is `server-response-time`. Without this case the
+  # headline budget has no live proof that it fires at all, and a broken
+  # `largest-contentful-paint` assertion would be invisible to every job in the
+  # pipeline (TWO-101, finding 2).
+  #
+  # Measured, not assumed — same Lighthouse settings as ci/lighthouserc.cjs
+  # (mobile, simulate, 1474.56 kbps down), varying only the image:
+  #
+  #     no image      LCP  752ms
+  #     148 KB image  LCP 1653ms   under budget
+  #     1.6 MB image  LCP 9152ms   4.6x over the 2.0s budget
+  #
+  # with CLS 0 and server-response-time 2ms in every case, so LCP is the only
+  # assertion that goes red and the case proves the thing it is named for. The
+  # simulator charges ~9s to pull 1.6 MB over Slow 4G and the largest contentful
+  # element cannot render until it lands (95% of LCP is Render Delay). Deterministic
+  # because it is simulated from the byte count, not measured off the runner's clock.
+  #
+  # An uncompressed BMP of random bytes, built by hand: it needs no image tooling on
+  # whoever's machine runs this, and it cannot be squeezed by transport compression
+  # on the way, so the size in the header is the size on the wire. Realistic, too —
+  # a hero image nobody compressed is how LCP actually breaches on a real site, and
+  # TWO-28 is about to put real screenshots on this page.
+  #
+  # 1.6 MB of /dev/urandom is also exactly what an entropy-based secret scanner is
+  # built to notice, and this case going red on `gitleaks` instead of `budgets`
+  # would be a false result rather than a caught one (QA, TWO-111). So it was
+  # measured, not argued: gitleaks 8.30.1 — the version secret-scan.yml pins — run
+  # the way that workflow runs it, over a commit of this exact file with this
+  # repo's .gitleaks.toml, reports `no leaks found`, exit 0.
+  #
+  # Not luck, either. `.gitattributes` sets `text=auto`, and bytes 6..9 of the
+  # header are a `le32 0` — four NULs — so git calls the blob binary whatever the
+  # random payload happens to spell, and writes `Binary files ... differ` into the
+  # patch instead of content. `gitleaks git` reads that patch, so it never sees a
+  # byte of the payload and no rule of any kind can fire on it. The only thing that
+  # would change that is forcing this path to diff as text in .gitattributes.
+  local w=900 h=620 stride data size
+  stride=$(( (w * 3 + 3) / 4 * 4 ))
+  data=$(( stride * h ))
+  size=$(( 54 + data ))
+  b()    { printf "$(printf '\\x%02x' "$1")"; }
+  le16() { b $(( $1 & 255 )); b $(( ($1 >> 8) & 255 )); }
+  le32() { b $(( $1 & 255 )); b $(( ($1 >> 8) & 255 )); b $(( ($1 >> 16) & 255 )); b $(( ($1 >> 24) & 255 )); }
+  {
+    printf 'BM'; le32 "$size"; le32 0; le32 54          # BITMAPFILEHEADER
+    le32 40; le32 "$w"; le32 "$h"; le16 1; le16 24      # BITMAPINFOHEADER, 24bpp
+    le32 0; le32 "$data"; le32 2835; le32 2835; le32 0; le32 0
+  } > public/ci-verify-hero.bmp
+  head -c "$data" /dev/urandom >> public/ci-verify-hero.bmp
+
+  # Above the first contentful element, not appended at the end of the page like the
+  # other breakages. An image below the fold is lazy-loadable and would not touch
+  # LCP at all, so anchoring on `</x-layouts.app>` would produce a case that quietly
+  # stops breaching the moment this page gets longer. Fail loudly if the anchor is
+  # gone rather than opening a PR that is not broken.
+  grep -q '<h1>' resources/views/home.blade.php || {
+    fail "break_lcp: no <h1> in resources/views/home.blade.php to place the hero above. The anchor moved; fix this case rather than deleting it."
+    return 1
+  }
+  sed -i '0,/<h1>/s##<img src="/ci-verify-hero.bmp" width="900" height="620" alt="A deliberately oversized hero image">\n    <h1>#' resources/views/home.blade.php
+}
+
 break_gate() {
+  TOUCHED=("$WORKFLOW")
   # Delete the aggregate's `if: always()`. Every job still passes, every test still
   # passes, and the pipeline stops being a gate: a red `static` now *skips* `tests`,
   # and GitHub counts a skipped required check as a passed one. Nothing else in the
@@ -1473,8 +1633,25 @@ open_pr() {
   local slug="$1" title="$2"
   local branch="${BRANCH_PREFIX}/${slug}"
   git checkout -q -B "$branch" "origin/${BASE_BRANCH}"
-  "break_${slug}" 2>/dev/null || true
-  git add -A
+
+  # A breakage that fails is not a breakage that got skipped. break_lcp checks the
+  # anchor it seds against and says so when it has moved — under the old
+  # `2>/dev/null || true` that message went to /dev/null and the script opened a
+  # pull request that was not broken, which reads as the pipeline failing to catch
+  # something. Let it speak and let it stop the run.
+  TOUCHED=()
+  "break_${slug}" || { fail "break_${slug} could not apply its breakage. Fix the case; a pull request opened from here would prove nothing."; exit 1; }
+
+  # Stage what the case declared, then check the tree agrees. Two failure modes,
+  # both of which produce a green-looking run that verified nothing: a sed whose
+  # anchor moved changes no file, and a concurrent write puts someone else's edit
+  # in a commit whose message says it is one deliberate defect.
+  git add -- "${TOUCHED[@]}"
+  [ -n "$(git diff --cached --name-only)" ] || { fail "break_${slug} changed nothing under ${TOUCHED[*]}. The case is a no-op — an anchor it edits has probably moved."; exit 1; }
+  local stray
+  stray=$(git status --porcelain --untracked-files=all | grep -E '^(\?\?| M| D)' || true)
+  [ -z "$stray" ] || { fail "break_${slug} left changes outside ${TOUCHED[*]}: $(tr '\n' ';' <<< "$stray"). Something else is writing to this working tree. Stop rather than push a commit that says it is one deliberate defect and is not."; exit 1; }
+
   git commit -q -m "ci-verify: ${title}" -m "Deliberately broken. Opened by ci/verify-pipeline.sh to prove the merge gate works. Close it, do not merge it."
   git push -q -u origin "$branch" --force-with-lease
   gh pr create --base "$BASE_BRANCH" --head "$branch" \
@@ -1485,7 +1662,7 @@ open_pr() {
 }
 
 # Every PR is opened before any waiting starts, so the runs happen in parallel
-# rather than end to end. Six sequential CI runs is most of an hour.
+# rather than end to end. Ten sequential CI runs is most of a morning.
 log "Opening the broken pull requests"
 for entry in "${CASES[@]}"; do
   IFS='|' read -r slug job aggregate why <<< "$entry"
@@ -1496,7 +1673,7 @@ done
 log "Opening the clean pull request"
 git checkout -q -B "${BRANCH_PREFIX}/clean" "origin/${BASE_BRANCH}"
 printf '\n<!-- ci-verify: a no-op change so a clean PR has something to build. -->\n' >> README.md
-git add -A
+git add -- README.md
 git commit -q -m "ci-verify: a clean PR goes green"
 git push -q -u origin "${BRANCH_PREFIX}/clean" --force-with-lease
 gh pr create --base "$BASE_BRANCH" --head "${BRANCH_PREFIX}/clean" \
