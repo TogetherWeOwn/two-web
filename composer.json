@@ -1,6 +1,6 @@
 {
     "$schema": "https://getcomposer.org/schema.json",
-    "name": "two-gaming/two-web",
+    "name": "togetherweown/two-web",
     "type": "project",
     "description": "The Together We Own community website.",
     "license": "MIT",

@@ -15,7 +15,7 @@
 # JOB HERE WITHOUT READING THIS.
 #
 # There was a `production` job. It was gated on `environment: production`, which on
-# GitHub's docs is where required reviewers live. `two-gaming/two-web` is private on
+# GitHub's docs is where required reviewers live. `TogetherWeOwn/two-web` is private on
 # GitHub Free, and on that plan environments cannot be configured at all: "any
 # configured protection rules or environment secrets will be ignored". So the gate
 # was not merely unconfigured, it was unenforceable — and the moment somebody created

@@ -9,7 +9,7 @@ You need **PHP 8.2+** with the `pdo_pgsql` and `intl` extensions, **Composer**,
 **Node 20+**, and **Docker** for the local database.
 
 ```bash
-git clone git@github.com:two-gaming/two-web.git
+git clone git@github.com:TogetherWeOwn/two-web.git
 cd two-web
 
 docker compose up -d    # Postgres 17 on localhost:5432 — start this first
