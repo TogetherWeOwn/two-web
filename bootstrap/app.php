@@ -3,14 +3,29 @@
 use Illuminate\Foundation\Application;
 use Illuminate\Foundation\Configuration\Exceptions;
 use Illuminate\Foundation\Configuration\Middleware;
+use Illuminate\Support\Facades\Route;
 
 return Application::configure(basePath: dirname(__DIR__))
     ->withRouting(
         web: __DIR__.'/../routes/web.php',
         commands: __DIR__.'/../routes/console.php',
         health: '/up',
+        // The funnel, with a deliberately empty middleware stack. `/discord` has
+        // to answer when the database is down, and every route in the `web` group
+        // opens a database connection inside StartSession before the controller
+        // runs, because SESSION_DRIVER=database everywhere we ship.
+        // routes/funnel.php carries the full reasoning.
+        then: function (): void {
+            Route::middleware([])->group(__DIR__.'/../routes/funnel.php');
+        },
     )
     ->withMiddleware(function (Middleware $middleware): void {
+        // The join link is the only web-to-Discord path TWO has, so it stays up
+        // through a deploy. Without this, `php artisan down` — an ordinary step
+        // in a release — answers it with a 503, which is the outage TOG-77 exists
+        // to prevent. `/up` is already excepted by `health:` above.
+        $middleware->preventRequestsDuringMaintenance(except: ['discord', 'join']);
+
         // nginx terminates TLS and hands PHP-FPM a plain http request, so without
         // this the application believes every https page is http. That breaks the
         // Discord login outright: the `redirect_uri` we send has to match the
