@@ -60,7 +60,37 @@ curl -s -H 'accept: application/dns-json' 'https://cloudflare-dns.com/dns-query?
 | `togetherweown.com` SPF | `v=spf1 include:_spf.wpcloud.com ~all` | Do not edit blind |
 | `two.gg` mail records | **None at all.** No SPF, no DMARC | Free win, see below |
 | Apex HSTS | `max-age=31536000`, **no `includeSubDomains`** | Keep it that way until cutover |
-| Apex indexing | `<meta name="robots" content="index, follow">`, empty `robots.txt` | An empty site is indexable — TWO-49 |
+| Apex indexing | Depends on the `Accept` header — see below. No `robots.txt` at all | An empty site is indexable — TWO-49, TOG-71 |
+
+### The apex serves two different homepages, and `curl` shows you the wrong one
+
+Corrected 25 August 2026 (TOG-71). The previous version of the row above read
+"`<meta name="robots" content="index, follow">`, empty `robots.txt`". Both halves
+were artefacts of how they were measured.
+
+The apex answers `vary: accept` and honours it. `Accept: */*` — what `curl` and
+`wget` send unless told otherwise — returns the WordPress front page: title
+`Together We Own -`, `index, follow`, a self-canonical, full Rank Math schema.
+`Accept: text/html,…` — what **every browser and Googlebot** sends — returns the
+Bricks coming-soon template: title `Coming Soon – Together We Own`, and **no robots
+meta, no canonical, no `og:url`, no schema at all**.
+
+So the tags recorded in the old row are the ones no crawler will ever be served. Add
+the browser `Accept` header to the browser UA already at the top of this section, or
+you will document a page nobody sees:
+
+```bash
+curl -s -A "$UA" -H 'accept: text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8' \
+  https://togetherweown.com/ | grep -o '<title>[^<]*</title>\|name="robots" content="[^"]*"'
+```
+
+And there is no `robots.txt` to be empty: `/robots.txt` **301s to `/robots.txt/`**,
+which returns a 129 KB HTML page with `content-type: text/html`. Nothing disallows
+anything and the sitemap is never announced.
+
+`ci/live-seo-probe.mjs` measures all of this, sends the right headers, and refuses
+to report a result at all when Cloudflare challenges it. Run that instead of
+re-deriving it by hand.
 
 Five things fall out of that which change the plan:
 
