@@ -12,11 +12,11 @@
             <directory>tests/Feature</directory>
         </testsuite>
 
-        <!-- Last, and separate, because it is the only suite whose rows are really
-             committed: its tests race separate OS processes against each other and
-             those cannot see an uncommitted transaction. See tests/Pest.php. -->
-        <testsuite name="Concurrency">
-            <directory>tests/Concurrency</directory>
+        <!-- Last, and separate, because it is the only suite whose transactions
+             really commit. Everything else runs inside a transaction that is rolled
+             back; these tests need a commit to be a commit. See tests/Pest.php. -->
+        <testsuite name="Integration">
+            <directory>tests/Integration</directory>
         </testsuite>
     </testsuites>
     <source>

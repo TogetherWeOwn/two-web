@@ -42,6 +42,14 @@ it('stores event times as timestamptz, not a naive local timestamp', function (s
         ->and($type->data_type)->toBe('timestamp with time zone');
 })->with(['starts_at', 'ends_at']);
 
+it('talks to Postgres in UTC whatever the server was initdb-ed with', function () {
+    // Laravel sends times as bare 'Y-m-d H:i:s' strings, and Postgres reads those
+    // into a timestamptz using the session time zone. Left unpinned that is a
+    // property of the machine, so the same code stores a different instant on two
+    // hosts. config/database.php pins it; this is the assertion that it took.
+    expect(DB::selectOne('show TimeZone')?->TimeZone)->toBe('UTC');
+});
+
 it('stores the correct UTC instant for a local wall time', function (string $local, string $utc) {
     $event = londonEvent($local)->fresh();
 

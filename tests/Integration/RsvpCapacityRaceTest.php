@@ -6,6 +6,7 @@ use App\Exceptions\EventAtCapacityException;
 use App\Models\Event;
 use App\Models\Rsvp;
 use App\Models\User;
+use App\Services\EventService;
 use Illuminate\Support\Facades\DB;
 
 /*
@@ -86,6 +87,15 @@ function finishRaceWorker(array $worker): array
 /** How many other backends on this database are blocked waiting for a lock. */
 function backendsWaitingOnLock(): int
 {
+    // Postgres caches the statistics snapshot for the life of a transaction: the
+    // first read of pg_stat_activity inside a transaction is the only one that
+    // touches reality, and every later read in the same transaction hands back that
+    // same snapshot. This poll runs inside the transaction that holds the row lock,
+    // so without the clear it faithfully reports the world as it was before the
+    // competitors connected — "waiting=0" for the full timeout while two backends
+    // queue up in plain sight.
+    DB::select('select pg_stat_clear_snapshot()');
+
     $row = DB::selectOne(
         'select count(*) as waiting from pg_stat_activity
           where datname = current_database()
@@ -169,7 +179,7 @@ it('lets a second member in when the winner stands down', function () {
     $alice = User::factory()->create();
     $bob = User::factory()->create();
 
-    $service = app(App\Services\EventService::class);
+    $service = app(EventService::class);
 
     $service->rsvp($event, $alice, RsvpStatus::Going);
 
@@ -182,14 +192,14 @@ it('lets a second member in when the winner stands down', function () {
 
     expect(Rsvp::query()->where('event_id', $event->id)->where('status', RsvpStatus::Going)->count())->toBe(1)
         ->and(Rsvp::query()->where('event_id', $event->id)->where('user_id', $bob->id)->value('status'))
-        ->toBe(RsvpStatus::Going->value);
+        ->toBe(RsvpStatus::Going);
 });
 
 it('lets a member already holding a slot change nothing by re-answering going', function () {
     $event = Event::factory()->create(['status' => EventStatus::Published, 'capacity' => 1]);
     $alice = User::factory()->create();
 
-    $service = app(App\Services\EventService::class);
+    $service = app(EventService::class);
     $service->rsvp($event, $alice, RsvpStatus::Going);
     $service->rsvp($event, $alice, RsvpStatus::Going);
 
