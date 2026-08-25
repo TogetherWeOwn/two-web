@@ -375,8 +375,12 @@ the list" above for the fact none of them ever read it.
 
 `--run` is the expensive one, and it got more expensive when the `lcp` case split
 off `slowserver`: **eleven pull requests** now, ten deliberate breakages and one
-clean control, each waiting on a full CI run. Budget most of an hour and do not
-start one you cannot sit with. One of the eleven also pushes a 1.6 MB image on
+clean control, each waiting on a full CI run. They run concurrently, so the cost is
+one CI run's wall clock plus the pushes, not eleven of them. Measured end to end on
+2026-08-25 against `72f3dea`: **under five minutes**, of which the clean control's
+own six checks were 2m34s. "Budget most of an hour", which this used to say, was a
+guess written before anyone had sat through one — and it was the reason to put the
+run off. Do not put it off; sit with it. One of the eleven also pushes a 1.6 MB image on
 purpose — the `lcp` breakage below — and since TWO-109 `--cleanup` deletes the
 `ci-verify/*` refs as well as closing the pull requests, so that blob does not
 outlive the run.
