@@ -415,6 +415,20 @@ keeping this list short is a standing obligation on every PR.
 6. **(founder — Rules, the token cannot do this)** Retarget the `two.gg` redirect
    rule to the apex.
 7. *(us)* Verify `/discord` in a browser before announcing anything. It is the funnel.
+   **"It returned a 302" is not the bar.** Do a real join: a browser that is not
+   already signed in to Discord, on an account that is not already in the server.
+   A join that works for a signed-in admin proves almost nothing — the admin is
+   already a member, so every interesting step is skipped. Recorded on TOG-77 by
+   whoever measured the WordPress flow, and it is the one part of `/discord` that
+   nothing in this repository can cover: `tests/Feature/DiscordFunnelTest.php`
+   pins what we answer with, and no test we own can prove Discord still honours
+   the code on the other end.
+   *Cheap standing check that needs no account and no browser, good any day of
+   the week — a dead code answers `404`:*
+   `curl -s "https://discord.com/api/v10/invites/<code>?with_counts=true"`
+8. *(us)* Expect new arrivals to land **`pending`** under Rules Screening. A join is
+   not yet an active member, and the funnel has to count the two separately or the
+   conversion rate reads high and means nothing.
 
 **Schedule the founder into the window, do not just notify them.** Step 6 is the only
 step we cannot perform, it sits between the swap and the verification, and until it
