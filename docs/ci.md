@@ -317,6 +317,36 @@ Secrets and variables to add once TWO-37 is approved and provisioned:
 Do not add a production deploy hook as a repo secret. Nothing reads it, and the
 staging job logs a warning if one appears.
 
+### What goes in the staging box's own `.env`
+
+Not in GitHub. Forge holds the environment file on the server, and these are read
+by the application at runtime, so putting them in the table above does nothing.
+
+| Variable | Value on staging | If it is missed |
+|---|---|---|
+| `DISCORD_MODERATOR_ROLE_IDS` | `508654771276873729` | Nobody is a moderator. Every member signs in fine and the admin link is never offered — no error, no log line. |
+
+`508654771276873729` is `SySOp` in the TWO guild, decided on TOG-106 and wired by
+TOG-427. It is a public snowflake, not a secret. **Do not add the other five roles
+that carry ban/kick** (`Staff`, `Officer`, `Game Master`, `Captain`, `Lieutenant`) —
+all five are deleted in Wave 6 of the server redesign, and a deleted snowflake stops
+matching silently. `SySOp` is kept, renamed to `Owner`, and the rename is harmless
+because the match is by ID.
+
+There is deliberately **no default for this in `config/services.php`**, unlike
+`DISCORD_GUILD_ID`. Blanking the variable is the revocation path — it un-grants
+everyone with no deploy — and a default in code would take that away and hand the
+admin panel to SySOp holders on every checkout that never decided to.
+
+The parsing is pinned by `tests/Feature/Auth/DiscordModeratorRoleIdsTest.php`; what
+a moderator and a member actually see is pinned by
+`tests/Browser/DiscordLoginTest.php`. Neither can tell you the variable is set on a
+real box — check that on the box.
+
+**The moderator panel does not go past staging until TOG-355 lands** (admin-panel
+reads of member data must be logged first). That is a condition of the security
+ruling, not a preference.
+
 A 200 from Forge means the deploy was *queued*, not that it is live, so the job
 then polls `/up` until the new release answers. Ten minutes of silence is a failure
 and the previous release is one click away in Forge.
