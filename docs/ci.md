@@ -341,7 +341,43 @@ admin panel to SySOp holders on every checkout that never decided to.
 The parsing is pinned by `tests/Feature/Auth/DiscordModeratorRoleIdsTest.php`; what
 a moderator and a member actually see is pinned by
 `tests/Browser/DiscordLoginTest.php`. Neither can tell you the variable is set on a
-real box — check that on the box.
+real box — so check it on the box, with:
+
+```
+php artisan discord:check-moderators --require-configured
+```
+
+Exit status 0 means the grant on that server is the one TOG-106 signed off. It
+reads `config()`, not `env()`, which is the only way to get a true answer on a
+host running `config:cache` — `env()` returns null there even when the `.env` is
+correct, and it also misses a stale cache still serving a value the `.env` no
+longer has.
+
+It fails on a blank list, on any of the five deleted ban/kick roles, on a role
+name typed where an ID belongs, and on a well-formed snowflake that simply is not
+SySOp. Without `--require-configured` a blank list passes, because blank is the
+revocation path and is correct in local dev. `--json` emits the findings for a
+pipeline.
+
+Two things it deliberately cannot check, and it says so on every run: the live
+moderator-vs-member login round trip needs real Discord consent, and the current
+SySOp holder count needs a bot token (TOG-13). Granting SySOp to a second person
+grants them this panel too.
+
+Put it in Forge's deploy script too, so it is not left to somebody remembering.
+The deploy script runs **on the box**, which is the one place the check means
+anything — GitHub Actions never SSHes in, so this cannot go in `deploy.yml`:
+
+```
+php artisan config:cache
+php artisan discord:check-moderators --require-configured || exit 1
+```
+
+After `config:cache`, deliberately: that is the state the application will serve
+from, and caching a `.env` that is missing the variable is itself one of the ways
+this goes wrong. The `|| exit 1` is the point — Forge marks the deploy failed and
+you find out at deploy time rather than the first time a moderator says the admin
+link is missing.
 
 **The moderator panel does not go past staging until TOG-355 lands** (admin-panel
 reads of member data must be logged first). That is a condition of the security
@@ -714,6 +750,11 @@ off, and deploy that SHA.
 - [ ] All six Dusk journeys present and passing, including the degraded path
 - [ ] Flake rate for the week is zero, or every open flake has an issue and a decision
 - [ ] Staging deployed from this exact commit, and smoke-tested by hand
+- [ ] `php artisan discord:check-moderators --require-configured` exits 0 **on the
+      box being deployed** — not on a runner, not locally. This is the only check
+      that reads the environment the application will actually serve from, and the
+      misconfiguration it catches is invisible: the site is up, login works, and
+      the admin panel is offered to nobody with no error anywhere
 - [ ] Integration run against the **staging** bot on the **staging** Discord server (TWO-25)
 - [ ] Degraded path verified for real: bot killed on staging, site still renders,
       counters fall back, queued actions retry, member sees a clear message
