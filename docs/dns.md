@@ -51,7 +51,7 @@ curl -s -H 'accept: application/dns-json' 'https://cloudflare-dns.com/dns-query?
 | `www.togetherweown.com` | Same origin, same challenge — no redirect to the apex | Fix at cutover |
 | `togetherweown.com/discord` | **302 into a live Discord OAuth join flow.** The only working web→Discord path we have | **Must survive. See below** |
 | `togetherweown.com/join` | 301 → `/join/` → **HTTP 200, titled "Page Not Found", `<meta name="robots" content="follow, noindex">`** — a soft 404 | No `/join` *page*; a 301 to `/discord` — see below |
-| `staging.togetherweown.com` | **Already resolves**, proxied, same origin as the apex | Repoint + grey cloud |
+| `staging.togetherweown.com` | **Already resolves**, proxied — but **no longer serves the apex page**. WordPress.com now answers `403 Error: Active domain connection for this domain not found` (re-measured 25 August 2026, TOG-427) | Repoint + grey cloud |
 | `two.gg`, `www.two.gg` | **302**, path-preserving, to `https://togetherweown.com/<path>` | Make it 301 |
 | `two.gg/discord` | **301** to `togetherweown.com/discord/` — already correct | Leave it, retarget at cutover |
 | `two.gg/join` | 302 → the apex soft 404. Sends real people to a dead page | Point it at `/discord` |
@@ -211,9 +211,22 @@ may be the same box to start with. Everything else below is final.
 | `A` | `staging` | `<STAGING_IP>` | ⚪ **DNS only (grey cloud)** | Auto |
 
 **This is a repoint of an existing record, not a create.** `staging` resolves today
-to the same Cloudflare IPs as the apex and serves the WordPress page. Until the
-record moves, do not hand the staging URL to QA or the Designer — they will review
-WordPress.
+to the same Cloudflare IPs as the apex. Until the record moves, do not hand the
+staging URL to QA or the Designer — and do not read a response from it as evidence
+about our app.
+
+**As of 25 August 2026 it serves nothing at all.** It used to return the WordPress
+page; it now returns WordPress.com's `403 Error: Active domain connection for this
+domain not found`, so the hostname's connection there has lapsed. Reproduce it with
+the browser-UA header from the top of this page — a plain `curl` gets Cloudflare's
+challenge instead and tells you nothing. Two consequences worth having in writing:
+
+- **Nothing of value is being served there,** so the repoint breaks nothing. That is
+  a small piece of good news for whoever finally does it.
+- **A `403` from `staging` is not our app failing.** It is the absence of our app.
+  There is no two-web deployment behind this name and there never has been —
+  `.github/workflows/deploy.yml` still no-ops on an unset `FORGE_STAGING_DEPLOY_HOOK`
+  (TOG-13, TOG-104). Anyone asked to "check it on staging" should stop here.
 
 **Grey cloud is deliberate, and we now have evidence.** A plain `curl` to the apex
 today comes back `403` with `cf-mitigated: challenge`. QA's Dusk suite is headless

@@ -363,3 +363,111 @@ it('lets a signed-in member see their own profile', function () {
         ->get(route('profile'))
         ->assertOk();
 });
+
+// ---------------------------------------------------------------------------
+// The real SySOp snowflake, end to end
+// ---------------------------------------------------------------------------
+//
+// Everything above proves the *mechanism* with synthetic ids (MOD_ROLE is
+// 900000000000000042, a number no Discord role has). That is the right way to test
+// behaviour, and it stays. But it means the value we actually intend to run with —
+// `508654771276873729`, SySOp in the TWO guild, decided on TOG-106 — has never once
+// been through this flow. The parsing is pinned in DiscordModeratorRoleIdsTest; the
+// behaviour is pinned here with a stand-in; nothing joins the two.
+//
+// TOG-427's done-when is "a moderator sees the admin link and a member does not",
+// checked on staging. There is no staging — staging.togetherweown.com serves
+// WordPress.com's 403, and deploy.yml still no-ops on an unset deploy hook. These
+// three tests are the strongest form of that check available without a box: the
+// real snowflake, entered as a `.env` line rather than injected as an array, read
+// through config/services.php exactly as a boot would read it, then driven through
+// the real callback to the real rendered page.
+//
+// What they cannot tell you is whether the line is present on a server. Nothing in
+// a test suite can. That check stays open on TOG-427 until a box exists.
+
+const TWO_SYSOP_ROLE_ID = '508654771276873729';
+
+/**
+ * Put $value in the environment and re-resolve *only* moderator_role_ids from
+ * config/services.php, the way a fresh boot resolves it. Pass null for "the line is
+ * missing from the file entirely".
+ *
+ * Only that one key is taken from the real config file — the rest of the discord
+ * config stays as beforeEach set it, so this exercises the variable under test and
+ * nothing else. Both $_SERVER and $_ENV are written because phpdotenv populates
+ * both and Laravel's Env repository reads $_SERVER first; setting only $_ENV leaves
+ * the old value winning and the test passes against nothing.
+ */
+function bootWithSysOpEnv(?string $value): void
+{
+    $key = 'DISCORD_MODERATOR_ROLE_IDS';
+
+    if ($value === null) {
+        unset($_ENV[$key], $_SERVER[$key]);
+        putenv($key);
+    } else {
+        $_ENV[$key] = $_SERVER[$key] = $value;
+        putenv($key.'='.$value);
+    }
+
+    try {
+        $resolved = (require config_path('services.php'))['discord']['moderator_role_ids'];
+    } finally {
+        unset($_ENV[$key], $_SERVER[$key]);
+        putenv($key);
+    }
+
+    config(['services.discord.moderator_role_ids' => $resolved]);
+}
+
+it('shows the admin link to a SySOp holder when the real snowflake is the configured value', function () {
+    // The whole chain: one .env line -> services.php -> isModerator's intersect ->
+    // the access-admin gate -> the rendered anchor. This is the half of TOG-427's
+    // done-when that says a moderator sees the link.
+    bootWithSysOpEnv(TWO_SYSOP_ROLE_ID);
+    stubSocialite();
+    stubGuildMember(roles: [MEMBER_ROLE, TWO_SYSOP_ROLE_ID]);
+
+    $this->get('/auth/discord/callback?code=good&state=x');
+
+    expect(User::query()->sole()->is_moderator)->toBeTrue();
+
+    $this->get(route('profile'))
+        ->assertOk()
+        ->assertSee('data-testid="admin-link"', false);
+});
+
+it('hides the admin link from a member who does not hold SySOp', function () {
+    // The other half, and the one that matters more: an ordinary member signs in
+    // perfectly well and is simply never offered the link.
+    bootWithSysOpEnv(TWO_SYSOP_ROLE_ID);
+    stubSocialite();
+    stubGuildMember(roles: [MEMBER_ROLE]);
+
+    $this->get('/auth/discord/callback?code=good&state=x');
+
+    expect(User::query()->sole()->is_moderator)->toBeFalse();
+
+    $this->get(route('profile'))
+        ->assertOk()
+        ->assertDontSee('data-testid="admin-link"', false);
+});
+
+it('still fails closed for a SySOp holder once the variable is blanked', function () {
+    // The documented revocation path: blank the variable, everyone is un-granted,
+    // no deploy. Worth pinning with the real id because this is the exact sequence
+    // someone will run in an incident — and it has to hold for the *administrator*
+    // role, not just for a stand-in.
+    bootWithSysOpEnv('');
+    stubSocialite();
+    stubGuildMember(roles: [MEMBER_ROLE, TWO_SYSOP_ROLE_ID]);
+
+    $this->get('/auth/discord/callback?code=good&state=x');
+
+    expect(User::query()->sole()->is_moderator)->toBeFalse();
+
+    $this->get(route('profile'))
+        ->assertOk()
+        ->assertDontSee('data-testid="admin-link"', false);
+});
