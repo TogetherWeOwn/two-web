@@ -403,6 +403,44 @@ else
   pass 'dirty'
 fi
 
+printf '\n\033[1m==> git identity is not set (TOG-466)\033[0m\n'
+
+# open_pr() is always called as `branch=$(open_pr ...)`, and bash starts a
+# command-substitution subshell with errexit OFF regardless of the outer shell's
+# `-e` — only the subshell's last command decides whether the assignment fails. A
+# `git commit` with no identity used to fall through to `git push` and open a pull
+# request on an unchanged branch, which is exactly the empty ci-verify/* branches
+# this issue is about. This is the case for the guard that stops it before any of
+# that runs.
+#
+# fixture() sets a local identity so every other case here can commit; this one
+# removes it. The harness's *own* git identity is real (it is what let TOG-466 be
+# found and reproduced), so unsetting only the fixture's local config would still
+# resolve through this machine's global config and prove nothing — GIT_CONFIG_GLOBAL
+# and GIT_CONFIG_SYSTEM are pointed at /dev/null too, so the fixture sees exactly
+# what an operator with no identity configured anywhere would.
+n=$((n + 1))
+dir="$(fixture no-identity)" || { fail 'no-identity: fixture failed'; rc=1; }
+( cd "$dir/repo" && git config --unset user.email && git config --unset user.name )
+RUN_OUT="$(cd "$dir/repo" && env -u PAPERCLIP_RUN_ID "PAPERCLIP_RUN_ID=$RUN_CASE_RUN_ID" \
+  GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null \
+  PATH="$dir/bin:$PATH" GH_STUB_PR_JSON="$dir/prs.json" \
+  GH_STUB_AUTH_STATUS="$dir/auth-status" GH_STUB_API_STATUS="$dir/api-status" \
+  GH_STUB_PR_STATUS="$dir/pr-status" GH_STUB_REMOTE="$dir/remote.git" \
+  ./ci/verify-pipeline.sh --run 2>&1)"
+RUN_STATUS=$?
+out="$RUN_OUT"
+if [ "$RUN_STATUS" -eq 0 ] || ! grep -qF 'git identity is not set' <<< "$out"; then
+  fail 'no-identity: a run with no git identity anywhere was allowed to start'
+  printf '%s\n' "$out" | sed 's/^/        /'
+  rc=1
+elif [ -n "$(git ls-remote --heads "$dir/remote.git" 'refs/heads/ci-verify/*' 2>/dev/null)" ]; then
+  fail 'no-identity: refused, but pushed a ci-verify branch on the way out'
+  rc=1
+else
+  pass 'no-identity'
+fi
+
 printf '\n\033[1m==> gh is not authenticated\033[0m\n'
 
 # The first precondition, and the one most likely to be true on a fresh machine:
