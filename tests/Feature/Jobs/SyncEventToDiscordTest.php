@@ -4,7 +4,6 @@ use App\Enums\EventStatus;
 use App\Jobs\SyncEventToDiscord;
 use App\Models\Event;
 use App\Models\Rsvp;
-use App\Services\Bot\Exceptions\BotNotConfiguredException;
 use App\Services\Bot\InternalActionClient;
 use Illuminate\Http\Client\ConnectionException;
 use Illuminate\Log\Logger;
@@ -180,7 +179,11 @@ it('fails when the bot is not configured, because no number of retries adds a se
     $job->handle(app(InternalActionClient::class));
 
     $job->assertFailed()->assertNotReleased();
-})->throwsNoExceptions();
+
+    // Named, not just "it failed": a missing secret and a bot that refused us are
+    // both failures and want different people to look at them.
+    $job->assertFailedWith(RuntimeException::class);
+});
 
 it('gives up quietly when the event was deleted while the job sat in the queue', function () {
     Http::fake();

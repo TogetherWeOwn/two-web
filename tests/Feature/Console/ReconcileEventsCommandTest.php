@@ -5,6 +5,7 @@ use App\Enums\RsvpStatus;
 use App\Jobs\SyncEventToDiscord;
 use App\Models\Event;
 use App\Models\Rsvp;
+use Illuminate\Console\Scheduling\Schedule;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Queue;
 
@@ -83,7 +84,7 @@ it('re-dispatches a published event that discord has never confirmed at all', fu
 it('does not chase an event that has already finished', function () {
     Queue::fake();
 
-    Event::factory()->create([
+    $finished = Event::factory()->create([
         'status' => EventStatus::Published,
         'discord_event_id' => null,
         'starts_at' => Carbon::now()->subDays(3),
@@ -93,6 +94,32 @@ it('does not chase an event that has already finished', function () {
     $this->artisan('events:reconcile')->assertSuccessful();
 
     // Discord deletes its own past events. Upserting one is an error, not a fix.
+    //
+    // Note *what* protects this: the close pass runs first and moves the row to
+    // Past, so by the time the sync pass reads `status = published` this row is no
+    // longer one. The `ends_at >= now()` filter on that query is a second belt and
+    // cannot be observed on its own — removing it leaves this test green. The
+    // ordering is the real guarantee, so the next test pins the ordering directly.
+    Queue::assertNothingPushed();
+    expect($finished->fresh()->status)->toBe(EventStatus::Past);
+});
+
+it('closes finished events before it looks for stale ones, not after', function () {
+    Queue::fake();
+
+    // Ended an hour ago and Discord never confirmed it: this row matches the sync
+    // pass on every count except its status, and its status is only wrong until the
+    // close pass has run. Reverse the two passes and this event gets upserted into
+    // a Discord that has already dropped it.
+    Event::factory()->create([
+        'status' => EventStatus::Published,
+        'discord_event_id' => null,
+        'starts_at' => Carbon::now()->subHours(3),
+        'ends_at' => Carbon::now()->subHour(),
+    ]);
+
+    $this->artisan('events:reconcile')->assertSuccessful();
+
     Queue::assertNothingPushed();
 });
 
@@ -164,7 +191,7 @@ it('does not resurrect a cancelled event as past', function () {
 });
 
 it('is registered on the schedule, because a command nobody runs fixes nothing', function () {
-    $events = collect(app(Illuminate\Console\Scheduling\Schedule::class)->events())
+    $events = collect(app(Schedule::class)->events())
         ->filter(fn ($event) => str_contains($event->command ?? '', 'events:reconcile'));
 
     expect($events)->not->toBeEmpty();

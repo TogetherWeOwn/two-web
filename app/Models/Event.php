@@ -109,10 +109,15 @@ class Event extends Model
         return $this->rsvps()->where('status', RsvpStatus::Going)->count();
     }
 
-    /** Whether Discord has been shown this event, and so whether a write-back means anything. */
+    /**
+     * Whether Discord has been shown this event, and so whether a write-back means
+     * anything. The rule lives on the enum so adding a state has one place to answer
+     * for itself — this was `!== Draft` until Past existed, which would have kept
+     * upserting events Discord had already dropped.
+     */
     public function isMirroredInDiscord(): bool
     {
-        return $this->status !== EventStatus::Draft;
+        return $this->status->isMirroredInDiscord();
     }
 
     /** @return BelongsTo<User, $this> */
