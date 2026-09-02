@@ -4,6 +4,7 @@ use App\Http\Controllers\Auth\DiscordLoginController;
 use App\Http\Controllers\EventController;
 use App\Http\Controllers\EventStatusController;
 use App\Http\Controllers\RsvpController;
+use App\Livewire\EventsCalendar;
 use Illuminate\Support\Facades\Route;
 
 Route::view('/', 'home')->name('home');
@@ -22,6 +23,19 @@ Route::get('/auth/discord/callback', [DiscordLoginController::class, 'callback']
 
 // POST only. A logout on GET can be fired by any <img src> a member loads.
 Route::post('/logout', [DiscordLoginController::class, 'logout'])->name('logout');
+
+// The members' calendar, and deliberately *not* behind `auth`.
+//
+// `/events` is already taken by the JSON index above and is a different thing
+// with a different audience, so the human page gets its own path rather than
+// content-negotiating one route into two.
+//
+// A guest can read it because the empty state's whole job is converting a
+// visitor who arrived from Discord — putting it behind a login means the only
+// people who can see "join the Discord" are the ones who already did. The RSVP
+// button is hidden from guests, and the component refuses a forged call from
+// one; that refusal, not the hidden button, is the control.
+Route::get('/calendar', EventsCalendar::class)->name('calendar');
 
 Route::middleware('auth')->group(function () {
     // Placeholder. The real profile is TWO-29 (backend) and TWO-30 (UI); this
