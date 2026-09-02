@@ -1,5 +1,6 @@
 <?php
 
+use App\Http\Middleware\SecurityHeaders;
 use Illuminate\Foundation\Application;
 use Illuminate\Foundation\Configuration\Exceptions;
 use Illuminate\Foundation\Configuration\Middleware;
@@ -15,11 +16,23 @@ return Application::configure(basePath: dirname(__DIR__))
         // opens a database connection inside StartSession before the controller
         // runs, because SESSION_DRIVER=database everywhere we ship.
         // routes/funnel.php carries the full reasoning.
+        //
+        // SecurityHeaders is the one exception to "empty", and it is allowed
+        // here only because it reads nothing but `config()` — no session, no
+        // cache, no database. The alternative was letting the two most-shared
+        // URLs we own be the only ones without `nosniff` or a frame guard.
         then: function (): void {
-            Route::middleware([])->group(__DIR__.'/../routes/funnel.php');
+            Route::middleware([SecurityHeaders::class])->group(__DIR__.'/../routes/funnel.php');
         },
     )
     ->withMiddleware(function (Middleware $middleware): void {
+        // Scoped to the `web` group explicitly rather than appended globally.
+        // `append()` would put it in the global stack, which already covers the
+        // funnel routes attached above — and two paths setting the same headers
+        // is the kind of duplication that later gets half-removed. One name, one
+        // place per group.
+        $middleware->web(append: [SecurityHeaders::class]);
+
         // The join link is the only web-to-Discord path TWO has, so it stays up
         // through a deploy. Without this, `php artisan down` — an ordinary step
         // in a release — answers it with a 503, which is the outage TOG-77 exists

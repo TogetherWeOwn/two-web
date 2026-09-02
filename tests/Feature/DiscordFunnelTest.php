@@ -1,6 +1,7 @@
 <?php
 
 use App\Http\Controllers\DiscordInviteController;
+use App\Http\Middleware\SecurityHeaders;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Route;
 
@@ -113,12 +114,35 @@ it('carries no session, cookie or throttle middleware on the funnel routes', fun
     // The structural half of the test above: query counting proves today's code
     // is clean, this proves the route was not quietly moved back into a group
     // that would make it dirty again.
+    //
+    // This was `toBe([])` until TOG-59 added SecurityHeaders, which is the only
+    // middleware allowed here. The allowlist is named rather than the assertion
+    // relaxed: an empty-set check that becomes "a few are fine" stops being a
+    // check at all. Anything not on this list still fails, and the zero-query
+    // test above is the guarantee that actually matters either way.
+    $allowed = [SecurityHeaders::class];
+
     foreach (['discord', 'join'] as $name) {
         $route = Route::getRoutes()->getByName($name);
 
         expect($route)->not->toBeNull("Route [{$name}] is missing. It is the funnel — it must exist.");
-        expect($route->gatherMiddleware())->toBe([], "Route [{$name}] has picked up middleware.");
+        expect(array_diff($route->gatherMiddleware(), $allowed))
+            ->toBe([], "Route [{$name}] has picked up middleware that may touch the database.");
     }
+});
+
+it('keeps the funnel free of database work even with the security headers attached', function () {
+    // TOG-59 attached SecurityHeaders to these routes. That is only safe while
+    // every value it reads comes from config files. This is the same zero-query
+    // assertion as above, aimed at the middleware rather than the controller,
+    // so the day somebody makes a header configurable from the database the
+    // build goes red instead of the join link going down.
+    config()->set('session.driver', 'database');
+    config()->set('cache.default', 'database');
+
+    $this->expectsDatabaseQueryCount(0);
+
+    $this->get('/join')->assertStatus(301);
 });
 
 it('keeps answering while the site is in maintenance mode', function () {
