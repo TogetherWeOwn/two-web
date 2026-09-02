@@ -30,6 +30,18 @@ return [
             'prefix_indexes' => true,
             'search_path' => 'public',
             'sslmode' => env('DB_SSLMODE', 'prefer'),
+
+            /*
+             | Pinned, and deliberately not from the environment. Laravel hands
+             | Postgres times as plain 'Y-m-d H:i:s' strings with no offset, and
+             | Postgres reads those into a timestamptz column using the *session*
+             | time zone — which otherwise comes from whatever the server happened to
+             | be initdb'd with. That would make the stored instant a property of the
+             | machine: events an hour out on one host and not another, and only for
+             | half the year. UTC in, UTC out. The zone an event is rendered in is
+             | its own column on the row, which is a different question.
+             */
+            'timezone' => 'UTC',
         ],
 
         /*

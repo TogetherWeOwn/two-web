@@ -3,11 +3,19 @@
 namespace App\Models;
 
 use App\Enums\RsvpStatus;
+use Carbon\CarbonImmutable;
 use Database\Factories\RsvpFactory;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 
+/**
+ * @property int $id
+ * @property int $event_id
+ * @property int $user_id
+ * @property RsvpStatus $status
+ * @property CarbonImmutable|null $synced_to_discord_at
+ */
 class Rsvp extends Model
 {
     /** @use HasFactory<RsvpFactory> */
@@ -26,7 +34,11 @@ class Rsvp extends Model
     {
         return [
             'status' => RsvpStatus::class,
-            'synced_to_discord_at' => 'datetime',
+
+            // Null means "Discord does not know about this yet", and that is the
+            // member-visible contract: the page says "saved here, syncing to
+            // Discord" rather than lying. The write-back job stamps it.
+            'synced_to_discord_at' => 'immutable_datetime',
         ];
     }
 
