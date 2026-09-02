@@ -368,21 +368,57 @@ blind** — one wrong `-all` does the same damage as a bad DMARC policy.
 
 ## Security headers
 
-Set in nginx on the origin so they apply to staging and the apex alike:
+**Shipped in the application, not in nginx — changed 2 September 2026 (TOG-59).**
+`app/Http/Middleware/SecurityHeaders.php`, wired in `bootstrap/app.php`, covered by
+`tests/Feature/SecurityHeadersTest.php`.
 
-| Header | Value |
-|---|---|
-| `Strict-Transport-Security` | `max-age=31536000; includeSubDomains` |
-| `X-Content-Type-Options` | `nosniff` |
-| `Referrer-Policy` | `strict-origin-when-cross-origin` |
-| `X-Frame-Options` | `DENY` |
-| `Permissions-Policy` | `camera=(), microphone=(), geolocation=()` |
-| `Content-Security-Policy` | Written with the Frontend Engineer once asset origins are known. Report-only first |
+This section previously read "set in nginx on the origin". That was written when the
+origin was assumed to exist, and **it does not**: there is no nginx configuration
+anywhere in this repository, no provisioned VPS, and `.github/workflows/deploy.yml`
+still no-ops on an unset deploy hook. A header specified only in an unwritten config
+file on an unprovisioned box protects nobody and, worse, is invisible to CI — nothing
+can go red when it is absent. So it was neither shipped nor detectably missing.
+
+Doing it in the app makes it travel with the code and be verifiable now. When the
+origin is eventually provisioned nginx may set these too; duplicate identical headers
+are harmless, and on the day the two disagree the application is the copy that is
+version-controlled and tested.
+
+| Header | Value | Where |
+|---|---|---|
+| `Strict-Transport-Security` | `max-age=31536000` (https requests only) | app |
+| `X-Content-Type-Options` | `nosniff` | app |
+| `Referrer-Policy` | `strict-origin-when-cross-origin` | app |
+| `X-Frame-Options` | `DENY` | app |
+| `Permissions-Policy` | `camera=(), microphone=(), geolocation=()` | app |
+| `X-Robots-Tag` | `noindex, nofollow` unless `APP_INDEXABLE=true` | app |
+| `Content-Security-Policy` | Written with the Frontend Engineer once asset origins are known. Report-only first | **still to do** |
+
+### Staging noindex is a default, not a setting
+
+`APP_INDEXABLE` defaults to **false**, so a new environment is private until it opts
+in, and production opting in is a line on the cutover checklist below. The two
+mistakes do not cost the same: a production site briefly carrying `noindex` loses
+ranking it does not yet have, while a staging site briefly indexed puts unfinished
+work in Google's cache and removal is a request to a third party rather than a deploy.
+
+This is a header rather than `public/robots.txt` because that file is static and is
+served by the web server before PHP is reached, so it cannot vary by environment from
+inside this repository. It is still `Disallow:` (allow everything) and that is correct
+for the eventual production site; the header is what makes staging safe meanwhile.
+Basic auth on the staging origin remains the other half and is still owed — it needs
+the box.
+
+**These headers are also on `/discord` and `/join`**, which sit outside the `web`
+middleware group (see `routes/funnel.php`). That is safe only because the middleware
+reads nothing but `config()` — no session, no cache, no database — and
+`DiscordFunnelTest` pins that with a zero-query assertion aimed at the funnel.
 
 **The apex already sends `Strict-Transport-Security: max-age=31536000` with no
 `includeSubDomains`.** Do not add `includeSubDomains` at the apex before cutover:
 today it would cover `staging`, which is fine, but it is a year-long commitment made
-from a host we do not control. Add it in our nginx config on the day we own the apex.
+from a host we do not control. It is off by default — `HSTS_INCLUDE_SUBDOMAINS=true`
+on the day we own the apex.
 
 **No `preload` until after the apex cutover.** Preload is a submission to a list
 baked into browsers and it is slow and painful to reverse; it commits every
