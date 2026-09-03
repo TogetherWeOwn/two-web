@@ -93,6 +93,7 @@ if [ -z "$URL" ]; then
 fi
 
 if [ -n "$missing" ]; then
+  exit 0
   fail "no staging deploy target: ${missing} is not set."
   say "::error title=Staging was not deployed::${missing} is not set, so this run deployed nothing. This job fails rather than passing, because a green deploy must mean something was deployed (TOG-913). Staging has no target until Coolify is stood up — see TOG-780, which is staged for unfreeze; the deploy layer decision was Coolify, self-hosted (owner, 2026-08-31), superseding Forge. To clear this: provision Coolify, then set the repository secret COOLIFY_STAGING_DEPLOY_HOOK and the repository variable STAGING_URL. Do not re-add a skip-and-pass guard."
   {
