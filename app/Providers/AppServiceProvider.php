@@ -5,6 +5,8 @@ namespace App\Providers;
 use App\Models\Profile;
 use App\Models\User;
 use App\Services\Bot\InternalActionClient;
+use App\Support\Counts\CountsReader;
+use App\Support\Counts\CountsSource;
 use App\Support\MemberDataAccess\AccessRecorder;
 use Illuminate\Contracts\Foundation\Application;
 use Illuminate\Support\Facades\Event;
@@ -21,6 +23,14 @@ class AppServiceProvider extends ServiceProvider
         // that never resolves it does not accumulate one member's ids into the
         // next member's row.
         $this->app->scoped(AccessRecorder::class);
+
+        // The landing page's counts. The page depends on the interface rather
+        // than on the reader, so it depends on "something that supplies counts"
+        // and not on the bot's database being reachable — which is also the
+        // seam the degraded state is tested through. Not shared: the 60-second
+        // cache inside the reader already does the deduplication, and holding
+        // one for a worker's lifetime would only keep a stale connection alive.
+        $this->app->bind(CountsSource::class, CountsReader::class);
 
         // Bound rather than shared: it reads config at resolve time and holds no
         // state between calls, so a singleton would only buy the chance of a

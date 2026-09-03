@@ -66,6 +66,32 @@ return [
             'prefix_indexes' => true,
             'search_path' => 'public',
             'sslmode' => env('DB_SSLMODE', 'prefer'),
+
+            /*
+             | How long the landing page is willing to wait for the bot's
+             | database before giving up and rendering the degraded counts.
+             |
+             | It has to be here because libpq's default is **30 seconds** and
+             | the homepage has a 2.0s LCP budget: a bot host that accepts no
+             | connections — powered off, firewalled, mid-deploy — would hold
+             | the page for half a minute and breach the budget by 15x. Failing
+             | in two seconds and rendering the designed empty state is the
+             | behaviour the counts contract asks for.
+             |
+             | PDO::ATTR_TIMEOUT, and *not* `connect_timeout` in the DSN, which
+             | is the obvious spelling and is silently ignored: measured on PHP
+             | 8.3.29, a DSN carrying connect_timeout=3 still took 30.03s to
+             | fail against a black-holed host, while ATTR_TIMEOUT=3 failed in
+             | 3.00s. Laravel merges this array into the PDO options
+             | (Connector::getOptions), so it reaches the driver.
+             |
+             | Only on this connection. The app's own database is not optional:
+             | if `pgsql` is unreachable there is no page to degrade to, and a
+             | short timeout there would turn a slow query into a broken site.
+             */
+            'options' => [
+                PDO::ATTR_TIMEOUT => (int) env('BOT_DB_TIMEOUT', 2),
+            ],
         ],
 
     ],
