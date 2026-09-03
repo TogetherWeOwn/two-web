@@ -140,6 +140,13 @@ test('a full event says so instead of offering a seat that is not there', functi
 test('an empty calendar reads as early rather than broken', function () {
     // No events at all. This is the state the site is in most of the time when it
     // is new, and the one the brief singles out.
+    //
+    // The precondition is stated rather than assumed. Dusk truncates between tests
+    // (tests/Pest.php), but this is the one test in the file whose subject is an
+    // absence, so it says so itself: if the truncation is ever loosened, this fails
+    // on its own terms instead of inheriting whatever the previous test created.
+    expect(Event::query()->count())->toBe(0);
+
     $this->browse(function (Browser $browser) {
         $browser->resize(360, 780)
             ->visit('/events')
