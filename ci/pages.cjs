@@ -19,6 +19,10 @@ const BASE_URL = process.env.CI_BASE_URL || 'http://127.0.0.1:8000';
 /** @type {{ path: string, name: string }[]} */
 const pages = [
   { path: '/', name: 'Homepage — the top of the join funnel' },
+  // Measured signed-out, which is the state a stranger arrives in and the one this
+  // script can reach. The signed-in variant adds RSVP controls to the same cards
+  // and gets measured when TWO-34's session cookie lands, like /profile.
+  { path: '/events', name: 'Events calendar — what is on, and answering it' },
 ];
 
 module.exports = {
