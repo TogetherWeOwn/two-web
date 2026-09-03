@@ -4,9 +4,24 @@ use App\Http\Controllers\Auth\DiscordLoginController;
 use App\Http\Controllers\EventController;
 use App\Http\Controllers\EventStatusController;
 use App\Http\Controllers\RsvpController;
+use App\Livewire\EventsCalendar;
 use Illuminate\Support\Facades\Route;
 
 Route::view('/', 'home')->name('home');
+
+// The events page, and it is deliberately outside the `auth` group below.
+//
+// A signed-out visitor arriving from a link in Discord must land on the calendar,
+// not on the OAuth handoff: the empty state is written as a pitch to join
+// (two-design docs/COMPONENTS.md §8) and it cannot do that job behind a login.
+// What the page will not show them is an RSVP button — the component asks them to
+// log in instead, which is a different thing from a 302.
+//
+// The JSON collection keeps its own route below. One path cannot honestly be both
+// a document and an API: content-negotiating `/events` on the Accept header gives
+// crawlers and curl different answers, which is a trap this repo has already been
+// bitten by once on the apex.
+Route::get('/events', EventsCalendar::class)->name('events.index');
 
 // Discord is the only way in, so the route Laravel redirects guests to *is* the
 // Discord handoff. There is no login form to design because there is nothing to
@@ -36,7 +51,10 @@ Route::middleware('auth')->group(function () {
     // Publish and cancel are their own routes rather than a `status` field on the
     // update: announcing an event to the guild is a different act from correcting
     // its description, and cancelling is the one transition that cannot be undone.
-    Route::get('/events', [EventController::class, 'index'])->name('events.index');
+    // The JSON collection. `/events.json`, not `/events`, because that path now
+    // serves the HTML page (see above) and one URL answering with two media types
+    // is how you end up with a crawler and a browser seeing different sites.
+    Route::get('/events.json', [EventController::class, 'index'])->name('events.json');
     Route::post('/events', [EventController::class, 'store'])->name('events.store');
     Route::get('/events/{event}', [EventController::class, 'show'])->name('events.show');
     Route::patch('/events/{event}', [EventController::class, 'update'])->name('events.update');

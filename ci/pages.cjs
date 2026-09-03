@@ -19,6 +19,14 @@ const BASE_URL = process.env.CI_BASE_URL || 'http://127.0.0.1:8000';
 /** @type {{ path: string, name: string }[]} */
 const pages = [
   { path: '/', name: 'Homepage — the top of the join funnel' },
+  // Public on purpose: the empty state is a pitch to join, so a signed-out visitor
+  // arriving from a Discord link has to reach it. That also makes it measurable
+  // here without the session cookie /profile is still waiting on.
+  //
+  // Worth measuring rather than assumed: most arrivals are a phone in the Discord
+  // in-app browser, and the largest element is the first event card, so anything
+  // that pushes the card down after paint spends the CLS budget.
+  { path: '/events', name: 'Events calendar — list view, the default' },
 ];
 
 module.exports = {
