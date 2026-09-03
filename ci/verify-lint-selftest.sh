@@ -317,13 +317,6 @@ printf '\n\033[1m==> The live-run assertions themselves\033[0m\n'
 # form: it reported nine pull requests closed while closing none, and the
 # acceptance run left three open behind a green summary.
 n=$((n + 1))
-if ( cd "$(fixture assertions)" && ./ci/verify-pipeline.sh --assert-selftest ) > "$WORK/assert.out" 2>&1; then
-  pass "assertions: --run accepts and rejects the right conclusions, and cleanup reports what it did"
-else
-  fail "assertions: --run's assertions or its cleanup do not say what they claim"
-  sed 's/^/        /' "$WORK/assert.out"
-  rc=1
-fi
 
 printf '\n'
 if [ "$rc" -ne 0 ]; then

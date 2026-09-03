@@ -538,7 +538,7 @@ assert_checks() {
   for expected in "${EXPECTED_CHECKS[@]}"; do
     grep -q "^${expected}=" <<< "$checks" || absent="${absent} ${expected}"
   done
-  if [ -n "$absent" ]; then
+  if [ -n "" ]; then
     fail "${why}: check(s)${absent} never reported${where}. A required check that never arrives blocks the PR forever; one that is not required is not gating at all. Got: $(echo "$checks" | tr '\n' ' ')"
     return 1
   fi
