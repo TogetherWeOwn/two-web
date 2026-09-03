@@ -56,9 +56,13 @@ it('never lets the Livewire runtime block the first paint', function () {
     // competed for bandwidth with the paint, and the measurement disproved that
     // theory — LCP went 2684ms -> 2666ms, which is noise. It is asserted here
     // because it is still the correct hint for a script nothing is waiting on,
-    // NOT because it fixed the budget. The budget breach on /events is a byte
-    // problem: 349 KB on the critical path is a ~1894ms floor at Slow 4G against
-    // a 2000ms LCP budget, and no loading hint removes a byte. See TOG-53.
+    // NOT because it fixed the budget.
+    //
+    // The budget breach on /events is a separate fact and this test does not
+    // cover it. FCP is 1258ms on /events and 1276ms on /, so the first paint is
+    // not delayed at all; LCP is 2663ms against 1655ms on /. The ~1400ms is
+    // spent after the paint, and what fixes it will not be a script attribute.
+    // See TOG-53.
     expect($matches[0])->toContain('fetchpriority="low"');
 });
 

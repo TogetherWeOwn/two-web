@@ -72,15 +72,14 @@ class AppServiceProvider extends ServiceProvider
         // theory that the runtime was competing for bandwidth with the paint,
         // and the measurement disproved it: LCP moved to 2666ms, ~18ms, noise.
         //
-        // The reason both were always going to fall short is arithmetic. The
-        // budget profile uses Lighthouse's *simulated* throttling, which is
-        // bandwidth-bound: reordering bytes changes when they arrive relative to
-        // each other, but the page still cannot paint before its bytes have
-        // transferred. /events ships 349 KB on the critical path — 166 KB
-        // Livewire runtime, 90 KB font, 48 KB app JS, 44 KB CSS — and at Slow
-        // 4G's 1474.56 kbps that is a ~1894ms floor against a 2000ms budget,
-        // leaving ~106ms for server time, parse, layout and paint. No loading
-        // hint fixes that; only removing bytes does. See TOG-53.
+        // Where the time actually goes, now that the budget job reports the
+        // passing pages too: FCP on /events is 1258ms and on / it is 1276ms —
+        // the same. The first paint is NOT delayed, so nothing here is blocking
+        // it and no further work on this script will move LCP. The gap is
+        // entirely after the paint: /events reaches LCP at 2663ms against 1655ms
+        // on /, about 1400ms spent between painting something and painting the
+        // largest thing. That is the remaining problem and it is not this one.
+        // See TOG-53.
         //
         // Both attributes are kept because both are correct on their own terms —
         // defer is load-bearing for FCP, and low priority is safe precisely

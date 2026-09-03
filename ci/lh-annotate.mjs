@@ -73,6 +73,8 @@ const median = (xs) => {
 };
 
 const byUrl = new Map();
+const lcpElement = new Map();
+const longTasks = new Map();
 for (const file of readdirSync(DIR).filter((f) => /^lhr-.*\.json$/.test(f))) {
   let lhr;
   try {
@@ -89,6 +91,28 @@ for (const file of readdirSync(DIR).filter((f) => /^lhr-.*\.json$/.test(f))) {
     if (!byUrl.get(url).has(id)) byUrl.get(url).set(id, []);
     byUrl.get(url).get(id).push(v);
   }
+
+  // The LCP element itself. `largest-contentful-paint-element` reports it as a
+  // node with a selector and a snippet; one run's worth is enough to name it.
+  if (!lcpElement.has(url)) {
+    const node = lhr.audits?.['largest-contentful-paint-element']?.details?.items?.[0]?.items?.[0]?.node;
+    const sel = node?.selector ?? node?.snippet;
+    if (sel) lcpElement.set(url, String(sel).slice(0, 300));
+  }
+
+  // What the network was still doing. Sorting by transfer size names the bytes
+  // on the critical path without anyone having to guess at them.
+  if (!longTasks.has(url)) {
+    const items = lhr.audits?.['network-requests']?.details?.items;
+    if (Array.isArray(items)) {
+      const top = items
+        .filter((i) => typeof i.transferSize === 'number' && i.transferSize > 10_000)
+        .sort((a, b) => b.transferSize - a.transferSize)
+        .slice(0, 5)
+        .map((i) => `${String(i.url).replace(/^https?:\/\/[^/]+/, '')} ${Math.round(i.transferSize / 1024)}KB`);
+      if (top.length) longTasks.set(url, top.join(', '));
+    }
+  }
 }
 
 // Emitted as ::error:: rather than ::notice:: on purpose, and it is not a second
@@ -102,6 +126,14 @@ for (const [url, audits] of byUrl) {
   console.error(`::error::CONTEXT, NOT A FAILURE — measured on ${url} (median of ${
     audits.values().next().value?.length ?? 0
   } runs): ${parts.join(', ')}`);
+  // Which element the LCP actually is, and what the page was still waiting on.
+  // The timings alone say a page is slow; they never say what is slow. Without
+  // this the only way to find out is the artifact, which is what this file exists
+  // to avoid needing.
+  const el = lcpElement.get(url);
+  if (el) console.error(`::error::CONTEXT, NOT A FAILURE — LCP element on ${url}: ${el}`);
+  const chain = longTasks.get(url);
+  if (chain) console.error(`::error::CONTEXT, NOT A FAILURE — slowest resources on ${url}: ${chain}`);
 }
 
 console.error(`\n${failures.length} performance assertion(s) breached.`);
