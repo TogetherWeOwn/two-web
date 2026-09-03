@@ -64,7 +64,18 @@ class AppServiceProvider extends ServiceProvider
         // Asserted in tests/Feature/CriticalPathTest.php so this cannot regress
         // quietly — a Livewire upgrade that changes how the tag is emitted fails
         // there in half a second, rather than as an unexplained budgets breach.
-        Livewire::useScriptTagAttributes(['defer' => true]);
+        // `fetchpriority="low"` is the second half, and it is here because defer
+        // alone was measured and was not enough: it cleared the FCP warning and
+        // left LCP at 2684ms. Deferring stops a script blocking the *parser*; it
+        // does not stop it competing for *bandwidth* with the stylesheet and font
+        // the paint is actually waiting on. On Slow 4G this page's assets are a
+        // ~1.9s transfer floor against a 2.0s budget, so that contention is the
+        // whole margin.
+        //
+        // Low priority is safe only because the script is deferred — nothing
+        // before DOMContentLoaded depends on it, so funding the paint first costs
+        // the member nothing except interactivity arriving fractionally later.
+        Livewire::useScriptTagAttributes(['defer' => true, 'fetchpriority' => 'low']);
 
         // Socialite ships no Discord driver of its own; this registers the
         // community one. Reason for the dependency: writing our own OAuth2

@@ -47,6 +47,18 @@ it('never lets the Livewire runtime block the first paint', function () {
     // parsed, because it binds to the components already in it. `async` would let
     // it execute mid-parse against a half-built DOM.
     expect($matches[0])->toContain('defer');
+
+    // `defer` stops the script blocking the parser, but it does NOT stop it
+    // competing for bandwidth with the resources the paint is waiting on. That
+    // distinction was measured, not assumed: adding defer alone cleared the FCP
+    // warning and left LCP at 2684ms against a 2000ms budget, because on Slow 4G
+    // the four assets this page needs are already a ~1.9s transfer floor and the
+    // runtime is 900ms of it.
+    //
+    // fetchpriority="low" tells the browser to fund the paint first and the
+    // interactivity after. It is safe precisely because the script is deferred —
+    // nothing before DOMContentLoaded is waiting on it.
+    expect($matches[0])->toContain('fetchpriority="low"');
 });
 
 it('serves the events page without a render-blocking script in the head', function () {
