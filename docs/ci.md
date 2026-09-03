@@ -294,24 +294,52 @@ QA does not block on style preference. Only on the six boxes, and always by numb
 
 ## Deploys
 
-`.github/workflows/deploy.yml`, designed against the hosting decision in TWO-37.
+`.github/workflows/deploy.yml`. The deploy layer is **Coolify, self-hosted** (owner
+decision, 2026-08-31 — TOG-780), which supersedes Forge (TOG-407 closed).
 
 - **CI green on `main` → staging deploys automatically.** That is box 5, done for
   you.
 - **This workflow deploys staging only.** Production is not in CI at all — see
   below. `workflow_dispatch` re-runs staging and takes no environment argument.
 - **GitHub Actions never SSHes into a server.** No deploy key lives in CI. A deploy
-  is one authenticated POST to a Forge webhook; Forge pulls on the box, migrates,
-  and swaps the symlink. That constraint is the Web Lead's and it is a good one.
-- The job **skips cleanly, green, when its secret is unset.** Nothing is
-  provisioned yet. A missing deploy target must never look like a broken build —
-  that is how a team learns to ignore a red X.
+  is one authenticated POST to a deploy webhook; the panel pulls on the box,
+  migrates, and swaps the release. That constraint is the Web Lead's and it is a
+  good one — it is why changing hosts from Forge to Coolify altered the name of a
+  secret and nothing else about this file.
+- **The job fails when it has no deploy target.** `staging` is red today, on every
+  push to `main`, and stays red until Coolify is provisioned. That is expected, and
+  it is not a broken build.
 
-Secrets and variables to add once TWO-37 is approved and provisioned:
+> #### `staging` is red on purpose, and it used to be the other way round
+>
+> Until TOG-913 this job did the opposite: with no secret set it skipped every step
+> and **exited green in about three seconds having deployed nothing**. The reasoning
+> was written down and was not silly — *"a missing deploy target must never look like
+> a broken build; that is how a team learns to ignore a red X"* — but it was a bet
+> that the target would arrive soon, and it did not.
+>
+> On TOG-48 an agent read that green `staging` check as "it shipped" and told the
+> owner the landing page was live on staging. Nothing had been deployed. The agent
+> was wrong and CI had told them so, which makes it a CI defect rather than an agent
+> one: **a control that reports success for work it did not do keeps producing false
+> claims regardless of who is on shift.**
+>
+> It was also unfixable by waiting, because `FORGE_STAGING_DEPLOY_HOOK` was a Forge
+> secret and Forge is gone. It would have skipped, silently, reporting success,
+> forever.
+>
+> So green now means *deployed, and answering*. Do not re-add a skip-and-pass guard.
+> `ci/deploy-target-selftest.sh` runs in `static` and fails the pull request that
+> tries — both by executing the guard with no target and by rejecting any step in
+> `deploy.yml` gated on a secret or variable being set.
+
+Secrets and variables to add once Coolify is provisioned (TOG-780). **Both** are
+required: a hook without a URL is refused, because a deploy that cannot be
+health-checked is the same false green in a smaller box.
 
 | Name | Kind | Value |
 |---|---|---|
-| `FORGE_STAGING_DEPLOY_HOOK` | secret | Forge staging deploy webhook URL |
+| `COOLIFY_STAGING_DEPLOY_HOOK` | secret | Coolify staging deploy webhook URL, token included |
 | `STAGING_URL` | variable | e.g. `https://staging.togetherweown.com` |
 
 Do not add a production deploy hook as a repo secret. Nothing reads it, and the
@@ -319,8 +347,9 @@ staging job logs a warning if one appears.
 
 ### What goes in the staging box's own `.env`
 
-Not in GitHub. Forge holds the environment file on the server, and these are read
-by the application at runtime, so putting them in the table above does nothing.
+Not in GitHub. The hosting panel holds the environment file on the server, and these
+are read by the application at runtime, so putting them in the table above does
+nothing.
 
 | Variable | Value on staging | If it is missed |
 |---|---|---|
@@ -347,9 +376,9 @@ real box — check that on the box.
 reads of member data must be logged first). That is a condition of the security
 ruling, not a preference.
 
-A 200 from Forge means the deploy was *queued*, not that it is live, so the job
-then polls `/up` until the new release answers. Ten minutes of silence is a failure
-and the previous release is one click away in Forge.
+A 200 from Coolify means the deploy was *queued*, not that it is live, so the job
+then polls `/up` until the new release answers. Ten minutes of silence is a failure,
+and the previous release is one rollback away in the Coolify dashboard.
 
 ### Production deploys are manual, in the hosting dashboard
 

@@ -99,6 +99,16 @@ jobs:
       - name: Run preconditions self-test
         run: ./ci/verify-run-preconditions-selftest.sh
 
+      # The deploy guard, exercised with no target configured — which is the live
+      # configuration today and the exact case that used to report green while
+      # deploying nothing (TOG-913, surfaced on TOG-48 as a false "live on staging"
+      # claim to the owner). It belongs here rather than in `deploy.yml` because the
+      # interesting case is the *absence* of a deploy target, so it needs no secret,
+      # no network and no server; and because `deploy.yml` only runs once `main` is
+      # already green, which is far too late to stop the pull request that breaks it.
+      - name: Deploy guard self-test
+        run: ./ci/deploy-target-selftest.sh
+
       - uses: shivammathur/setup-php@v2
         with:
           php-version: ${{ env.PHP_VERSION }}
