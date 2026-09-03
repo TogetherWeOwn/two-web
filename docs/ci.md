@@ -389,7 +389,7 @@ A pipeline nobody has watched fail is a pipeline nobody knows works.
 ```bash
 ./ci/verify-pipeline.sh --lint             # offline, half a second, no gh — runs in `static`
 ./ci/verify-lint-selftest.sh               # proves --lint still catches things — runs in `static`
-./ci/verify-pipeline.sh --assert-selftest  # proves --run's assertions, and its cleanup, say what they claim
+./ci/verify-pipeline.sh --assert-selftest  # proves --run's assertions, and its cleanup, say what they claim — runs in `static`
 ./ci/verify-run-preconditions-selftest.sh  # proves --run still refuses, and --cleanup still clears — runs in `static`
 ./ci/verify-pipeline.sh                    # dry run — prints what it would do
 cd "$(./ci/scratch-clone.sh)"              # --run needs a checkout of its own — see below
@@ -434,6 +434,16 @@ The third runs `--assert-selftest`, which feeds recorded check conclusions throu
 assertions `--run` makes and checks each is accepted or rejected as intended. Those
 assertions otherwise execute only during a live run, which is how a wrong one survived
 review and cost forty minutes of runner time to find (TWO-94).
+
+`static` also runs `--assert-selftest` directly, as its own step, immediately after
+this one (TOG-8). That is deliberately a second route to the same 29 cases — 17
+assertion, 9 wait, 3 cleanup — and neither is redundant in the way that word usually
+means. This case reaches them through a fixture copy, which is what proves the lint
+and the acceptance script agree about the file on disk; the named step reaches the
+working tree directly, and states the dependency somewhere a reader of `ci.yml` can
+see it. Before TOG-8 the coverage existed only here, hanging off one line inside a
+case about *linting*, where nothing recorded that deleting it would silently retire
+every test of `--run`.
 
 `--assert-selftest` covers cleanup for the same reason, with `gh` and `git` shadowed
 so the real function runs against synthetic responses. Cleanup had the identical
