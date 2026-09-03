@@ -56,9 +56,15 @@ for (const f of failures) {
 // headroom anywhere. Reading that off the artifact needs the artifact.
 const passes = results.filter((r) => r.passed);
 
+// Emitted as ::error:: rather than ::notice:: on purpose, and it is not a second
+// failure — the job's verdict is the exit code below, which counts only breaches.
+// GitHub's check-run annotations API returns `failure` annotations; a ::notice::
+// is written to the log and does not appear there, which would put this line back
+// in the artifact this script exists to avoid needing. The wording says plainly
+// that nothing here breached.
 if (passes.length > 0) {
   console.error(
-    '::notice::for comparison, the assertions that passed — ' +
+    '::error::CONTEXT, NOT A FAILURE — the assertions that passed, for comparison: ' +
       passes.map((p) => `${p.auditId} on ${p.url}: ${p.actual} (budget ${p.expected})`).join('; ')
   );
 }
