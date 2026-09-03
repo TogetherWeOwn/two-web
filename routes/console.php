@@ -17,3 +17,22 @@ Artisan::command('inspire', function () {
 // data, which is the right way round for a log but is still a thing to notice:
 // tests/Feature/MemberDataAccessLogTest.php asserts the schedule exists.
 Schedule::command('model:prune', ['--model' => [MemberDataAccessLog::class]])->daily();
+
+/*
+ * Every ten minutes, because that is the gap between an event going stale and a
+ * member seeing the stale version. It is cheap when there is nothing to do: two
+ * indexed queries that return no rows.
+ *
+ * `withoutOverlapping` because a long Discord outage makes a pass slow, and two
+ * passes running together would dispatch the same write-backs twice. The job's own
+ * uniqueness would absorb it, but a second lock costs nothing and the queue never
+ * sees the duplicates at all.
+ *
+ * `runInBackground` so a slow reconcile cannot delay whatever the scheduler runs
+ * next, and `onOneServer` so adding a second web box does not double every pass.
+ */
+Schedule::command('events:reconcile')
+    ->everyTenMinutes()
+    ->withoutOverlapping()
+    ->runInBackground()
+    ->onOneServer();

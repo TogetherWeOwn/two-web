@@ -1507,6 +1507,19 @@ command -v gh >/dev/null || { fail "gh is not installed"; exit 1; }
 gh auth status >/dev/null 2>&1 || { fail "gh is not authenticated"; exit 1; }
 [ -z "$(git status --porcelain)" ] || { fail "working tree is dirty — commit or stash first"; exit 1; }
 
+# open_pr() commits ten times, and `git commit` needs an identity it has not needed
+# up to this point. Checked here rather than trusted to `set -e`: open_pr() is
+# always called as `branch=$(open_pr ...)`, and a command substitution subshell
+# starts with errexit OFF regardless of the outer shell's `-e` — that is bash's
+# behaviour, not a bug in this file, and it is why a failed `git commit` used to
+# fall through to `git push` instead of stopping the case (TOG-466). `git var`
+# is what `git commit` itself calls to resolve the author line, so this fails for
+# exactly the same reason `git commit` would, before anything is pushed.
+git var GIT_AUTHOR_IDENT >/dev/null 2>&1 || {
+  fail "git identity is not set — run: git config user.email you@example.com && git config user.name \"Your Name\" (add --global for every repo). Every case below commits on its own branch, and a commit with no identity fails while the push and PR-open around it do not, which is how this leaves ${BRANCH_PREFIX}/* branches with nothing in them. Nothing has been pushed."
+  exit 1
+}
+
 # The owner/repo the Checks API is asked about. Resolved and checked here, in the
 # main shell, rather than inside the assertions: every use of it below sits in a
 # command substitution, and an `exit` in there kills only the subshell and lets the
@@ -1652,7 +1665,19 @@ open_pr() {
   stray=$(git status --porcelain --untracked-files=all | grep -E '^(\?\?| M| D)' || true)
   [ -z "$stray" ] || { fail "break_${slug} left changes outside ${TOUCHED[*]}: $(tr '\n' ';' <<< "$stray"). Something else is writing to this working tree. Stop rather than push a commit that says it is one deliberate defect and is not."; exit 1; }
 
-  git commit -q -m "ci-verify: ${title}" -m "Deliberately broken. Opened by ci/verify-pipeline.sh to prove the merge gate works. Close it, do not merge it."
+  # Checked explicitly rather than left to `set -e`: open_pr() is always called as
+  # `branch=$(open_pr ...)`, and bash starts a command-substitution subshell with
+  # errexit OFF regardless of the outer shell's `-e` — only the subshell's *last*
+  # command decides whether the assignment fails. `git commit` here is not the last
+  # command, `git push` and `gh pr create` are, so a failed commit used to fall
+  # through and push the branch open_pr() had already checked out, unchanged — the
+  # TOG-466 empty branches. The identity preflight above catches the ordinary cause
+  # before any of this runs; this is what stops the case if commit fails for some
+  # other reason.
+  git commit -q -m "ci-verify: ${title}" -m "Deliberately broken. Opened by ci/verify-pipeline.sh to prove the merge gate works. Close it, do not merge it." || {
+    fail "git commit failed for ${slug} — see above. Nothing for this case has been pushed."
+    exit 1
+  }
   git push -q -u origin "$branch" --force-with-lease
   gh pr create --base "$BASE_BRANCH" --head "$branch" \
     --title "[ci-verify] ${title} — do not merge" \
