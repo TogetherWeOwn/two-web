@@ -48,16 +48,17 @@ it('never lets the Livewire runtime block the first paint', function () {
     // it execute mid-parse against a half-built DOM.
     expect($matches[0])->toContain('defer');
 
-    // `defer` stops the script blocking the parser, but it does NOT stop it
-    // competing for bandwidth with the resources the paint is waiting on. That
-    // distinction was measured, not assumed: adding defer alone cleared the FCP
-    // warning and left LCP at 2684ms against a 2000ms budget, because on Slow 4G
-    // the four assets this page needs are already a ~1.9s transfer floor and the
-    // runtime is 900ms of it.
-    //
     // fetchpriority="low" tells the browser to fund the paint first and the
     // interactivity after. It is safe precisely because the script is deferred —
     // nothing before DOMContentLoaded is waiting on it.
+    //
+    // Honest about what it bought: it was added on the theory that the runtime
+    // competed for bandwidth with the paint, and the measurement disproved that
+    // theory — LCP went 2684ms -> 2666ms, which is noise. It is asserted here
+    // because it is still the correct hint for a script nothing is waiting on,
+    // NOT because it fixed the budget. The budget breach on /events is a byte
+    // problem: 349 KB on the critical path is a ~1894ms floor at Slow 4G against
+    // a 2000ms LCP budget, and no loading hint removes a byte. See TOG-53.
     expect($matches[0])->toContain('fetchpriority="low"');
 });
 

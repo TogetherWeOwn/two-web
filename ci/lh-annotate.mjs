@@ -50,11 +50,46 @@ for (const f of failures) {
   );
 }
 
-// The passing numbers, as one annotation. A breach is only actionable next to the
-// pages that did pass: "LCP 2666ms on /events" says nothing on its own, but
-// "…and 1400ms on /" is the difference between one slow page and a budget with no
-// headroom anywhere. Reading that off the artifact needs the artifact.
-const passes = results.filter((r) => r.passed);
+// The comparison numbers, from the LHR rather than from the assertion results.
+//
+// This was got wrong twice before it was got right, and the wrong version is worth
+// naming so nobody rebuilds it: `assertion-results.json` contains ONLY entries that
+// failed. Filtering it for `passed` yields an empty array on every run, so the
+// "here are the passing pages for comparison" line was never emitted and looked
+// like an annotations-API quirk. It was not — there was nothing to print.
+//
+// The passing numbers live in the per-run reports, which lhci writes as
+// lhr-<timestamp>.json. Reading the audit straight out of those gives the number
+// for every URL, including the ones that passed and therefore never appear above.
+// A breach is only actionable next to them: "LCP 2661ms on /events" says nothing
+// alone, but "…and 1400ms on /" is the difference between one heavy page and a
+// budget with no headroom anywhere.
+const AUDITS = ['largest-contentful-paint', 'first-contentful-paint', 'cumulative-layout-shift'];
+
+// median of the runs per URL, matching how the assertions aggregate
+const median = (xs) => {
+  const s = [...xs].sort((a, b) => a - b);
+  return s.length % 2 ? s[(s.length - 1) / 2] : (s[s.length / 2 - 1] + s[s.length / 2]) / 2;
+};
+
+const byUrl = new Map();
+for (const file of readdirSync(DIR).filter((f) => /^lhr-.*\.json$/.test(f))) {
+  let lhr;
+  try {
+    lhr = JSON.parse(readFileSync(`${DIR}/${file}`, 'utf8'));
+  } catch {
+    continue; // a half-written report is not worth failing the annotate step over
+  }
+  const url = lhr.finalDisplayedUrl ?? lhr.finalUrl ?? lhr.requestedUrl;
+  if (!url) continue;
+  if (!byUrl.has(url)) byUrl.set(url, new Map());
+  for (const id of AUDITS) {
+    const v = lhr.audits?.[id]?.numericValue;
+    if (typeof v !== 'number') continue;
+    if (!byUrl.get(url).has(id)) byUrl.get(url).set(id, []);
+    byUrl.get(url).get(id).push(v);
+  }
+}
 
 // Emitted as ::error:: rather than ::notice:: on purpose, and it is not a second
 // failure — the job's verdict is the exit code below, which counts only breaches.
@@ -62,11 +97,11 @@ const passes = results.filter((r) => r.passed);
 // is written to the log and does not appear there, which would put this line back
 // in the artifact this script exists to avoid needing. The wording says plainly
 // that nothing here breached.
-if (passes.length > 0) {
-  console.error(
-    '::error::CONTEXT, NOT A FAILURE — the assertions that passed, for comparison: ' +
-      passes.map((p) => `${p.auditId} on ${p.url}: ${p.actual} (budget ${p.expected})`).join('; ')
-  );
+for (const [url, audits] of byUrl) {
+  const parts = [...audits].map(([id, vals]) => `${id} ${Math.round(median(vals))}`);
+  console.error(`::error::CONTEXT, NOT A FAILURE — measured on ${url} (median of ${
+    audits.values().next().value?.length ?? 0
+  } runs): ${parts.join(', ')}`);
 }
 
 console.error(`\n${failures.length} performance assertion(s) breached.`);

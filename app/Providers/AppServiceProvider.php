@@ -64,17 +64,28 @@ class AppServiceProvider extends ServiceProvider
         // Asserted in tests/Feature/CriticalPathTest.php so this cannot regress
         // quietly — a Livewire upgrade that changes how the tag is emitted fails
         // there in half a second, rather than as an unexplained budgets breach.
-        // `fetchpriority="low"` is the second half, and it is here because defer
-        // alone was measured and was not enough: it cleared the FCP warning and
-        // left LCP at 2684ms. Deferring stops a script blocking the *parser*; it
-        // does not stop it competing for *bandwidth* with the stylesheet and font
-        // the paint is actually waiting on. On Slow 4G this page's assets are a
-        // ~1.9s transfer floor against a 2.0s budget, so that contention is the
-        // whole margin.
         //
-        // Low priority is safe only because the script is deferred — nothing
-        // before DOMContentLoaded depends on it, so funding the paint first costs
-        // the member nothing except interactivity arriving fractionally later.
+        // What this did and did not fix, measured rather than assumed. `defer`
+        // cleared the FCP warning: 2166ms before, under the 1800ms threshold
+        // after, and the warning has not come back. It did NOT clear LCP, which
+        // went 2616ms -> 2684ms. `fetchpriority="low"` was then tried on the
+        // theory that the runtime was competing for bandwidth with the paint,
+        // and the measurement disproved it: LCP moved to 2666ms, ~18ms, noise.
+        //
+        // The reason both were always going to fall short is arithmetic. The
+        // budget profile uses Lighthouse's *simulated* throttling, which is
+        // bandwidth-bound: reordering bytes changes when they arrive relative to
+        // each other, but the page still cannot paint before its bytes have
+        // transferred. /events ships 349 KB on the critical path — 166 KB
+        // Livewire runtime, 90 KB font, 48 KB app JS, 44 KB CSS — and at Slow
+        // 4G's 1474.56 kbps that is a ~1894ms floor against a 2000ms budget,
+        // leaving ~106ms for server time, parse, layout and paint. No loading
+        // hint fixes that; only removing bytes does. See TOG-53.
+        //
+        // Both attributes are kept because both are correct on their own terms —
+        // defer is load-bearing for FCP, and low priority is safe precisely
+        // because the script is deferred, with nothing before DOMContentLoaded
+        // waiting on it. Neither is claimed to have fixed LCP.
         Livewire::useScriptTagAttributes(['defer' => true, 'fetchpriority' => 'low']);
 
         // Socialite ships no Discord driver of its own; this registers the
