@@ -1,0 +1,4 @@
+# Generated per host by install-chrome-deps.sh — the prefix path differs between
+# an agent sandbox and a CI runner, so a committed copy would point at a
+# directory that does not exist.
+env.sh
