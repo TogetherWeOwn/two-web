@@ -1,5 +1,6 @@
 <?php
 
+use App\Http\Middleware\RecordMemberDataAccess;
 use Illuminate\Foundation\Application;
 use Illuminate\Foundation\Configuration\Exceptions;
 use Illuminate\Foundation\Configuration\Middleware;
@@ -37,6 +38,12 @@ return Application::configure(basePath: dirname(__DIR__))
         // that can reach PHP-FPM — it listens on a local socket, not the network.
         // If that ever stops being true, name the proxy address here instead.
         $middleware->trustProxies(at: '*');
+
+        // Goes on the admin panel's stack, not on `web`. Every screen that reads
+        // member data must carry it — see docs/member-data-access-log.md.
+        $middleware->alias([
+            'member-access-log' => RecordMemberDataAccess::class,
+        ]);
     })
     ->withExceptions(function (Exceptions $exceptions): void {
         //
