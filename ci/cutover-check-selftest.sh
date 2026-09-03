@@ -70,4 +70,30 @@ if ! node ci/cutover-check.mjs --phase before >/dev/null 2>&1; then
 fi
 pass "'--phase before' passes against the live site"
 
-printf '\n4/4 ok\n'
+# ---------------------------------------------------------------------------
+# 5. The SEO checks are actually wired in, and are reading the probe
+#
+# The board decided on 2026-08-27 to carry the live SEO checks into the cutover
+# checklist. That decision sat unimplemented for a week while the card read as
+# covered, so this pins the wiring rather than trusting it: `--phase after` must
+# emit seo-* lines, and the roll-up must name TOG-71's defects while the apex
+# still has them. A cutover-check that silently stopped shelling out to the
+# probe would otherwise still exit 1 on its other checks and look fine.
+
+after_out="$(node ci/cutover-check.mjs --phase after 2>/dev/null || true)"
+
+grep -q 'seo-no-regression' <<<"$after_out" \
+  || fail "'--phase after' emitted no seo-no-regression line — the SEO checks are not wired in"
+pass "SEO checks run in '--phase after'"
+
+grep -qE 'FAIL +seo-no-regression' <<<"$after_out" \
+  || fail "seo-no-regression did not FAIL against the apex, which still has TOG-71's defects — the check is vacuous"
+pass "negative control: seo-no-regression fails against the unfixed apex"
+
+# The probe's own selftest is what makes those measurements trustworthy. If it
+# regresses, every seo-* line above is untrustworthy too.
+node ci/live-seo-probe.mjs --selftest >/dev/null 2>&1 \
+  || fail "ci/live-seo-probe.mjs --selftest failed — the SEO measurements cannot be trusted"
+pass "live-seo-probe selftest passes"
+
+printf '\n7/7 ok\n'
