@@ -377,6 +377,97 @@ function checkOtherWpcomSite() {
 }
 
 // ---------------------------------------------------------------------------
+// The apex must not carry TOG-71's soft-404/canonical/robots defects forward
+//
+// Board decision, 2026-08-27: "carry the live SEO, canonical, soft-404,
+// robots.txt and Discord-unfurl checks into the cutover acceptance checklist."
+// This is that decision, in code. Until it was written the checklist could go
+// green on cutover night without ever looking at the thing TOG-71 is about.
+//
+// It shells out to ci/live-seo-probe.mjs rather than reimplementing any of it.
+// That script already measures every one of those checks, already carries the
+// Cloudflare/Accept-header handling (TOG-138), and has a 12-case selftest. Two
+// implementations of "is this page indexable" would drift, and the copy that
+// drifts is the one nobody runs.
+//
+// Deliberately `after`-only, and pointed at the origin that is about to answer
+// the apex. The WordPress install FAILS this probe today — that is the open
+// defect, not a regression to gate on — so running it in `before` would wire a
+// known-red check into the pre-flip run and train whoever is reading at 11pm to
+// ignore a red line. The question at cutover is "does the new site reproduce
+// TOG-71", and that is answerable only against the new site.
+function checkSeo(origin) {
+  const target = new URL(origin).host;
+  let raw;
+  try {
+    raw = execFileSync(
+      'node',
+      [new URL('live-seo-probe.mjs', import.meta.url).pathname, '--host', target, '--json'],
+      { encoding: 'utf8', timeout: 180_000, maxBuffer: 32 * 1024 * 1024 },
+    );
+  } catch (error) {
+    // The probe exits 1 when a check fails, which is the normal failing path
+    // and still prints its JSON on stdout. Only treat it as unusable when
+    // nothing parseable came back.
+    raw = error.stdout;
+    if (!raw) {
+      record(UNKNOWN, 'seo-no-regression', `could not run live-seo-probe: ${error.message}`);
+      return;
+    }
+  }
+
+  let parsed;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    record(UNKNOWN, 'seo-no-regression', 'live-seo-probe did not return parseable JSON');
+    return;
+  }
+  const checks = parsed.checks ?? [];
+  if (checks.length === 0) {
+    record(UNKNOWN, 'seo-no-regression', 'live-seo-probe returned no checks');
+    return;
+  }
+
+  // Reachability gate, before any per-check line is printed.
+  //
+  // Several of the probe's checks are assertions over the set of pages it
+  // managed to fetch — "every advertised page is its own canonical" and the
+  // like. When the host answers nothing at all that set is empty, and an
+  // assertion over an empty set is vacuously true: measured against a dead
+  // origin the probe emits four green lines. The run still fails overall, but
+  // "PASS self-canonical" against a site that is not up is a lie, and this
+  // output is read at 11pm by someone tired. Refuse to report it.
+  const measured = parsed.measured ?? [];
+  const reachable = measured.filter((m) => Number(m.status) > 0).length;
+  if (measured.length > 0 && reachable === 0) {
+    record(
+      UNKNOWN,
+      'seo-no-regression',
+      `${target}: nothing answered — all ${measured.length} URLs failed to fetch, so the SEO checks have nothing to measure. Not a pass and not a regression; the origin is down or wrong.`,
+    );
+    return;
+  }
+
+  // Each probe check is reported as its own line. A single rolled-up PASS/FAIL
+  // would tell the person reading the runbook that "SEO" is broken without
+  // saying which of five different things to go and fix.
+  const failed = checks.filter((c) => !c.ok);
+  for (const c of checks) {
+    record(c.ok ? PASS : FAIL, `seo-${c.id}`, c.detail);
+  }
+  record(
+    failed.length === 0 ? PASS : FAIL,
+    'seo-no-regression',
+    failed.length === 0
+      ? `${target}: all ${checks.length} live SEO checks pass`
+      : `${target}: ${failed.length}/${checks.length} live SEO checks FAIL (${failed
+          .map((c) => c.id)
+          .join(', ')}) — this is TOG-71 carried onto the new site`,
+  );
+}
+
+// ---------------------------------------------------------------------------
 
 function main() {
   const argv = process.argv.slice(2);
@@ -402,6 +493,9 @@ function main() {
     checkAtomicStillUp();
     checkStagingRecord();
     checkOtherWpcomSite();
+    // Against the app's own origin when one was named, otherwise the apex,
+    // which after the flip is the new site anyway.
+    checkSeo(app ?? APEX);
   }
 
   const width = Math.max(...results.map((r) => r.name.length));
@@ -425,6 +519,11 @@ function main() {
   //
   // The WordPress.com plan state and billing are console-only too. All of these
   // need a human to confirm in writing; the runbook names who.
+  //
+  // The seo-* checks are `after`-only by design (see checkSeo). They say the new
+  // site is clean; they say nothing about the WordPress install's own live
+  // defects, which are TOG-71 and are fixed in wp-admin, not here. To see those,
+  // run `node ci/live-seo-probe.mjs` directly against the apex.
   const failures = results.filter((r) => r.status === FAIL);
   const unknowns = results.filter((r) => r.status === UNKNOWN);
 
