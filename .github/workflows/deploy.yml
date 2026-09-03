@@ -1,15 +1,33 @@
-# Deploys. Designed against the hosting decision on TWO-37 before it is provisioned,
-# so the pipeline does not get retrofitted around a server that already exists.
+# Deploys staging. Green here means something was deployed and answered.
 #
-# The deliberate constraint, and it is not mine to relax: GitHub Actions never SSHes
-# into a server and no deploy key lives in CI. The whole deploy is one authenticated
-# POST to a Forge webhook; Forge pulls from GitHub on the box, runs migrations and
-# swaps the symlink. If we end up on Ploi instead of Forge the mechanism is still a
-# webhook, so only the secret's value changes, not this file.
+# THIS FILE USED TO PASS WHEN IT DEPLOYED NOTHING. Do not put that back.
 #
-# Nothing is provisioned yet. The job no-ops cleanly — green, not red — until the
-# matching secret exists. A missing deploy target must never look like a broken
-# build; that is how a team learns to ignore a red X.
+# The old version guarded on `FORGE_STAGING_DEPLOY_HOOK` and, when it was unset,
+# set `ready=false`, skipped every later step and exited success in about three
+# seconds. Its header said so on purpose: "the job no-ops cleanly — green, not red
+# — until the matching secret exists. A missing deploy target must never look like
+# a broken build; that is how a team learns to ignore a red X."
+#
+# That reasoning is defensible right up until somebody believes the check. On
+# TOG-48 an agent read the green `staging` check as "it shipped" and told the owner
+# the landing page was live on staging. Nothing had been deployed. The agent was
+# wrong and the CI had told them so, which makes it a CI defect, not an agent one:
+# a control that reports success for work it did not do will keep producing false
+# claims regardless of who is on shift (TOG-913).
+#
+# It was also unfixable by waiting. `FORGE_STAGING_DEPLOY_HOOK` is a Forge secret,
+# and Forge was superseded by the owner's 2026-08-31 decision — Coolify,
+# self-hosted (TOG-780; TOG-407 closed). That secret is never going to be set, so
+# the skip branch would have reported success forever.
+#
+# So: no target is a failure. Until Coolify is provisioned this job is red every
+# time `main` goes green, and that is the correct reading of "staging has no
+# target". The refusal names the card and the two settings that clear it, so an
+# expected red explains itself instead of becoming the noise the old header
+# feared. The logic lives in ci/deploy-target.sh so that it can be executed and
+# mutation-tested (ci/deploy-target-selftest.sh) rather than merely read — a guard
+# nobody has watched fail is indistinguishable from one that cannot fail, and this
+# repo has now been bitten by exactly that once.
 #
 # THIS WORKFLOW DEPLOYS STAGING ONLY. THAT IS DELIBERATE — DO NOT ADD A PRODUCTION
 # JOB HERE WITHOUT READING THIS.
@@ -19,10 +37,10 @@
 # GitHub Free, and on that plan environments cannot be configured at all: "any
 # configured protection rules or environment secrets will be ignored". So the gate
 # was not merely unconfigured, it was unenforceable — and the moment somebody created
-# `FORGE_PRODUCTION_DEPLOY_HOOK`, anyone with write access could have shipped to
+# a production deploy hook, anyone with write access could have shipped to
 # production from the Actions tab with no approval and no record. Four teams have
 # write access. A gate that fails silently is worse than no gate, because the file
-# says the gate is there. Removing the fuse beats guarding it. (TWO-91.)
+# says the gate is there. Removing the fuse beats guarding it. (TWO-91, TOG-118.)
 #
 # Production therefore ships **by hand from the hosting provider's dashboard**, after
 # the release checklist in docs/ci.md. Whoever holds that login is the approval, and
@@ -56,42 +74,33 @@ jobs:
       github.event_name == 'workflow_dispatch' ||
       github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-24.04
-    timeout-minutes: 10
+    timeout-minutes: 15
     # Decorative on GitHub Free + private: environments are ignored, so this grants no
     # protection and claims none. It is here so the deployment shows up in the UI the
     # day the plan changes. Do not read it as a gate.
     environment:
       name: staging
     steps:
-      # Tripwire. Nothing in this repo consumes a production hook, so if one exists
-      # somebody is mid-way through rebuilding the deploy path that TWO-91 removed.
-      # A notice, not a failure — a staging deploy should not go red over it.
-      - name: Warn if a production hook has appeared
-        env:
-          PRODUCTION_HOOK: ${{ secrets.FORGE_PRODUCTION_DEPLOY_HOOK }}
-        run: |
-          if [ -n "$PRODUCTION_HOOK" ]; then
-            echo "::warning::FORGE_PRODUCTION_DEPLOY_HOOK is set, but this workflow deploys staging only and nothing reads that secret. Production deploys are manual, from the hosting dashboard, after the release checklist in docs/ci.md. See TWO-91 before adding a production job back."
-          fi
+      - uses: actions/checkout@v4
 
-      # The `secrets` context is not available to a job-level `if`, so the guard has
-      # to live in a step. Skipping is a pass: see the header.
-      - name: Check the deploy target exists
-        id: guard
+      # Fails the job when there is no target. Also carries the production-hook
+      # tripwire, which is a warning and not a failure. This step is the entire
+      # subject of TOG-913: it must never gain a "skip and pass" branch.
+      - name: Resolve the deploy target
+        id: target
         env:
-          HOOK: ${{ secrets.FORGE_STAGING_DEPLOY_HOOK }}
-        run: |
-          if [ -z "$HOOK" ]; then
-            echo "ready=false" >> "$GITHUB_OUTPUT"
-            echo "::notice::FORGE_STAGING_DEPLOY_HOOK is not set. Staging is not provisioned yet (TWO-37). Skipping, not failing."
-          else
-            echo "ready=true" >> "$GITHUB_OUTPUT"
-          fi
+          COOLIFY_STAGING_DEPLOY_HOOK: ${{ secrets.COOLIFY_STAGING_DEPLOY_HOOK }}
+          COOLIFY_PRODUCTION_DEPLOY_HOOK: ${{ secrets.COOLIFY_PRODUCTION_DEPLOY_HOOK }}
+          STAGING_URL: ${{ vars.STAGING_URL }}
+        run: ./ci/deploy-target.sh
 
-      - name: Trigger the Forge deploy
-        if: steps.guard.outputs.ready == 'true'
+      # No `if:` on this step or the next. The old file gated both on the guard's
+      # output, which is what let a missing target sail through as a pass; now the
+      # step above fails the job outright and these simply never start. If you find
+      # yourself adding a condition here, you are rebuilding TOG-913.
+      - name: Trigger the Coolify deploy
         env:
-          HOOK: ${{ secrets.FORGE_STAGING_DEPLOY_HOOK }}
+          HOOK: ${{ steps.target.outputs.hook }}
         run: |
           # --fail so an HTTP error is an exit code, not a cheerful log line.
           # The URL carries the token, so it is never echoed.
@@ -99,19 +108,25 @@ jobs:
             --retry 3 --retry-delay 5 --retry-all-errors \
             --max-time 60 \
             --request POST "$HOOK" > /dev/null
-          echo "Forge accepted the staging deploy."
+          echo "Coolify accepted the staging deploy."
 
-      # Forge returns as soon as it queues the deploy, so a 200 is not "it is live".
-      # Poll the health check until the new release is actually answering.
+      # Coolify returns as soon as it queues the deploy, so a 200 is not "it is
+      # live". Poll the health check until the new release is actually answering.
+      # This is the step that makes "green" mean "deployed", so it is also the step
+      # that must never be skippable — it used to carry `vars.STAGING_URL != ''`,
+      # which was the same defect in a smaller box: a hook with no URL POSTed and
+      # then passed without ever checking that anything came back up. The URL is
+      # now required by ci/deploy-target.sh, so there is nothing to skip on.
       - name: Wait for staging to answer
-        if: steps.guard.outputs.ready == 'true' && vars.STAGING_URL != ''
+        env:
+          STAGING: ${{ steps.target.outputs.url }}
         run: |
           for i in $(seq 1 60); do
-            if curl -fsS --max-time 10 "${{ vars.STAGING_URL }}/up" > /dev/null; then
+            if curl -fsS --max-time 10 "${STAGING}/up" > /dev/null; then
               echo "staging healthy after ${i} attempt(s)"
               exit 0
             fi
             sleep 10
           done
-          echo "::error::staging never answered ${{ vars.STAGING_URL }}/up after 10 minutes. The deploy queued but the site is down."
+          echo "::error title=Staging never answered::Deploy was queued but ${STAGING}/up did not answer within 10 minutes. The site is down; roll back from the Coolify dashboard."
           exit 1
