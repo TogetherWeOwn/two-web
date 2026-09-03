@@ -59,20 +59,6 @@ jobs:
       - name: Gate wiring self-test
         run: ./ci/verify-lint-selftest.sh
 
-      # The assertions `--run` makes about the check conclusions a pull request
-      # produced, plus the wait that feeds them and the cleanup that follows. They
-      # otherwise execute only during a live acceptance run, which is how a wrong
-      # one survived review and cost forty minutes of runner time to find (TWO-94).
-      #
-      # `verify-lint-selftest.sh` above already shells out to this, so for the
-      # moment this step is a second route to the same 29 cases. It is here anyway,
-      # because that coverage is incidental: it hangs off one line inside a case
-      # about *linting*, and nothing states that removing it removes the only thing
-      # testing `--run`. Named here, the dependency is visible in the job log and
-      # survives that line being refactored away. Under a second, no network.
-      - name: Acceptance-script self-test
-        run: ./ci/verify-pipeline.sh --assert-selftest
-
       # `ci/verify-protection.sh` proves the jobs below are the checks GitHub
       # actually enforces on `main` — which is a different fact from "the job went
       # red", and the one nothing else here reads. It cannot run in this job: it
