@@ -91,7 +91,7 @@ it('records a going answer for the signed-in member', function () {
         ->assertHasNoErrors();
 
     expect(Rsvp::query()->where('event_id', $event->id)->where('user_id', $this->member->id)->value('status'))
-        ->toBe(RsvpStatus::Going->value);
+        ->toBe(RsvpStatus::Going);
 });
 
 it('shows the member the answer they already gave', function () {
@@ -100,7 +100,11 @@ it('shows the member the answer they already gave', function () {
 
     Livewire::actingAs($this->member)
         ->test(EventsCalendar::class)
-        ->assertSeeHtml('data-testid="rsvp-state-'.$event->event_key.'" data-state="going"');
+        // Two assertions rather than one string: the attributes are on separate
+        // lines in the template, and asserting the formatting would make every
+        // reflow of the markup a red test.
+        ->assertSeeHtml('data-testid="rsvp-state-'.$event->event_key.'"')
+        ->assertSeeHtml('data-state="going"');
 });
 
 it('lets a member change their answer', function () {
@@ -112,7 +116,7 @@ it('lets a member change their answer', function () {
         ->call('rsvp', $event->event_key, RsvpStatus::Maybe->value);
 
     expect(Rsvp::query()->where('event_id', $event->id)->where('user_id', $this->member->id)->value('status'))
-        ->toBe(RsvpStatus::Maybe->value);
+        ->toBe(RsvpStatus::Maybe);
 });
 
 it('lets a member withdraw their answer entirely', function () {
@@ -244,6 +248,10 @@ it('refuses a status that is not one of the three answers', function () {
 });
 
 it('switches between the list and the calendar', function () {
+    // A view switch needs something to switch between: with nothing scheduled both
+    // views are the empty state, which is the point of the empty state.
+    Event::factory()->create(['status' => EventStatus::Published]);
+
     Livewire::test(EventsCalendar::class)
         ->assertSet('mode', 'list')
         ->assertSeeHtml('data-testid="events-list"')
