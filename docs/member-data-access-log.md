@@ -48,7 +48,7 @@ of it depends on Filament, which is not a dependency of this repo yet.
 
 | Piece | File |
 |---|---|
-| Table | `database/migrations/2026_08_25_000100_create_member_data_access_logs_table.php` |
+| Table | `database/migrations/2026_08_25_000050_create_member_data_access_logs_table.php` |
 | Record | `app/Models/MemberDataAccessLog.php` |
 | Collection | `app/Support/MemberDataAccess/AccessRecorder.php` |
 | The control | `app/Http/Middleware/RecordMemberDataAccess.php` |
