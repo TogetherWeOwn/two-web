@@ -50,5 +50,18 @@ for (const f of failures) {
   );
 }
 
+// The passing numbers, as one annotation. A breach is only actionable next to the
+// pages that did pass: "LCP 2666ms on /events" says nothing on its own, but
+// "…and 1400ms on /" is the difference between one slow page and a budget with no
+// headroom anywhere. Reading that off the artifact needs the artifact.
+const passes = results.filter((r) => r.passed);
+
+if (passes.length > 0) {
+  console.error(
+    '::notice::for comparison, the assertions that passed — ' +
+      passes.map((p) => `${p.auditId} on ${p.url}: ${p.actual} (budget ${p.expected})`).join('; ')
+  );
+}
+
 console.error(`\n${failures.length} performance assertion(s) breached.`);
 process.exit(1);
