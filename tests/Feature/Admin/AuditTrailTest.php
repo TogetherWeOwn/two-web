@@ -1,5 +1,6 @@
 <?php
 
+use App\Models\Event;
 use App\Models\FeaturedContent;
 use App\Models\User;
 use Spatie\Activitylog\Models\Activity;
@@ -39,11 +40,11 @@ it('records event changes with the acting moderator as causer', function () {
     $moderator = User::factory()->create(['is_moderator' => true]);
     $this->actingAs($moderator);
 
-    $event = \App\Models\Event::factory()->create(['title' => 'Old title']);
+    $event = Event::factory()->create(['title' => 'Old title']);
     $event->update(['title' => 'New title']);
 
     $activity = Activity::query()
-        ->where('subject_type', \App\Models\Event::class)
+        ->where('subject_type', Event::class)
         ->where('subject_id', $event->id)
         ->where('event', 'updated')
         ->sole();

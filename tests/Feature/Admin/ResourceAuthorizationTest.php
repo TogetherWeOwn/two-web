@@ -45,14 +45,15 @@ it('lets a moderator open the edit page for an event', function () {
     $moderator = User::factory()->create(['is_moderator' => true]);
     $event = Event::factory()->create();
 
-    $this->actingAs($moderator)->get("/admin/events/{$event->id}/edit")->assertOk();
+    // Events route by event_key (see Event::getRouteKeyName), in the panel too.
+    $this->actingAs($moderator)->get("/admin/events/{$event->getRouteKey()}/edit")->assertOk();
 });
 
 it('answers a plain member with 403 on the event edit page', function () {
     $member = User::factory()->create(['is_moderator' => false]);
     $event = Event::factory()->create();
 
-    $this->actingAs($member)->get("/admin/events/{$event->id}/edit")->assertForbidden();
+    $this->actingAs($member)->get("/admin/events/{$event->getRouteKey()}/edit")->assertForbidden();
 });
 
 it('lets a moderator open the edit page for featured content', function () {
