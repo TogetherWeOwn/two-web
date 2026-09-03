@@ -3,10 +3,15 @@
 use App\Http\Controllers\Auth\DiscordLoginController;
 use App\Http\Controllers\EventController;
 use App\Http\Controllers\EventStatusController;
+use App\Http\Controllers\HomeController;
 use App\Http\Controllers\RsvpController;
 use Illuminate\Support\Facades\Route;
 
-Route::view('/', 'home')->name('home');
+// The landing page reads the bot's counts, so it is a controller rather than the
+// `Route::view` it used to be. It stays in the `web` group: unlike `/discord` it
+// is an ordinary page, and it needs the session to know whether to offer "your
+// profile" or "log in with Discord".
+Route::get('/', HomeController::class)->name('home');
 
 // Discord is the only way in, so the route Laravel redirects guests to *is* the
 // Discord handoff. There is no login form to design because there is nothing to
