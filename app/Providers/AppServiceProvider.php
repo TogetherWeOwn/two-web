@@ -10,6 +10,7 @@ use Illuminate\Contracts\Foundation\Application;
 use Illuminate\Support\Facades\Event;
 use Illuminate\Support\Facades\Gate;
 use Illuminate\Support\ServiceProvider;
+use Livewire\Livewire;
 use SocialiteProviders\Discord\DiscordExtendSocialite;
 use SocialiteProviders\Manager\SocialiteWasCalled;
 
@@ -49,6 +50,22 @@ class AppServiceProvider extends ServiceProvider
 
     public function boot(): void
     {
+        // Livewire injects its runtime as a plain <script src> with no defer, which
+        // puts 162 KB in the critical path of every Livewire page. On the budget
+        // profile (mid-range phone, 4x CPU, Slow 4G) that is about 900ms of
+        // transfer ahead of the paint, and it measurably breached the LCP budget
+        // when /events shipped: 2616ms against 2000ms, with FCP at 2166ms.
+        //
+        // `defer` rather than `async`, deliberately. The runtime binds to the
+        // components already in the document, so it must run after the parse has
+        // finished; `async` would let it execute mid-parse against a half-built
+        // DOM. `defer` also keeps execution ordered against the app bundle.
+        //
+        // Asserted in tests/Feature/CriticalPathTest.php so this cannot regress
+        // quietly — a Livewire upgrade that changes how the tag is emitted fails
+        // there in half a second, rather than as an unexplained budgets breach.
+        Livewire::useScriptTagAttributes(['defer' => true]);
+
         // Socialite ships no Discord driver of its own; this registers the
         // community one. Reason for the dependency: writing our own OAuth2
         // provider is about seventy lines we would then own and get subtly
