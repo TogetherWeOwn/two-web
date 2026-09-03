@@ -87,6 +87,14 @@
          ------------------------------------------------------------------ --}}
     @if ($view === 'list')
         @if ($upcoming->isNotEmpty())
+            {{-- Not decoration, and not visible on purpose. "Past events" below is a
+                 real h2, and without a matching one here the document went h1 -> h3
+                 straight into the first event title: axe `heading-order`, and a
+                 screen reader user tabbing by heading had no way to tell which list
+                 they had landed in. The design has no upcoming heading — the page
+                 title carries it visually — so the name exists for the accessibility
+                 tree only. --}}
+            <h2 class="sr-only">Upcoming events</h2>
             <ul class="mt-8 flex flex-col gap-4" role="list" data-testid="events-list">
                 @foreach ($upcoming as $event)
                     <li>@include('partials.event-card', ['event' => $event, 'isPast' => false])</li>

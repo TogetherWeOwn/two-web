@@ -58,11 +58,12 @@ it('never lets the Livewire runtime block the first paint', function () {
     // because it is still the correct hint for a script nothing is waiting on,
     // NOT because it fixed the budget.
     //
-    // The budget breach on /events is a separate fact and this test does not
-    // cover it. FCP is 1258ms on /events and 1276ms on /, so the first paint is
-    // not delayed at all; LCP is 2663ms against 1655ms on /. The ~1400ms is
-    // spent after the paint, and what fixes it will not be a script attribute.
-    // See TOG-53.
+    // The budget breach on /events was a separate fact that this test does not
+    // cover, and it was not fixed by any script attribute. FCP was 1258ms on
+    // /events against 1276ms on /, so the paint was never delayed; the ~1400ms
+    // sat after it, and the fix was removing bytes from the connection rather
+    // than reordering them. See tests/Feature/AssetCompressionTest.php, which
+    // asserts the two reductions that actually moved it. TOG-53.
     expect($matches[0])->toContain('fetchpriority="low"');
 });
 

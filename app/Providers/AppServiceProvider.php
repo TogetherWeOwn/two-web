@@ -72,19 +72,21 @@ class AppServiceProvider extends ServiceProvider
         // theory that the runtime was competing for bandwidth with the paint,
         // and the measurement disproved it: LCP moved to 2666ms, ~18ms, noise.
         //
-        // Where the time actually goes, now that the budget job reports the
-        // passing pages too: FCP on /events is 1258ms and on / it is 1276ms —
-        // the same. The first paint is NOT delayed, so nothing here is blocking
-        // it and no further work on this script will move LCP. The gap is
-        // entirely after the paint: /events reaches LCP at 2663ms against 1655ms
-        // on /, about 1400ms spent between painting something and painting the
-        // largest thing. That is the remaining problem and it is not this one.
-        // See TOG-53.
+        // Neither attribute is claimed to have fixed LCP. Both are kept because
+        // both are correct on their own terms — defer is load-bearing for FCP,
+        // and low priority is safe precisely because the script is deferred,
+        // with nothing before DOMContentLoaded waiting on it.
         //
-        // Both attributes are kept because both are correct on their own terms —
-        // defer is load-bearing for FCP, and low priority is safe precisely
-        // because the script is deferred, with nothing before DOMContentLoaded
-        // waiting on it. Neither is claimed to have fixed LCP.
+        // What DID fix LCP was removing bytes, not reordering them. The budget
+        // is bandwidth-bound (ci/lighthouserc.cjs simulates Slow 4G at ~184
+        // KB/s), so a resource that blocks nothing still pushes LCP out while
+        // the largest element waits for its font. Two things were shipping
+        // needlessly: this runtime went over the wire uncompressed because
+        // Livewire serves it from a PHP route nothing in front of the app can
+        // see (fixed in App\Http\Middleware\CompressStaticAssets — 162 KB ->
+        // 55 KB, verified over HTTP), and the app bundle was 48 KB of axios
+        // that nothing imported (fixed in resources/js/app.js). Both are
+        // asserted in tests/Feature/AssetCompressionTest.php.
         Livewire::useScriptTagAttributes(['defer' => true, 'fetchpriority' => 'low']);
 
         // Socialite ships no Discord driver of its own; this registers the
