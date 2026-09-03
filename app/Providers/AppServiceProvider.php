@@ -2,8 +2,10 @@
 
 namespace App\Providers;
 
+use App\Models\Profile;
 use App\Models\User;
 use App\Services\Bot\InternalActionClient;
+use App\Support\MemberDataAccess\AccessRecorder;
 use Illuminate\Contracts\Foundation\Application;
 use Illuminate\Support\Facades\Event;
 use Illuminate\Support\Facades\Gate;
@@ -15,6 +17,11 @@ class AppServiceProvider extends ServiceProvider
 {
     public function register(): void
     {
+        // Scoped, not singleton: one recorder per request, and a queue worker
+        // that never resolves it does not accumulate one member's ids into the
+        // next member's row.
+        $this->app->scoped(AccessRecorder::class);
+
         // Bound rather than shared: it reads config at resolve time and holds no
         // state between calls, so a singleton would only buy the chance of a
         // stale secret surviving a config change.
@@ -53,5 +60,19 @@ class AppServiceProvider extends ServiceProvider
         // somebody's moderator role in Discord removes it here at their next
         // sign-in. There is no way to grant it from inside the website.
         Gate::define('access-admin', fn (User $user): bool => $user->is_moderator);
+
+        // Reading member data through the admin panel gets recorded, and the
+        // recording hangs off model hydration rather than off each screen
+        // remembering to declare what it showed. See AccessRecorder for why.
+        //
+        // These listeners are registered for the whole application but the
+        // recorder ignores everything until the panel's middleware arms it, so
+        // an ordinary page costs one `if` per hydrated model and writes nothing.
+        foreach ([User::class, Profile::class] as $model) {
+            Event::listen(
+                'eloquent.retrieved: '.$model,
+                fn (User|Profile $subject) => app(AccessRecorder::class)->observe($subject),
+            );
+        }
     }
 }
