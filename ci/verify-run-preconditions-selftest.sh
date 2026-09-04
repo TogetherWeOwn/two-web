@@ -108,6 +108,12 @@ fixture() {
   # them reporting "refused, but not for the stated reason", which is a lie about
   # the guard rather than a complaint about this line.
   cp -R "$REPO_ROOT/ci/." "$dir/repo/ci/"
+  # And the files the static checks read from the repository root. `.gitleaks.toml`
+  # since TOG-297 — check 11 reads it, so without this every case here refuses for
+  # a missing config rather than for the guard it was written to test. This is the
+  # "next one" the paragraph above predicted; if a check learns about another
+  # root-level file, it goes here too.
+  cp "$REPO_ROOT/.gitleaks.toml" "$dir/repo/"
 
   (
     cd "$dir/repo" || exit 1
