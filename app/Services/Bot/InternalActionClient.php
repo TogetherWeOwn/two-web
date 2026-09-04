@@ -24,7 +24,24 @@ use Throwable;
  * while there is exactly one class that constructs the request — a second one
  * would be a second place to get the nonce rules wrong.
  *
- * Wire format: two-bot `docs/INTERNAL_ACTIONS.md`, v0.3.
+ * Wire format: two-bot `docs/INTERNAL_ACTIONS.md`, v0.4. v0.4 changed neither
+ * the wire format nor the allowlist, so v0.3's rules below still stand verbatim.
+ *
+ * ## The three live actions
+ *
+ * One public method each, and the signature carries §3's *needs key* column
+ * rather than a runtime flag:
+ *
+ * - `assignRole()` takes **no** idempotency key. Idempotency is natural —
+ *   assigning a held role is a no-op at Discord — and §3 is explicit that this
+ *   action does not send one.
+ * - `postAnnouncement()` and `upsertEvent()` **require** one. A repeat without a
+ *   key posts a second message or creates a second event.
+ *
+ * There is no `guild.add_member` here, and it is not an oversight. §5 requires
+ * it to be *synchronous* precisely so a live member credential is never written
+ * into the `jobs` table, and it is switched off pending sign-off (TOG-57). It
+ * does not belong on this queued path.
  *
  * ## The nonce and the idempotency key are different things
  *
@@ -42,9 +59,10 @@ use Throwable;
  *
  * ## What comes back
  *
- * Three outcomes, and the type says which:
+ * Three outcomes per call, and the type says which:
  *
- * - `EventUpsertResult` — it worked.
+ * - a result object — `RoleAssignResult`, `AnnouncementResult` or
+ *   `EventUpsertResult` — it worked.
  * - `InternalActionFailure` — the bot answered no. Branch on `retryable`, never
  *   on the status: `in_progress` and `replayed` are both 409 and disagree.
  * - a thrown exception — we could not ask (`BotNotConfiguredException`, terminal)
@@ -74,6 +92,109 @@ final readonly class InternalActionClient
     public static function newIdempotencyKey(): string
     {
         return Str::uuid()->toString();
+    }
+
+    /**
+     * Throw unless the url, secret and key id are all present.
+     *
+     * Exists for callers that need to know *before* they start — the
+     * `bot:internal-action-smoke` command, which owes its caller a distinct
+     * "misconfigured" exit code and cannot get one from a send: the queued job
+     * deliberately absorbs this exception into `fail()`, so that a worker does
+     * not rediscover the same blank secret four more times, and `fail()` is a
+     * no-op when the job is run inline.
+     *
+     * Nothing else should call this. An action that checks first and then sends
+     * has two chances to disagree about what "configured" means; every send
+     * checks for itself.
+     *
+     * @throws BotNotConfiguredException
+     */
+    public function assertConfigured(): void
+    {
+        $this->endpoint();
+    }
+
+    /**
+     * Give one member one role, by key.
+     *
+     * No idempotency key, by contract (§3): assigning a role somebody already
+     * holds is a no-op at Discord, so the bot needs no stored state to be safe
+     * and this action does not send one. A repeat comes back `already_held`,
+     * which is a success.
+     *
+     * @throws BotNotConfiguredException when there is no url, secret or key id
+     * @throws BotTransportException when the bot did not answer the contract
+     */
+    public function assignRole(RoleAssignment $assignment): RoleAssignResult|InternalActionFailure
+    {
+        $answer = $this->send($assignment->toPayload(), null);
+
+        if ($answer instanceof InternalActionFailure) {
+            return $answer;
+        }
+
+        [$body, $status] = $answer;
+
+        $result = $body['result'] ?? null;
+
+        if (! is_array($result)) {
+            throw BotTransportException::unreadable('a success with no result object', $status);
+        }
+
+        $outcome = RoleAssignOutcome::tryFrom(is_string($result['outcome'] ?? null) ? $result['outcome'] : '');
+
+        if ($outcome === null) {
+            throw BotTransportException::unreadable('a role.assign outcome this release does not know', $status);
+        }
+
+        return new RoleAssignResult(
+            requestId: $this->requestId($body),
+            outcome: $outcome,
+        );
+    }
+
+    /**
+     * Post one announcement to a channel, by key.
+     *
+     * @param  string  $idempotencyKey  From newIdempotencyKey(), stored against
+     *                                  the operation and identical on every
+     *                                  attempt at it. A fresh key per attempt
+     *                                  posts the announcement twice.
+     *
+     * @throws BotNotConfiguredException when there is no url, secret or key id
+     * @throws BotTransportException when the bot did not answer the contract
+     * @throws InvalidActionRequestException when the idempotency key is not a UUID
+     */
+    public function postAnnouncement(Announcement $announcement, string $idempotencyKey): AnnouncementResult|InternalActionFailure
+    {
+        $answer = $this->send($announcement->toPayload(), $idempotencyKey);
+
+        if ($answer instanceof InternalActionFailure) {
+            return $answer;
+        }
+
+        [$body, $status, $replayed] = $answer;
+
+        $result = $body['result'] ?? null;
+
+        if (! is_array($result)) {
+            throw BotTransportException::unreadable('a success with no result object', $status);
+        }
+
+        // The message id is the point of the call: it is how a retry proves it
+        // did not post a second time, and how the site links to what it posted.
+        // §3 guarantees it comes back on a replay too, so a success without one
+        // is not a success we can store.
+        if (! isset($result['message_id']) || ! is_scalar($result['message_id'])) {
+            throw BotTransportException::unreadable('an announcement.post success with no message_id', $status);
+        }
+
+        return new AnnouncementResult(
+            requestId: $this->requestId($body),
+            messageId: (string) $result['message_id'],
+            replayed: $replayed,
+        );
     }
 
     /**
@@ -128,19 +249,22 @@ final readonly class InternalActionClient
      * One signed attempt.
      *
      * @param  array<string, mixed>  $payload
-     * @return array{array<string, mixed>, int, bool}|InternalActionFailure the
-     *                                                                      decoded success envelope, its status and whether it was replayed
-     *                                                                      from the bot's idempotency store — or the bot's typed refusal
+     * @param  string|null  $idempotencyKey  Required for most actions, null for role.assign
+     * @return array{array<string, mixed>, int}|InternalActionFailure for role.assign (no replay check)
+     *         array{array<string, mixed>, int, bool}|InternalActionFailure for others
      *
      * @throws BotNotConfiguredException
      * @throws BotTransportException
      * @throws InvalidActionRequestException
      */
-    private function send(array $payload, string $idempotencyKey): array|InternalActionFailure
+    private function send(array $payload, ?string $idempotencyKey): array|InternalActionFailure
     {
         $url = $this->endpoint();
 
-        if (! Str::isUuid($idempotencyKey)) {
+        // Only when there is one to check. A *needs key* action can never reach
+        // here with null — its public method takes a non-nullable string — so
+        // this is not a hole in that rule, it is the natural-idempotency case.
+        if ($idempotencyKey !== null && ! Str::isUuid($idempotencyKey)) {
             throw new InvalidActionRequestException(
                 'An Idempotency-Key must be a UUID; the bot answers a malformed one with a non-retryable `malformed`.'
             );
@@ -164,7 +288,11 @@ final readonly class InternalActionClient
         $headers = (new InternalActionSigner((string) $this->keyId, (string) $this->secret))
             ->headers($json, $timestamp, $nonce);
 
-        $headers['Idempotency-Key'] = $idempotencyKey;
+        // Absent, not blank, for a natural-idempotency action. An empty header
+        // is a value the bot has to interpret; not sending one is the contract.
+        if ($idempotencyKey !== null) {
+            $headers['Idempotency-Key'] = $idempotencyKey;
+        }
 
         $startedAt = Carbon::now();
 
@@ -183,14 +311,14 @@ final readonly class InternalActionClient
     }
 
     /**
-     * The v0.3 envelope, turned into one of our two answers.
+     * The v0.4 envelope, turned into one of our two answers.
      *
      * @param  array<string, mixed>  $payload
-     * @return array{array<string, mixed>, int, bool}|InternalActionFailure
+     * @return array{array<string, mixed>, int}|array{array<string, mixed>, int, bool}|InternalActionFailure
      *
      * @throws BotTransportException
      */
-    private function interpret(Response $response, array $payload, string $idempotencyKey, Carbon $startedAt): array|InternalActionFailure
+    private function interpret(Response $response, array $payload, ?string $idempotencyKey, Carbon $startedAt): array|InternalActionFailure
     {
         $status = $response->status();
         $body = $response->json();
@@ -303,7 +431,7 @@ final readonly class InternalActionClient
     }
 
     /** @param  array<string, mixed>  $payload */
-    private function logUndelivered(array $payload, string $idempotencyKey, Throwable $e): void
+    private function logUndelivered(array $payload, ?string $idempotencyKey, Throwable $e): void
     {
         // No request_id: the bot never saw this one. Logged anyway, so that a run
         // of these reads as a network or timeout problem rather than as silence.
