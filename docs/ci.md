@@ -602,7 +602,59 @@ that pull request and names the file — re-split it, do not allowlist it.
 What that trade costs, said plainly: this case does not prove `useDefault = true` is
 still on. One check-run conclusion is one bit, so a pull request that trips both rule
 sources cannot say which one fired, and the repo-specific rules are the half with no
-other coverage anywhere. That gap is real and is not covered by anything today.
+other coverage anywhere. The trade stands; the other half is covered offline instead,
+by check 11 below.
+
+### That the scan is still looking for more than three things
+
+`.gitleaks.toml` opens with `[extend] useDefault = true`, and that one line is what
+keeps every provider pattern gitleaks maintains — AWS, GCP, Stripe, GitHub PATs,
+private keys — switched on here. Delete it and the scan falls back to our three
+hand-written Discord rules and nothing else, with every job in the pipeline green
+while it happens. The live `secret` case above cannot see this, by design, so
+`--lint` check 11 reads the config directly (TOG-297). It asserts four things:
+
+- `[extend] useDefault` resolves to the boolean `true`;
+- `discord-bot-token`, `discord-mfa-token` and `discord-webhook` are still defined —
+  the stock rule set has no Discord pattern of its own, so deleting one of those
+  blocks removes the only thing anywhere looking for that value;
+- `[extend] disabledRules` is empty. It subtracts from the set being extended, so
+  every entry is one provider pattern carved back out of `useDefault = true` while
+  that line goes on reading correctly;
+- nothing in `[allowlist] regexes` or `paths` matches the empty string. A pattern
+  that matches inside the empty string matches inside every string, so one bare `.*`
+  there is an off switch for the entire scan.
+
+It **parses the file with a TOML parser** rather than matching its text, for the same
+reason check 10 loads `lighthouserc.cjs` through node. Three of these leave
+`useDefault = true` in the file word for word, and all were measured against the
+pinned gitleaks 8.30.1 on a repository holding an AWS key pair and a real-shaped
+Discord bot token — three findings on the real config:
+
+| edit | findings left |
+|---|---|
+| *(unmodified control)* | `aws-access-token`, `generic-api-key`, `discord-bot-token` |
+| `useDefault` line deleted | `discord-bot-token` |
+| a `[[rules]]` stanza inserted **above** the line, re-homing the key | `discord-bot-token` |
+| `useDefault = "false"` — a string, loads clean, exits 0 | `discord-bot-token` |
+| `disabledRules = ['aws-access-token']` | `generic-api-key`, `discord-bot-token` |
+| `discord-bot-token` rule block deleted | `aws-access-token`, `generic-api-key` |
+| `regexes` or `paths` gains a bare `.*` | **nothing at all** |
+
+Only the first of those is visible to a grep for the line.
+
+One thing worth writing down because the obvious guess is wrong: `disabledRules`
+reaches the **default** rules only. An entry naming our own `discord-bot-token` does
+nothing — the rule goes on firing — which is also why a self-test case built on that
+would have gone red while the scan it claimed to protect was unharmed. Measured, not
+assumed. If a stock rule genuinely false-positives on this repository, as
+`discord-client-id` does on public snowflakes, allowlist the specific value rather
+than disabling the pattern.
+
+`--lint` also goes red if `.gitleaks.toml` is missing, if it cannot be parsed as
+TOML, or if `python3` is not on `PATH` — a config that cannot be read is not being
+enforced, same rule as the budgets. `tomllib` has been in the standard library since
+3.11 and `ubuntu-24.04` ships 3.12, so this needs no install step in `static`.
 
 Until this case existed, `gitleaks` was the one required check with no live proof it
 fails — a check nobody had watched work, guarding the one kind of breakage a revert
