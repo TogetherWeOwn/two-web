@@ -24,4 +24,17 @@ pest()->extend(TestCase::class)
 
 // Dusk runs through phpunit.dusk.xml against a real browser and a real server, so
 // it is never part of `composer test`. See `composer test:e2e`.
-pest()->extend(DuskTestCase::class)->in('Browser');
+//
+// DatabaseTruncation, not RefreshDatabase, and it is not optional. The browser and
+// the server are separate processes, so rows wrapped in the test's own uncommitted
+// transaction are invisible to the page under test — RefreshDatabase would hide
+// every fixture from the browser that is supposed to see it.
+//
+// Truncating is what makes a Dusk test able to assert an *absence*. Until this was
+// here the suite shared one database with no reset between tests, and that was
+// survivable only because the tests that existed created users and asserted on
+// what they could see. The first test to assert "there are no events" inherited the
+// events three earlier tests had created and failed in CI while passing alone.
+pest()->extend(DuskTestCase::class)
+    ->use(DatabaseTruncation::class)
+    ->in('Browser');
