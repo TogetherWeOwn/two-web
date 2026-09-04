@@ -81,7 +81,13 @@ function spyJob(RoleAssignment|Announcement $action, int $attempts = 1): CallInt
     };
 }
 
-function botRefusal(string $code, bool $retryable): array
+/**
+ * Prefixed, like every other helper here. Pest runs the whole suite in one
+ * process, so a test file's top-level functions and constants are global:
+ * SyncEventToDiscordTest already declares a `jobRefusal()`, and the second
+ * declaration is a fatal error that takes down the run rather than one test.
+ */
+function jobRefusal(string $code, bool $retryable): array
 {
     return ['ok' => false, 'error' => ['code' => $code, 'message' => 'no', 'retryable' => $retryable], 'request_id' => 'r1'];
 }
@@ -161,7 +167,7 @@ it('dispatching a second job is a second operation with its own key', function (
 });
 
 it('releases rather than fails when the bot refuses retryably', function () {
-    Http::fake([JOB_ENDPOINT => Http::response(botRefusal('internal', true), 500)]);
+    Http::fake([JOB_ENDPOINT => Http::response(jobRefusal('internal', true), 500)]);
 
     $job = spyJob(jobAnnouncement());
     $job->handle(app(InternalActionClient::class));
@@ -173,7 +179,7 @@ it('releases rather than fails when the bot refuses retryably', function () {
 
 it('honours the bot retry-after over its own backoff schedule', function () {
     // The bot knows when its token bucket refills; this schedule is guessing.
-    Http::fake([JOB_ENDPOINT => Http::response(botRefusal('rate_limited', true), 429, ['Retry-After' => '42'])]);
+    Http::fake([JOB_ENDPOINT => Http::response(jobRefusal('rate_limited', true), 429, ['Retry-After' => '42'])]);
 
     $job = spyJob(jobAnnouncement());
     $job->handle(app(InternalActionClient::class));
@@ -182,7 +188,7 @@ it('honours the bot retry-after over its own backoff schedule', function () {
 });
 
 it('walks the backoff schedule as the attempts climb', function (int $attempt, int $delay) {
-    Http::fake([JOB_ENDPOINT => Http::response(botRefusal('internal', true), 500)]);
+    Http::fake([JOB_ENDPOINT => Http::response(jobRefusal('internal', true), 500)]);
 
     $job = spyJob(jobAnnouncement(), $attempt);
     $job->handle(app(InternalActionClient::class));
@@ -193,7 +199,7 @@ it('walks the backoff schedule as the attempts climb', function (int $attempt, i
 it('fails immediately on a terminal refusal rather than burning the backoff', function () {
     // `action_not_allowed` means a channel is not on an allowlist. No amount of
     // waiting adds one, and sitting in the queue only delays the alert.
-    Http::fake([JOB_ENDPOINT => Http::response(botRefusal('action_not_allowed', false), 403)]);
+    Http::fake([JOB_ENDPOINT => Http::response(jobRefusal('action_not_allowed', false), 403)]);
 
     $job = spyJob(jobAnnouncement());
     $job->handle(app(InternalActionClient::class));
@@ -207,7 +213,7 @@ it('does not decide retryability from the http status', function (string $code, 
     // "ask again with the same key and a fresh nonce" and `replayed` means "I
     // have seen that nonce, and I always will". A job that branched on the
     // status would get exactly one of them wrong.
-    Http::fake([JOB_ENDPOINT => Http::response(botRefusal($code, $retryable), 409)]);
+    Http::fake([JOB_ENDPOINT => Http::response(jobRefusal($code, $retryable), 409)]);
 
     $job = spyJob(jobAnnouncement());
     $job->handle(app(InternalActionClient::class));
@@ -223,7 +229,7 @@ it('does not decide retryability from the http status', function (string $code, 
 ]);
 
 it('gives up once the retryable refusals have used the last attempt', function () {
-    Http::fake([JOB_ENDPOINT => Http::response(botRefusal('internal', true), 500)]);
+    Http::fake([JOB_ENDPOINT => Http::response(jobRefusal('internal', true), 500)]);
 
     $job = spyJob(jobAnnouncement(), 5);
     $job->handle(app(InternalActionClient::class));
