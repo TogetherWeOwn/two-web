@@ -245,14 +245,32 @@ fi
 # missing" into "this step did not run", which GitHub reports as a passing job.
 # Both historical forms are caught — `steps.guard.outputs.ready == 'true'` and
 # `vars.STAGING_URL != ''`.
+#
+# Do not hide grep's status with `|| true`: exit 1 means the workflow is clean,
+# while exit 2 means there was no readable workflow to inspect. Collapsing those
+# two cases would let a deleted deploy.yml report PASS — this assertion's own
+# TOG-913-shaped false green (TOG-934).
 n=$((n + 1))
-skips="$(grep -nE "^\s*if:.*(secrets\.|vars\.|outputs\.ready)" "$WORKFLOW" || true)"
-if [ -z "$skips" ]; then
-  pass workflow-has-no-skip
-else
-  fail "workflow-has-no-skip: a step in deploy.yml is gated on a secret or target being set. That is the TOG-913 defect: the job then reports success having deployed nothing."
-  printf '%s\n' "$skips" | sed 's/^/        /'
+if [ ! -r "$WORKFLOW" ]; then
+  fail "workflow-has-no-skip: .github/workflows/deploy.yml is missing or unreadable, so the suite cannot prove that deploy steps are never skipped"
   rc=1
+else
+  skips="$(grep -nE "^\s*if:.*(secrets\.|vars\.|outputs\.ready)" "$WORKFLOW")"
+  grep_status=$?
+  case "$grep_status" in
+    0)
+      fail "workflow-has-no-skip: a step in deploy.yml is gated on a secret or target being set. That is the TOG-913 defect: the job then reports success having deployed nothing."
+      printf '%s\n' "$skips" | sed 's/^/        /'
+      rc=1
+      ;;
+    1)
+      pass workflow-has-no-skip
+      ;;
+    *)
+      fail "workflow-has-no-skip: grep could not inspect .github/workflows/deploy.yml (exit ${grep_status})"
+      rc=1
+      ;;
+  esac
 fi
 
 printf '\n'
