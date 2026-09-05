@@ -1,11 +1,30 @@
 # The WordPress apex hero — TOG-1163
 
-`togetherweown.com` today is **not this application**. It is a WordPress.com
-install running the Bricks theme (`wp-content/themes/bricks`, plus
-`bricks-advanced-themer` and `automatic-css`), serving a one-section
-coming-soon hero. The Laravel site in this repository replaces it at cutover
-(`docs/dns.md`). Until then the apex is the only public web surface we have, and
-the only action on it is the Discord button — the top of the entire funnel.
+> **This fix was never applied, and never will be. Closed 2026-09-05 by the
+> owner:** the WordPress.com site "is the old website which is not to be used. we
+> now have the vps just update the domain to point to it once it's live." No CSS
+> or content work goes into that install. It is not being repaired, only retired
+> — the apex moves to the Coolify VPS at cutover (TOG-59 for DNS, TOG-85 to
+> retire the WordPress install itself).
+>
+> **`hero-fix.css` in this directory is therefore dead.** It is kept, unapplied,
+> only as the measured record of what the defect was. Do not paste it anywhere.
+>
+> **What survives is the check.** `ci/browser/cta-breakpoints.mjs` was written
+> for this bug and now runs against *this* application on every PR
+> (`.github/workflows/ci.yml`, the `budgets` job). Verified 2026-09-05 against
+> the Laravel homepage at all six widths: 6/6 measured, `rgb(200, 1, 84)`,
+> radius 4px, 44px tap target, **PASS**. The Laravel page never had this defect;
+> the check is what stops it acquiring one. Read the rest of this file as
+> history.
+
+`togetherweown.com` at the time of writing was **not this application**. It was a
+WordPress.com install running the Bricks theme (`wp-content/themes/bricks`, plus
+`bricks-advanced-themer` and `automatic-css`), serving a one-section coming-soon
+hero. The Laravel site in this repository replaces it at cutover
+(`docs/dns.md`). While that install was still the apex it was the only public web
+surface we had, and the only action on it was the Discord button — the top of the
+entire funnel.
 
 ## The defect
 
@@ -44,13 +63,23 @@ reduced by a scrollbar, so this was never only a phone problem.
 Desktop is unchanged — verified, not assumed: every computed property measured
 at 1279 and 1280 is identical before and after.
 
-## Applying it
+## Applying it — cancelled, do not do this
 
 Nobody in this company has WordPress admin access (`/wp-admin` and `/wp-json`
-both answer 403). It is a founder action, tracked as an `operator` card. The
-block is Bricks' page-level custom CSS for the home page.
+both answer 403), so this was raised as an `operator` card twice: TOG-1172, then
+TOG-1181. **Both are closed unapplied.** The owner's decision above ends this
+line of work — the install is being retired, not fixed. Left here because the
+next person to read the defect will otherwise re-file the same card a third time.
 
 ## Verifying it
+
+Against **this** application — the live check, wired into CI:
+
+```bash
+node ci/browser/cta-breakpoints.mjs --url http://127.0.0.1:8000/ --navigate
+```
+
+Against the old apex, if you ever need the historical measurement back:
 
 ```bash
 node ci/browser/cta-breakpoints.mjs --url https://togetherweown.com/

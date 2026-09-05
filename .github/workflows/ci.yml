@@ -486,6 +486,32 @@ jobs:
       - name: Accessibility — WCAG 2.2 AA
         run: node ci/a11y.mjs
 
+      # TOG-1163 in one line: the join button must be a button at every width,
+      # not only above a breakpoint. axe does not catch this — an unstyled <a>
+      # with good contrast and a real href passes WCAG on every rule axe has —
+      # and Lighthouse scores the page at one width, so neither job above sees
+      # it. The defect it encodes shipped on the old apex for months and was
+      # only ever found by looking at a phone.
+      #
+      # `--navigate` because this host is ours and is not behind Cloudflare; the
+      # curl path in that script exists for the challenged apex, and a real
+      # navigation is strictly better where one is available.
+      #
+      # CHROME_BIN is read straight from the pinned puppeteer installed above, so
+      # this measures the same browser build as the two jobs either side of it.
+      # launch.mjs would otherwise fall back to a cache path that only exists on
+      # the agent sandbox and then to the runner image's Chrome — that works, but
+      # the version would drift with the image rather than with a commit, which is
+      # what every other tool in this job is pinned against. `|| true` is
+      # deliberately absent: if the browser is missing this must fail loudly here
+      # rather than surface later as six CHALLENGED rows and an exit 2.
+      - name: CTA is a button at every width
+        run: |
+          CHROME_BIN="$(node -e "import('puppeteer').then(p => console.log(p.default.executablePath()))")"
+          echo "measuring with $CHROME_BIN"
+          CHROME_BIN="$CHROME_BIN" node ci/browser/cta-breakpoints.mjs \
+            --url http://127.0.0.1:8000/ --navigate --shots ci/cta-shots
+
       # include-hidden-files, because `.lighthouseci` starts with a dot and
       # upload-artifact skips anything under a dot-folder by default. Without it
       # this artifact contained the a11y report and nothing else — 268 bytes,
@@ -500,6 +526,7 @@ jobs:
           path: |
             .lighthouseci
             ci/a11y-report.json
+            ci/cta-shots
           include-hidden-files: true
           retention-days: 14
           if-no-files-found: ignore
