@@ -38,16 +38,28 @@ const record = (status, name, detail) => {
 
 // getent prints one line per (address, socktype) pair, so every address comes
 // back three times. Dedupe, or three addresses read like nine.
+//
+// BOTH families, deliberately. This used to ask `ahostsv4` only, and TOG-1160
+// deletes an A *and* an AAAA. Delete only the A and the v4-only version prints
+// `PASS staging-record-exists … is NXDOMAIN` and exits 0 while the name still
+// resolves over IPv6 — a half-done deletion reading as a clean one, which is
+// exactly the accidental-safety failure this file exists to catch. `getent`
+// exits 2 per family, so each lookup needs its own try.
 function resolve(host) {
-  try {
-    const addresses = execFileSync('getent', ['ahostsv4', host], { encoding: 'utf8' })
-      .split('\n')
-      .map((line) => line.trim().split(/\s+/)[0])
-      .filter(Boolean);
-    return [...new Set(addresses)].sort();
-  } catch {
-    return []; // getent exits 2 on NXDOMAIN
+  const addresses = [];
+  for (const db of ['ahostsv4', 'ahostsv6']) {
+    try {
+      addresses.push(
+        ...execFileSync('getent', [db, host], { encoding: 'utf8' })
+          .split('\n')
+          .map((line) => line.trim().split(/\s+/)[0])
+          .filter(Boolean),
+      );
+    } catch {
+      // getent exits 2 on NXDOMAIN for this family; the other may still answer.
+    }
   }
+  return [...new Set(addresses)].sort();
 }
 
 function head(url, { user } = {}) {

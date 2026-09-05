@@ -11,7 +11,8 @@ are looking at DNS at 2am, this is the page.
 
 The new Laravel site **replaces the WordPress site** — founder's decision.
 
-1. **Now:** build on `staging.togetherweown.com`, walled off.
+1. **Now:** build on `staging.togetherweown.com`, walled off — the name is
+   **deleted** until TWO-37 lands an origin to put behind it (TOG-1156/TOG-1160).
 2. **Launch:** the **apex**, `togetherweown.com`. One record change, scheduled by
    **TWO-61**, once the site is proven on staging.
 
@@ -51,7 +52,7 @@ curl -s -H 'accept: application/dns-json' 'https://cloudflare-dns.com/dns-query?
 | `www.togetherweown.com` | Same origin, same challenge — no redirect to the apex | Fix at cutover |
 | `togetherweown.com/discord` | **302 into a live Discord OAuth join flow.** The only working web→Discord path we have | **Must survive. See below** |
 | `togetherweown.com/join` | 301 → `/join/` → **HTTP 200, titled "Page Not Found", `<meta name="robots" content="follow, noindex">`** — a soft 404 | No `/join` *page*; a 301 to `/discord` — see below |
-| `staging.togetherweown.com` | **Already resolves**, proxied — but **no longer serves the apex page**. WordPress.com answers `403 Error: Active domain connection for this domain not found` (re-measured 5 September 2026, TOG-1156). That 403 is **upstream breakage, not a control we own** | **Delete the record** — see below |
+| `staging.togetherweown.com` | **Deleted, 5 September 2026 (TOG-1160)** — NXDOMAIN in both address families. Until then it resolved proxied and answered `403 Error: Active domain connection for this domain not found` from WordPress.com: **upstream breakage, not a control we own**, which is why it was deleted rather than left alone (TOG-1156) | **Recreate only when TWO-37 lands an IP** — see below |
 | `two.gg`, `www.two.gg` | **302**, path-preserving, to `https://togetherweown.com/<path>` | Make it 301 |
 | `two.gg/discord` | **301** to `togetherweown.com/discord/` — already correct | Leave it, retarget at cutover |
 | `two.gg/join` | 302 → the apex soft 404. Sends real people to a dead page | Point it at `/discord` |
@@ -209,9 +210,18 @@ may be the same box to start with. Everything else below is final.
 **Decision, TOG-1156, 5 September 2026: `staging` should not exist today, so the
 record goes away rather than getting a password put in front of it.**
 
+**Done — TOG-1160, 5 September 2026.** The record is deleted. Verified in both
+address families, because deleting only the `A` would leave the name resolving
+over IPv6: `getent ahostsv4` and `getent ahostsv6` for `staging` are both empty,
+while `getent ahostsv4 togetherweown.com` still answers (the control that proves
+the resolver is working, not that everything is NXDOMAIN). The rest of this
+section is written in the present tense of the pre-deletion world; it is kept as
+the reasoning behind the decision, and as the instructions for recreating the
+record later.
+
 | Type | Name | Value | Cloudflare | TTL |
 |---|---|---|---|---|
-| — | `staging` | **DELETE the existing `A`/`AAAA` record** | — | — |
+| — | `staging` | **DELETE the existing `A`/`AAAA` record** — done, TOG-1160 | — | — |
 
 Recreate it, as the row below, on the day TWO-37 lands an IP and something is
 actually deployed behind it — not before.
@@ -250,7 +260,14 @@ node ci/staging-exposure-check.mjs
 ```
 
 Exit 0 means walled off by a control we own, or gone. Exit 1 means exposed **or**
-safe only by accident. It exits 0 the moment the record is deleted.
+safe only by accident. It exits 0 the moment the record is deleted — as it now
+does, both checks passing, since TOG-1160.
+
+It resolves **both** address families. It did not at first, and an AAAA-only
+leftover would have read as `NXDOMAIN` and exited 0 while staging was still
+reachable over IPv6. `ci/staging-exposure-check-selftest.sh` pins that against a
+real AAAA-only name, and pins `ci/cutover-check.mjs`, which had its own copy of
+the same lookup.
 
 Two more consequences worth having in writing:
 

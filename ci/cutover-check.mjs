@@ -339,16 +339,26 @@ function checkStagingRecord() {
   // getent prints one line per (address, socktype) pair, so every address comes
   // back three times. Dedupe, or the output reads like the record has nine
   // entries when it has three.
+  //
+  // Both families — `staging` had an A and an AAAA, and asking only `ahostsv4`
+  // calls an AAAA-only leftover NXDOMAIN and passes. Kept identical to
+  // ci/staging-exposure-check.mjs; ci/staging-exposure-check-selftest.sh pins
+  // the two together.
   const resolve = (host) => {
-    try {
-      const addresses = execFileSync('getent', ['ahostsv4', host], { encoding: 'utf8' })
-        .split('\n')
-        .map((line) => line.trim().split(/\s+/)[0])
-        .filter(Boolean);
-      return [...new Set(addresses)].sort();
-    } catch {
-      return [];
+    const addresses = [];
+    for (const db of ['ahostsv4', 'ahostsv6']) {
+      try {
+        addresses.push(
+          ...execFileSync('getent', [db, host], { encoding: 'utf8' })
+            .split('\n')
+            .map((line) => line.trim().split(/\s+/)[0])
+            .filter(Boolean),
+        );
+      } catch {
+        // NXDOMAIN for this family; the other may still answer.
+      }
     }
+    return [...new Set(addresses)].sort();
   };
 
   const staging = resolve('staging.togetherweown.com');
