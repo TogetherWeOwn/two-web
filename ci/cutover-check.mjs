@@ -322,41 +322,70 @@ function checkWpJsonGone() {
   );
 }
 
-// staging.togetherweown.com currently resolves to the apex's own Cloudflare
-// addresses, which means it does not have a record of its own — it inherits
-// whatever the apex becomes. After the flip that silently points staging at
-// production.
+// The danger this guards: if `staging` follows the apex, the cutover silently
+// points staging at production.
+//
+// It used to infer that from "staging resolves to the apex's own addresses".
+// That inference is wrong — every *proxied* record in a Cloudflare zone resolves
+// to the same anycast addresses, so shared IPs are the expected state for a
+// record that exists, not evidence of a missing one. TOG-1156 measured it: a
+// nonexistent sibling is NXDOMAIN, so there is no wildcard, so `staging` has an
+// explicit record of its own.
+//
+// TOG-1156 calls for that record to be deleted — staging should not exist until
+// something is deployed behind it. So NXDOMAIN is the expected pass here, not an
+// inconclusive probe. See docs/dns.md and ci/staging-exposure-check.mjs.
 function checkStagingRecord() {
   // getent prints one line per (address, socktype) pair, so every address comes
   // back three times. Dedupe, or the output reads like the record has nine
   // entries when it has three.
+  //
+  // Both families — `staging` had an A and an AAAA, and asking only `ahostsv4`
+  // calls an AAAA-only leftover NXDOMAIN and passes. Kept identical to
+  // ci/staging-exposure-check.mjs; ci/staging-exposure-check-selftest.sh pins
+  // the two together.
   const resolve = (host) => {
-    try {
-      const addresses = execFileSync('getent', ['ahostsv4', host], { encoding: 'utf8' })
-        .split('\n')
-        .map((line) => line.trim().split(/\s+/)[0])
-        .filter(Boolean);
-      return [...new Set(addresses)].sort();
-    } catch {
-      return [];
+    const addresses = [];
+    for (const db of ['ahostsv4', 'ahostsv6']) {
+      try {
+        addresses.push(
+          ...execFileSync('getent', [db, host], { encoding: 'utf8' })
+            .split('\n')
+            .map((line) => line.trim().split(/\s+/)[0])
+            .filter(Boolean),
+        );
+      } catch {
+        // NXDOMAIN for this family; the other may still answer.
+      }
     }
+    return [...new Set(addresses)].sort();
   };
 
-  const apex = new Set(resolve('togetherweown.com'));
   const staging = resolve('staging.togetherweown.com');
 
-  if (apex.size === 0 || staging.length === 0) {
-    record(UNKNOWN, 'staging-own-record', 'could not resolve one of the hostnames');
+  // Gone is the intended state (TOG-1156), and it is unambiguously safe: a name
+  // that does not resolve cannot follow the apex anywhere.
+  if (staging.length === 0) {
+    record(PASS, 'staging-own-record', 'staging is NXDOMAIN — no record to follow the apex');
     return;
   }
 
-  const inherits = staging.every((ip) => apex.has(ip));
+  const apex = new Set(resolve('togetherweown.com'));
+  if (apex.size === 0) {
+    record(UNKNOWN, 'staging-own-record', 'could not resolve the apex');
+    return;
+  }
+
+  // Shared anycast IPs no longer prove anything either way (see above), so this
+  // reports the exposure that matters instead: the record is still there, and if
+  // it is proxied alongside the apex it will follow the flip.
+  const sharesApex = staging.every((ip) => apex.has(ip));
   record(
-    inherits ? FAIL : PASS,
+    FAIL,
     'staging-own-record',
-    inherits
-      ? `staging resolves to the apex's own addresses (${staging.join(', ')}) — it has no record of its own and will follow the apex`
-      : `staging has its own target (${staging.join(', ')})`,
+    sharesApex
+      ? `staging still resolves, proxied, to the apex's own addresses (${staging.join(', ')}) — TOG-1156 calls for this record to be deleted; while it exists it will follow the apex at the flip`
+      : `staging still resolves to ${staging.join(', ')} — TOG-1156 calls for this record to be deleted; confirm what it points at and that it is walled off (ci/staging-exposure-check.mjs)`,
   );
 }
 
