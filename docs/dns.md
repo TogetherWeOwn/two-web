@@ -66,33 +66,54 @@ curl -s -H 'accept: application/dns-json' 'https://cloudflare-dns.com/dns-query?
 | `two.gg` mail records | SPF `v=spf1 include:_spf.google.com -all`, DMARC `p=reject` — both landed TOG-1145 | Done, but see DKIM |
 | `google._domainkey` **both zones** | **NXDOMAIN.** No Workspace DKIM anywhere, while both zones carry 5 Google MX | **TOG-1154** — `two.gg` forwarded mail is rejected today |
 | Apex HSTS | `max-age=31536000`, **no `includeSubDomains`** | Keep it that way until cutover |
-| Apex indexing | Depends on the `Accept` header — see below. No `robots.txt` at all | An empty site is indexable — TWO-49, TOG-71 |
+| Apex indexing | Every URL renders one Bricks template (post 21), so 10 pages share its `og:url` and 7 cross-canonicalise to it. No `robots.txt` at all — see below | Clears when Coming Soon is turned off — TOG-1159 / TOG-1170 |
 
-### The apex serves two different homepages, and `curl` shows you the wrong one
+### Coming Soon mode is serving one template as every URL on the site
 
-Corrected 25 August 2026 (TOG-71). The previous version of the row above read
-"`<meta name="robots" content="index, follow">`, empty `robots.txt`". Both halves
-were artefacts of how they were measured.
+Rewritten 5 September 2026 (TOG-1170). **The `vary: accept` split this section used
+to describe is gone** — re-measured that day, `Accept: */*` and the browser `Accept`
+return the same document: same title, same `index, follow`, same self-canonical, and
+a tag-for-tag identical `<title>/<meta>/<link>` set (0 differing lines; the remaining
+~2 KB size delta is cache-buster noise). `ci/live-seo-probe.mjs` still keeps the
+`homepage-same-for-crawlers-and-scripts` check so a reappearance is caught, and it
+still sends the browser UA because Cloudflare's challenge is real. Do not re-derive
+the old two-homepage claim from this file's history.
 
-The apex answers `vary: accept` and honours it. `Accept: */*` — what `curl` and
-`wget` send unless told otherwise — returns the WordPress front page: title
-`Together We Own -`, `index, follow`, a self-canonical, full Rank Math schema.
-`Accept: text/html,…` — what **every browser and Googlebot** sends — returns the
-Bricks coming-soon template: title `Coming Soon – Together We Own`, and **no robots
-meta, no canonical, no `og:url`, no schema at all**.
+What is actually wrong is bigger and has one cause. Bricks **Coming Soon** mode
+replaces the body of every front-end response with a single template,
+`/template/coming-soon/` (post 21), via `template_include`. WordPress still resolves
+the correct post first, so each URL keeps its own `<title>` and looks healthy at a
+glance — but Rank Math reads the canonical and `og:url` off the *rendered* object and
+truthfully reports post 21. Measured 5 September 2026, **every URL renders
+`postid-21`**, including `/robots.txt` and `/feed/`:
 
-So the tags recorded in the old row are the ones no crawler will ever be served. Add
-the browser `Accept` header to the browser UA already at the top of this section, or
-you will document a page nobody sees:
+- **10 advertised pages share one `og:url`.** A Discord or Twitter paste of any of
+  them unfurls as the coming-soon template rather than the page linked.
+- **7 pages cross-canonicalise** to `/template/coming-soon/`, which asks Google to
+  index that URL *instead* of them.
+- **`/robots.txt` 301s to `/robots.txt/`** and returns ~129 KB of HTML as
+  `text/html`. WordPress serves robots.txt from a rewrite rule, not a file, so the
+  request is a page lookup and gets intercepted like everything else. Nothing
+  disallows anything and the sitemap is never announced — though
+  `/sitemap_index.xml` itself is present and correct.
+
+**These are not Rank Math settings and there is nothing to fix per page.** Two
+independent controls prove the underlying data is fine, both on the same host:
 
 ```bash
-curl -s -A "$UA" -H 'accept: text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8' \
-  https://togetherweown.com/ | grep -o '<title>[^<]*</title>\|name="robots" content="[^"]*"'
+# core WordPress's own oEmbed link emits the RIGHT url on a response whose
+# Rank Math canonical says post 21 — same page, same request:
+curl -s -A "$UA" https://togetherweown.com/sample-page/ \
+  | grep -o 'oembed/1.0/embed?url=[^"&]*'      # -> %2Fsample-page%2F
+
+# and endpoints that never reach template_include list every real page correctly:
+curl -s -A "$UA" https://togetherweown.com/page-sitemap.xml | grep -o '<loc>[^<]*</loc>'
 ```
 
-And there is no `robots.txt` to be empty: `/robots.txt` **301s to `/robots.txt/`**,
-which returns a 129 KB HTML page with `content-type: text/html`. Nothing disallows
-anything and the sitemap is never announced.
+So the fix is **turning the mode off — TOG-1159 — and nothing else**; these failures
+should clear with that flip and are not separate work. `ci/live-seo-probe.mjs` asserts
+this directly as `pages-render-their-own-content`, which names post 21 and says so.
+Run it rather than re-deriving any of the above by hand.
 
 `ci/live-seo-probe.mjs` measures all of this, sends the right headers, and refuses
 to report a result at all when Cloudflare challenges it. Run that instead of
