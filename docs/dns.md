@@ -4,6 +4,8 @@ Everything we own, what each name points at today, and what has to change. If yo
 are looking at DNS at 2am, this is the page.
 
 **Last verified against live DNS and HTTP:** 19 August 2026 · **Issue:** TWO-38
+· **Mail rows re-verified:** 5 September 2026 (TOG-1154) — run
+`node ci/mail-auth-check.mjs` rather than trusting the mail tables below
 
 ---
 
@@ -59,9 +61,10 @@ curl -s -H 'accept: application/dns-json' 'https://cloudflare-dns.com/dns-query?
 | `two.gg/discord` | **301** to `togetherweown.com/discord/` — already correct | Leave it, retarget at cutover |
 | `two.gg/join` | 302 → the apex soft 404. Sends real people to a dead page | Point it at `/discord` |
 | `togetherweown.net` | 301 to `https://togetherweown.com/` | Correct, leave it |
-| `_dmarc.togetherweown.com` | `v=DMARC1;p=none;` — **no `rua`**, so nobody is collecting anything | Add reporting |
-| `togetherweown.com` SPF | `v=spf1 include:_spf.wpcloud.com ~all` | Do not edit blind |
-| `two.gg` mail records | **None at all.** No SPF, no DMARC | Free win, see below |
+| `_dmarc.togetherweown.com` | `v=DMARC1; p=none; rua=mailto:dmarc@togetherweown.com; fo=1` — reporting landed, TOG-1145 | Read the reports, then tighten |
+| `togetherweown.com` SPF | `v=spf1 include:_spf.google.com include:_spf.wpcloud.com ~all` — Google added by TOG-1158 | Do not edit blind |
+| `two.gg` mail records | SPF `v=spf1 include:_spf.google.com -all`, DMARC `p=reject` — both landed TOG-1145 | Done, but see DKIM |
+| `google._domainkey` **both zones** | **NXDOMAIN.** No Workspace DKIM anywhere, while both zones carry 5 Google MX | **TOG-1154** — `two.gg` forwarded mail is rejected today |
 | Apex HSTS | `max-age=31536000`, **no `includeSubDomains`** | Keep it that way until cutover |
 | Apex indexing | Depends on the `Accept` header — see below. No `robots.txt` at all | An empty site is indexable — TWO-49, TOG-71 |
 
@@ -365,30 +368,69 @@ Documented here so the next person does not find a mystery domain in the registr
 
 ---
 
-## Mail: SPF and DMARC
+## Mail: SPF, DKIM and DMARC
 
-Two domains, two different answers, because we know exactly what one of them sends
-(nothing) and we have never measured the other.
+**The premise this section used to rest on is dead.** It said `two.gg` "sends no
+mail and has no origin, so there is nothing to break," and recommended `v=spf1
+-all` plus an empty DKIM wildcard. That is no longer true and following it now
+would black-hole real mail.
 
-### `two.gg` — protect it now, it costs nothing
+**Both zones publish five Google MX. Workspace mail is real on both, today.**
+Re-measured 5 September 2026 (TOG-1154), two independent resolvers with a
+bogus-selector control in the same batch:
 
-It has no mail records at all — only a stale `google-site-verification` TXT — which
-means anyone can spoof `@two.gg` today and no receiver will push back. It sends no
-mail and has no origin, so there is nothing to break:
-
-| Type | Name | Value |
+| | `togetherweown.com` | `two.gg` |
 |---|---|---|
-| `TXT` | `@` | `v=spf1 -all` |
-| `TXT` | `_dmarc` | `v=DMARC1; p=reject; rua=mailto:<founder>` |
-| `TXT` | `*._domainkey` | `v=DKIM1; p=` |
+| MX | 5 Google | 5 Google |
+| SPF | `v=spf1 include:_spf.google.com include:_spf.wpcloud.com ~all` | `v=spf1 include:_spf.google.com -all` |
+| DMARC | `p=none; rua=…; fo=1` | **`p=reject`**`; rua=…; fo=1` |
+| `google._domainkey` | **NXDOMAIN** | **NXDOMAIN** |
 
-Hard fail, reject, and an empty DKIM wildcard. If we ever send mail from `two.gg`
-we undo this deliberately.
+Run it rather than re-deriving it by hand — **the check is the source of truth
+for this table**:
+
+```
+node ci/mail-auth-check.mjs
+```
+
+### Neither zone has a Workspace DKIM key, and on `two.gg` that is live breakage
+
+`two.gg` is at `p=reject` with no DKIM. Its *direct* mail passes SPF, so it is
+fine. Its **forwarded** mail — a mailing list, a `.forward`, an alias — is not:
+forwarding rewrites the path and breaks SPF, DKIM is the only mechanism that
+survives it, and there is none. A conforming receiver rejects that mail outright.
+Nobody gets a bounce they understand.
+
+`togetherweown.com` had the mirror-image defect and it is now fixed: its SPF
+authorised WordPress.com only, so *every* Workspace message from it failed SPF as
+well as DKIM. `include:_spf.google.com` was added on 5 September 2026 (TOG-1158).
+Both includes are flat, so the record costs 2 of the RFC 7208 §4.6.4 budget of 10.
+
+**Publishing the key needs the Google admin console, which no agent holds** —
+it is `google._domainkey` TXT per domain, generated under Apps → Google Workspace
+→ Gmail → Authenticate email. Tracked on **TOG-1154**, with the operator step on
+**TOG-1167**.
+
+Two traps that make a published record read as success when it is not, both
+encoded in the check so nobody has to remember them:
+
+- **The console defaults to 1024-bit.** Change it to 2048. A 1024-bit key
+  publishes fine and passes every existence check.
+- **`v=DKIM1; p=` is the *revoked* form** (RFC 6376 §3.6.1) — valid syntax, fails
+  every signature. Which is why the old advice to publish an empty
+  `*._domainkey` wildcard must not be applied to a domain that now sends mail.
+
+**A published TXT record is not the finish line.** The check must exit 0, *and*
+`dkim=pass` must appear in the `Authentication-Results` header of a message
+actually received from that domain. DNS proves what we published; only a received
+header proves Google is signing with it.
 
 ### `togetherweown.com` — staged, because we have never measured it
 
-There is already a `_dmarc` record: `v=DMARC1;p=none;`. It has **no `rua`**, so it
-has been collecting nothing this whole time.
+There is already a `_dmarc` record. **The `rua` has since landed** (TOG-1145): it
+now reads `v=DMARC1; p=none; rua=mailto:dmarc@togetherweown.com; fo=1`, so the
+two-week clock referred to below has started. Steps 2–4 of the table are still
+ahead of us.
 
 The earlier version of this page justified going slowly here by "the apex sends
 WooCommerce receipts." It does not — there is no store. The honest reason to still
@@ -421,9 +463,10 @@ first email**, its sending domain needs SPF and DKIM that align. After cutover t
 app *is* the apex, so it is the apex SPF record that has to learn about our sender.
 Today `MAIL_MAILER=log` and we send none, so this is a note, not a task.
 
-SPF stays as WordPress has it (`include:_spf.wpcloud.com ~all`) until report data
-says otherwise, and it must not be dropped at cutover just because the web server
-moved — WordPress.com may still be a legitimate sender. **Do not edit the apex SPF
+SPF now reads `v=spf1 include:_spf.google.com include:_spf.wpcloud.com ~all`
+(TOG-1158 added the Google include; the WordPress one was there already). Neither
+include may be dropped at cutover just because the web server moved — WordPress.com
+and Workspace are both legitimate senders today. **Do not edit the apex SPF
 blind** — one wrong `-all` does the same damage as a bad DMARC policy.
 
 ---
@@ -562,6 +605,7 @@ anything:
 | Change | Who | Why |
 |---|---|---|
 | `two.gg` SPF / DMARC / DKIM TXT records | **Us, with the token** | DNS records |
+| **Generating** a Workspace DKIM key | **Nobody here — Google admin console** | Not DNS at all. No agent holds Workspace super-admin and none should; see TOG-1154 |
 | `_dmarc.togetherweown.com` → add `rua` | **Us, with the token** | DNS record |
 | `staging` `CNAME` record **delete** | ~~Us, with the token~~ — **done by the operator, 5 Sep 2026 20:20Z** | DNS record — TOG-1156/TOG-1160, did not wait on TWO-37 |
 | `staging` `A` record recreate | **Us, with the token** | DNS record, once TWO-37 lands an IP |
