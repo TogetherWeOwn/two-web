@@ -47,7 +47,7 @@
             <div class="mt-8">
                 <a href="{{ route('discord') }}"
                    data-testid="discord-join"
-                   class="inline-flex min-h-11 items-center justify-center gap-2 rounded-md bg-brand px-6
+                   class="inline-flex items-center justify-center gap-2 px-6 xl:min-h-11 xl:rounded-md xl:bg-brand
                           font-semibold text-on-brand transition-colors duration-fast ease-out-quick
                           hover:bg-brand-hover active:bg-brand-active">
                     Join the Discord
