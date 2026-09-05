@@ -561,10 +561,10 @@ lint() {
         console.log([entry[0], String(options.maxNumericValue), String(options.aggregationMethod)].join("|"));
       ' "$budget_file" 2>&1)
 
-      if [ "$admin_lcp" = "error|3200|median" ]; then
-        pass "the \`/admin\` LCP exception is still capped at 3200 as an \`error\` on the median"
+      if [ "$admin_lcp" = "error|3000|median" ]; then
+        pass "the \`/admin\` LCP exception is still capped at 3000 as an \`error\` on the median"
       else
-        fail "the relaxed \`/admin\` LCP budget reads \`${admin_lcp}\`, not \`error|3200|median\`. That budget exists because Filament's own 603KB stylesheet is render-blocking and outside our control; it is not a general allowance to be widened. If the panel genuinely got slower, the fix is the Filament theme build, not this number."
+        fail "the relaxed \`/admin\` LCP budget reads \`${admin_lcp}\`, not \`error|3000|median\`. That budget exists because Filament's stylesheet is render-blocking; it is not a general allowance to be widened. TOG-1008 tree-shook the theme to 342KB and brought the ceiling down from 3200 with it, and with the stylesheet stubbed out entirely the panel still medians 2047ms, so no further CSS work reaches the public 2000ms budget. If the panel genuinely got slower, find what regressed; do not raise this number."
         rc=1
       fi
     fi
