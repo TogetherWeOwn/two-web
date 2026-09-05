@@ -109,6 +109,17 @@ jobs:
       - name: Deploy guard self-test
         run: ./ci/deploy-target-selftest.sh
 
+      # The `budgets` verdict, which had no test until it shipped a defect. lhci
+      # runs there under `continue-on-error: true`, so its exit code is discarded
+      # and `ci/lh-annotate.mjs` is what actually turns the job red — the whole
+      # gate, untested. It failed on any unpassed assertion without reading
+      # `level`, which promoted every `warn` tripwire to a blocking budget and
+      # made /admin red on FCP while every CEO budget passed with headroom
+      # (TOG-54). Pins both directions: a warning cannot block, and an
+      # error-level breach cannot stop blocking. No Chrome, no lhci, no network.
+      - name: Budget verdict self-test
+        run: ./ci/lh-annotate-selftest.sh
+
       - uses: shivammathur/setup-php@v2
         with:
           php-version: ${{ env.PHP_VERSION }}

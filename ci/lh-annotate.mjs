@@ -32,9 +32,26 @@ if (!resultsFile) {
 }
 
 const results = JSON.parse(readFileSync(`${DIR}/${resultsFile}`, 'utf8'));
-const failures = results.filter((r) => !r.passed);
+const breached = results.filter((r) => !r.passed);
 
-if (failures.length === 0) {
+// `level` decides the verdict, and it has to, because ci/lighthouserc.cjs writes
+// two kinds of budget and means the difference. `largest-contentful-paint`,
+// `cumulative-layout-shift` and `server-response-time` are `['error', ...]` — the
+// CEO's numbers, a red build. `total-blocking-time` and `first-contentful-paint`
+// are `['warn', ...]` and are documented there, in as many words, as "not a CEO
+// budget, so not a failure ... a cheap early signal before LCP actually
+// breaches".
+//
+// This script used to fail on `!r.passed` alone, which quietly promoted every
+// warning to a gate. /admin then went red on FCP 1957ms against the 1800ms
+// tripwire while every error-level budget passed with room — LCP 2779ms against
+// its 3200ms ceiling (TOG-54). A warning that fails the build is not a warning,
+// and the pressure it creates is to delete the tripwire or inflate the number,
+// which costs the early signal the tripwire exists to give.
+const failures = breached.filter((r) => r.level === 'error');
+const warnings = breached.filter((r) => r.level !== 'error');
+
+if (breached.length === 0) {
   console.log('Every performance assertion passed.');
   process.exit(0);
 }
@@ -47,6 +64,17 @@ for (const f of failures) {
     `::error::${f.auditId} on ${f.url} — ${f.actual} exceeds the budget of ${f.expected} ` +
       `(${f.level}, ${f.auditProperty ?? 'median of 3 runs'}). ` +
       'Budgets are set in ci/lighthouserc.cjs and lowering one is a CEO decision in writing.'
+  );
+}
+
+// Still annotated, and still as ::error:: so it reaches the check-run API for a
+// principal that cannot read job logs — but worded so nobody reads it as the
+// thing that stopped the merge, and not counted in the exit code below.
+for (const w of warnings) {
+  console.error(
+    `::error::TRIPWIRE, NOT A FAILURE — ${w.auditId} on ${w.url} — ${w.actual} exceeds ` +
+      `its early-warning threshold of ${w.expected} (${w.level}, ${w.auditProperty ?? 'median of 3 runs'}). ` +
+      'This does not fail the build. It is the number that moves first when a page starts getting slower.'
   );
 }
 
@@ -136,5 +164,15 @@ for (const [url, audits] of byUrl) {
   if (chain) console.error(`::error::CONTEXT, NOT A FAILURE — slowest resources on ${url}: ${chain}`);
 }
 
-console.error(`\n${failures.length} performance assertion(s) breached.`);
+if (failures.length === 0) {
+  console.error(
+    `\n${warnings.length} early-warning threshold(s) exceeded, 0 budgets breached. Not a failure.`
+  );
+  process.exit(0);
+}
+
+console.error(
+  `\n${failures.length} performance assertion(s) breached` +
+    (warnings.length ? `, plus ${warnings.length} early-warning threshold(s) exceeded.` : '.')
+);
 process.exit(1);
