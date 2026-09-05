@@ -1,9 +1,11 @@
 <?php
 
+use App\Http\Middleware\RecordMemberDataAccess;
 use App\Models\MemberDataAccessLog;
 use App\Models\Profile;
 use App\Models\User;
 use App\Support\MemberDataAccess\AccessRecorder;
+use Filament\Http\Middleware\Authenticate as FilamentAuthenticate;
 use Illuminate\Console\Scheduling\Schedule;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Route;
@@ -192,16 +194,43 @@ it('lets no admin-gated route ship without the access log', function () {
     // served at 200 with no row and no error — and takes out the whole control at
     // once rather than one screen.
     //
-    // So the line is not something to remember. This is vacuous today, because no
-    // admin route exists yet; it is the only test here whose job starts later.
-    $missing = collect(Route::getRoutes()->getRoutes())
-        ->filter(fn ($route) => collect($route->gatherMiddleware())
-            ->contains(fn ($m) => is_string($m) && str_contains($m, 'can:access-admin')))
-        ->reject(fn ($route) => collect($route->gatherMiddleware())
-            ->contains(fn ($m) => is_string($m) && str_starts_with($m, 'member-access-log')))
-        ->map(fn ($route) => $route->uri())
-        ->values()
-        ->all();
+    // So the line is not something to remember.
+    //
+    // This test was asleep from TOG-355 until TOG-1042. It selected on the string
+    // `can:access-admin`, and the panel that shipped in TOG-54 does not gate that
+    // way: Filament's Authenticate middleware asks User::canAccessPanel(). The
+    // filter matched 0 of the 8 panel routes and the assertion was
+    // `expect([])->toBe([])` — deleting RecordMemberDataAccess from
+    // AdminPanelProvider left the whole suite green.
+    //
+    // Two lessons are built in below. Both sides are matched by *gate*, not by one
+    // spelling of it — a route is admin-gated if it carries the alias OR Filament's
+    // panel gate, and it is covered if it carries the recorder as the
+    // `member-access-log` alias OR as the bare class. And the selected set is
+    // asserted non-empty first, so the next change of gating style fails here
+    // instead of quietly putting this test back to sleep.
+    $isAdminGated = fn ($route) => collect($route->gatherMiddleware())->contains(
+        fn ($m) => is_string($m) && (
+            str_contains($m, 'can:access-admin')          // alias gating
+            || $m === FilamentAuthenticate::class         // panel gating (User::canAccessPanel)
+            || str_starts_with($m, 'panel:')              // any Filament panel group
+        )
+    );
+
+    $recordsAccess = fn ($route) => collect($route->gatherMiddleware())->contains(
+        fn ($m) => is_string($m) && (
+            str_starts_with($m, 'member-access-log')      // registered by alias, with or without params
+            || $m === RecordMemberDataAccess::class       // registered as the bare class
+        )
+    );
+
+    $gated = collect(Route::getRoutes()->getRoutes())->filter($isAdminGated);
+
+    // The guard on the guard. Without this the whole test degrades silently to a
+    // tautology the moment nothing matches, which is exactly how it spent TOG-54.
+    expect($gated)->not->toBeEmpty('no admin-gated route matched: this test has gone vacuous again, the gating style changed');
+
+    $missing = $gated->reject($recordsAccess)->map(fn ($route) => $route->uri())->values()->all();
 
     expect($missing)->toBe([]);
 });
