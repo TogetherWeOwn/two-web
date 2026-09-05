@@ -15,6 +15,7 @@
 /.zed
 /auth.json
 /ci/a11y-report.json
+/ci/cta-shots
 /node_modules
 /public/build
 /public/hot
