@@ -19,7 +19,12 @@
 //     DoH) and a bogus selector is queried in the SAME batch. A single-resolver
 //     NXDOMAIN is not evidence of absence, and a resolver that synthesises
 //     answers would make a missing record look present. If the control ever
-//     answers, the whole run is void and says so.
+//     answers, the whole run is void and says so. Resolvers are compared on
+//     their ANSWERS as well as their rcode — two NOERRORs over two different
+//     keys is the split that actually breaks mail.
+//   * A disagreement is retried before it fails. Immediately after a publish the
+//     old NXDOMAIN is still cached and each resolver expires it separately, so a
+//     correct zone reads as split for a few minutes. See lookup().
 //   * A published record is NOT the finish line. The Google admin console
 //     defaults to a 1024-bit key and TOG-1167 asks for 2048. Miss that one
 //     dropdown and an existence check goes green over a key of half the
@@ -60,27 +65,84 @@ async function query(name, type, resolver) {
   };
 }
 
-// Ask both resolvers. Disagreement is a result, not an error to retry away:
-// it means one of them is lying and no conclusion is safe.
-async function lookup(name, type = 'TXT') {
+// Ask both resolvers. A disagreement that SURVIVES is a result, not an error to
+// retry away: it means one of them is lying and no conclusion is safe.
+//
+// But a disagreement observed ONCE is not yet that. Publishing a record that was
+// previously NXDOMAIN leaves the old negative answer cached, and each resolver
+// ages it out on its own schedule — so for up to an SOA-negative-TTL window
+// after a correct publish, one side says NOERROR and the other still says
+// NXDOMAIN. That is the normal propagation state of a just-fixed zone, and it
+// resolves itself.
+//
+// This is not hypothetical. TOG-1154's DKIM records were published and verified
+// green; a run minutes later saw `{"cloudflare":"NOERROR","google":"NXDOMAIN"}`
+// and this function reported a hard FAIL over DNS that was already correct.
+// Google's own endpoints disagreed with EACH OTHER at that moment (8.8.4.4
+// answered while one 8.8.8.8 backend still had the negative cached), so the
+// split was inside one resolver's cache, not between two sources of truth.
+//
+// So: re-query a disagreement after a short pause. A stale cache expires and the
+// answers converge; a genuinely inconsistent zone keeps disagreeing and still
+// fails. Retrying only the disagreement — never a clean NOERROR or NXDOMAIN —
+// means this cannot paper over a real negative, only over a transient one.
+const DISAGREE_RETRIES = 2;
+// Overridable so the selftest does not sleep 10 real seconds per case. Never set
+// in normal use: too short a pause and a stale cache has not expired yet, which
+// would turn the retry into a no-op that fails exactly as before.
+const DISAGREE_PAUSE_MS = Number(process.env.MAIL_AUTH_DISAGREE_PAUSE_MS ?? 5_000);
+
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+// Seam for the selftest. The retry/agreement logic cannot be exercised against
+// live DNS — a stale cache is transient by definition and there is no way to ask
+// a real resolver for one — so the selftest substitutes a scripted responder and
+// drives the SHIPPED lookup() through it. Default is the real query().
+let queryImpl = query;
+export const __setQueryForTest = (fn) => {
+  queryImpl = fn ?? query;
+};
+
+async function lookupOnce(name, type) {
   const seen = {};
   for (const resolver of Object.keys(RESOLVERS)) {
     try {
-      seen[resolver] = await query(name, type, resolver);
+      seen[resolver] = await queryImpl(name, type, resolver);
     } catch (err) {
       seen[resolver] = { status: `ERROR(${err.name})`, answers: [] };
     }
   }
   const statuses = Object.values(seen).map((v) => v.status);
-  const agreed = new Set(statuses).size === 1;
+  // Compare the ANSWERS too, not just the rcode. Two resolvers both saying
+  // NOERROR over two DIFFERENT keys is the split that actually breaks mail —
+  // half your recipients verify against a key Google is not signing with — and
+  // an rcode-only comparison calls that agreement.
+  const fingerprints = Object.values(seen).map((v) =>
+    v.answers.map((a) => unquoteTxt(a)).sort().join('|'),
+  );
+  const agreed =
+    new Set(statuses).size === 1 && new Set(fingerprints).size === 1;
   const first = Object.values(seen)[0];
   return {
     status: agreed ? first.status : 'DISAGREE',
     answers: first.answers,
     perResolver: Object.fromEntries(
-      Object.entries(seen).map(([k, v]) => [k, v.status]),
+      Object.entries(seen).map(([k, v]) => [
+        k,
+        v.answers.length > 0 ? `${v.status}(${v.answers.length})` : v.status,
+      ]),
     ),
   };
+}
+
+export async function lookup(name, type = 'TXT') {
+  let got = await lookupOnce(name, type);
+  for (let attempt = 0; got.status === 'DISAGREE' && attempt < DISAGREE_RETRIES; attempt += 1) {
+    await sleep(DISAGREE_PAUSE_MS);
+    got = await lookupOnce(name, type);
+    if (got.status !== 'DISAGREE') got.converged = attempt + 1;
+  }
+  return got;
 }
 
 // A TXT value over 255 bytes arrives as several quoted strings that must be
@@ -187,12 +249,21 @@ async function checkDomain(domain) {
   record(PASS, `${domain} control`, `${CONTROL_SELECTOR} is ${control.status} — absence is real`);
 
   if (dkim.status === 'DISAGREE') {
-    record(FAIL, `${domain} dkim`, `resolvers disagree: ${JSON.stringify(dkim.perResolver)}`);
+    record(
+      FAIL,
+      `${domain} dkim`,
+      `resolvers still disagree after ${DISAGREE_RETRIES} retries: ${JSON.stringify(dkim.perResolver)}`,
+    );
   } else if (dkim.status !== 'NOERROR') {
     record(FAIL, `${domain} dkim`, `google._domainkey is ${dkim.status} — Workspace DKIM not published`);
   } else {
     const verdict = inspectDkim(dkim.answers);
-    record(verdict.ok ? PASS : FAIL, `${domain} dkim`, verdict.note);
+    // Never let a retry be silent: a green that needed one is still green, but
+    // it says the zone was mid-propagation and is worth knowing on a re-run.
+    const converged = dkim.converged
+      ? ` (resolvers converged after ${dkim.converged} retry — stale negative cache)`
+      : '';
+    record(verdict.ok ? PASS : FAIL, `${domain} dkim`, verdict.note + converged);
   }
 
   for (const [label, name, type] of [

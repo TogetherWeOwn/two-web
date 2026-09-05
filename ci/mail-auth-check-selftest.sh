@@ -19,10 +19,14 @@
 #   ./ci/mail-auth-check-selftest.sh          # offline parser tests
 #   ./ci/mail-auth-check-selftest.sh --live   # also hit real third-party keys
 #
-# The offline half needs no network, so CI can run it (see .github/workflows/
-# ci.yml). The --live half queries github/stripe/shopify selectors and is
-# manual, like ci/staging-exposure-check-selftest.sh, because a third party
-# rotating a key must not turn our build red.
+# The offline half needs no network and runs in CI as the "Mail auth self-test"
+# step in .github/workflows/ci.yml. The --live half queries github/stripe/shopify
+# selectors and is manual, like ci/staging-exposure-check-selftest.sh, because a
+# third party rotating a key must not turn our build red.
+#
+# NOTE: this file shipped claiming CI coverage it did not have — the step did not
+# exist until TOG-1154's follow-up. If you move or rename the step, change this
+# line with it; a comment asserting a gate that is not wired is worse than none.
 
 set -euo pipefail
 
@@ -101,6 +105,57 @@ SPLIT_KEY="$(K="$KEY_2048" node --input-type=module -e "
   process.stdout.write('\"v=DKIM1; k=rsa; p=' + k.slice(0, mid) + '\" \"' + k.slice(mid) + '\"');
 ")"
 check "2048-bit key split across TXT strings is rejoined" "$SPLIT_KEY" true 2048
+
+# 7. Resolver agreement and the disagreement retry.
+#
+#    A record that was NXDOMAIN and has just been published leaves the old
+#    negative answer cached, and each resolver expires it on its own schedule.
+#    For a few minutes a CORRECT zone therefore reads as split. On 2026-09-05
+#    that made this script report a hard FAIL over DKIM that was already
+#    published and valid, so the retry exists to absorb exactly that window —
+#    and these cases pin down that it absorbs nothing else.
+#
+#    This cannot be tested against live DNS: a stale cache is transient by
+#    definition and no resolver can be asked for one. So a scripted responder is
+#    substituted for query() and the SHIPPED lookup() is driven through it.
+agree() { # <label> <cloudflare-seq-json> <google-seq-json> <expect-status>
+  local label="$1" cf="$2" g="$3" want="$4" got
+  got="$(CF="$cf" G="$g" MAIL_AUTH_DISAGREE_PAUSE_MS=1 node --input-type=module -e "
+    const m = await import('./ci/mail-auth-check.mjs');
+    const seq = { cloudflare: JSON.parse(process.env.CF), google: JSON.parse(process.env.G) };
+    let calls = 0;
+    m.__setQueryForTest(async (name, type, resolver) => {
+      const s = seq[resolver];
+      return s[Math.min(Math.floor(calls++ / 2), s.length - 1)];
+    });
+    const r = await m.lookup('probe');
+    process.stdout.write(r.status);
+  ")"
+  [ "$got" = "$want" ] || fail "$label: expected $want, got $got"
+  pass "$label — $got"
+}
+
+K_OK="{\"status\":\"NOERROR\",\"answers\":[\"\\\"v=DKIM1; k=rsa; p=${KEY_2048}\\\"\"]}"
+K_OTHER="{\"status\":\"NOERROR\",\"answers\":[\"\\\"v=DKIM1; k=rsa; p=${KEY_1024}\\\"\"]}"
+NX='{"status":"NXDOMAIN","answers":[]}'
+
+#    A split that never heals is a real inconsistency and must still fail.
+agree "persistent resolver split still FAILS" \
+  "[$K_OK]" "[$NX,$NX,$NX]" DISAGREE
+
+#    A split that heals on retry is the just-published case. Must recover.
+agree "transient split (stale negative cache) recovers" \
+  "[$K_OK]" "[$NX,$K_OK]" NOERROR
+
+#    Both NOERROR over DIFFERENT keys: half your recipients verify against a key
+#    Google is not signing with. An rcode-only comparison calls this agreement,
+#    which is why answers are compared too.
+agree "two resolvers, two different keys is caught" \
+  "[$K_OK]" "[$K_OTHER]" DISAGREE
+
+#    A genuine absence must NOT be retried away into something softer.
+agree "genuine NXDOMAIN on both is not retried away" \
+  "[$NX]" "[$NX]" NXDOMAIN
 
 if [ "${1:-}" = "--live" ]; then
   echo
