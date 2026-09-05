@@ -50,14 +50,36 @@ fixture() {
   echo "$dir"
 }
 
+# A content digest of every file a mutation could touch, so "did this mutation do
+# anything at all?" is answerable. Sorted for stability; the value is compared to
+# itself, never to a stored constant, so it needs no pinning.
+fixture_digest() {
+  find "$1" -type f -exec sha256sum {} + | sed "s|$1||" | sort | sha256sum
+}
+
 # expect_fail <slug> <expected substring of the failure> <mutation...>
 # The mutation runs with the fixture as cwd.
 expect_fail() {
   local slug="$1" expected="$2"; shift 2
-  local dir out status
+  local dir out status before after
   n=$((n + 1))
   dir="$(fixture "$slug")"
+  before="$(fixture_digest "$dir")"
   ( cd "$dir" && "$@" ) || { fail "$slug: the mutation itself failed to apply"; rc=1; return; }
+  after="$(fixture_digest "$dir")"
+  # A mutation that changed nothing is not a passing case, it is an absent one.
+  # `sed` exits 0 when its pattern matches no line, so a case pinned to a literal
+  # keeps reporting PASS after a refactor renames that literal — the lint is then
+  # being handed a pristine file and correctly says nothing is wrong. That is how
+  # `budget-relaxed` and `budget-aggregation-removed` went vacuous when the LCP
+  # threshold moved behind `buildAssertions(...)` (TOG-54). Compare the fixture
+  # before and after so the no-op is a failure here, where it is legible, rather
+  # than years later as coverage nobody knew had stopped.
+  if [ "$before" = "$after" ]; then
+    fail "$slug: the mutation changed nothing — the case is vacuous, not passing"
+    rc=1
+    return
+  fi
   out="$( cd "$dir" && ./ci/verify-pipeline.sh --lint 2>&1 )"
   status=$?
 
@@ -80,10 +102,17 @@ expect_fail() {
 # Still exit 0 — a warning is not a gate, it is a tripwire.
 expect_warn() {
   local slug="$1" expected="$2"; shift 2
-  local dir out status
+  local dir out status before after
   n=$((n + 1))
   dir="$(fixture "$slug")"
+  before="$(fixture_digest "$dir")"
   ( cd "$dir" && "$@" ) || { fail "$slug: the mutation itself failed to apply"; rc=1; return; }
+  after="$(fixture_digest "$dir")"
+  if [ "$before" = "$after" ]; then
+    fail "$slug: the mutation changed nothing — the case is vacuous, not passing"
+    rc=1
+    return
+  fi
   out="$( cd "$dir" && ./ci/verify-pipeline.sh --lint 2>&1 )"
   status=$?
 
@@ -187,8 +216,15 @@ expect_fail dusk-stops-building 'job `dusk` no longer runs `npm run build`' \
 # A threshold nudged upwards until the build goes green. ci/lighthouserc.cjs asks
 # people in prose not to do this and, until TWO-93, nothing checked. The number is
 # the CEO's; moving it is a decision made in writing, not a line in a feature PR.
+#
+# Addressed to `buildAssertions(2000)` rather than to `maxNumericValue: 2000`,
+# which is where the public LCP budget now lives: TOG-54 split the thresholds into
+# an assertMatrix and made the number an argument, so the old literal stopped
+# existing and this mutation quietly became a no-op against a pristine file. The
+# vacuity guard in expect_fail is what turned that into a red instead of a
+# permanent green.
 expect_fail budget-relaxed 'budget `largest-contentful-paint`' \
-  sed -i 's/maxNumericValue: 2000/maxNumericValue: 4000/' ci/lighthouserc.cjs
+  sed -i 's/buildAssertions(2000)/buildAssertions(4000)/' ci/lighthouserc.cjs
 
 # The TTFB gate deleted. Nothing else in the pipeline notices a slow server: under
 # `throttlingMethod: 'simulate'` a three-second document response is medianed away
@@ -213,8 +249,13 @@ expect_fail budget-aggregation-swapped 'budget `server-response-time` is not ass
 # it is best-of-3 by another route. This used to be caught by luck — the old grep
 # needed a trailing comma and `{ maxNumericValue: 2000 }` has none. Now it is
 # caught on purpose, and this case is what keeps it that way.
+#
+# Since TOG-54 the LCP assertion is built from `lcpBudgetMs`, so the deletion is
+# addressed to that line rather than to a literal 2000 that no longer appears.
+# One `sed`, and both the public and the /admin budget lose their median — which
+# is the honest blast radius of removing it from a shared builder.
 expect_fail budget-aggregation-removed 'budget `largest-contentful-paint` is not asserted' \
-  sed -i "s/{ maxNumericValue: 2000, aggregationMethod: 'median' }/{ maxNumericValue: 2000 }/" ci/lighthouserc.cjs
+  sed -i "s/{ maxNumericValue: lcpBudgetMs, aggregationMethod: 'median' }/{ maxNumericValue: lcpBudgetMs }/" ci/lighthouserc.cjs
 
 # A second entry appended for an audit that already has one. The pinned line is
 # left exactly as it was — and a JavaScript object literal keeps the *last*

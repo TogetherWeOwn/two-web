@@ -12,6 +12,8 @@ use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Support\Str;
+use Spatie\Activitylog\LogOptions;
+use Spatie\Activitylog\Traits\LogsActivity;
 
 /**
  * @property int $id
@@ -32,6 +34,25 @@ class Event extends Model
 {
     /** @use HasFactory<EventFactory> */
     use HasFactory;
+
+    use LogsActivity;
+
+    /**
+     * The audit trail TOG-54 asks for: who changed what, when — including
+     * changes made outside the panel, since the trait hangs off model events.
+     * Only dirty attributes are stored; a save that changed nothing writes no
+     * row. `discord_event_id` is excluded because the bot writes it, not a
+     * person, and a trail of bot bookkeeping buries the moderator actions the
+     * log exists to make reviewable.
+     */
+    public function getActivitylogOptions(): LogOptions
+    {
+        return LogOptions::defaults()
+            ->logFillable()
+            ->logExcept(['discord_event_id'])
+            ->logOnlyDirty()
+            ->dontSubmitEmptyLogs();
+    }
 
     /**
      * `event_key` is deliberately absent: it is generated on create and refused on
