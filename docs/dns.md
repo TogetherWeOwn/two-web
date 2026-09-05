@@ -51,7 +51,7 @@ curl -s -H 'accept: application/dns-json' 'https://cloudflare-dns.com/dns-query?
 | `www.togetherweown.com` | Same origin, same challenge — no redirect to the apex | Fix at cutover |
 | `togetherweown.com/discord` | **302 into a live Discord OAuth join flow.** The only working web→Discord path we have | **Must survive. See below** |
 | `togetherweown.com/join` | 301 → `/join/` → **HTTP 200, titled "Page Not Found", `<meta name="robots" content="follow, noindex">`** — a soft 404 | No `/join` *page*; a 301 to `/discord` — see below |
-| `staging.togetherweown.com` | **Already resolves**, proxied — but **no longer serves the apex page**. WordPress.com now answers `403 Error: Active domain connection for this domain not found` (re-measured 25 August 2026, TOG-427) | Repoint + grey cloud |
+| `staging.togetherweown.com` | **Already resolves**, proxied — but **no longer serves the apex page**. WordPress.com answers `403 Error: Active domain connection for this domain not found` (re-measured 5 September 2026, TOG-1156). That 403 is **upstream breakage, not a control we own** | **Delete the record** — see below |
 | `two.gg`, `www.two.gg` | **302**, path-preserving, to `https://togetherweown.com/<path>` | Make it 301 |
 | `two.gg/discord` | **301** to `togetherweown.com/discord/` — already correct | Leave it, retarget at cutover |
 | `two.gg/join` | 302 → the apex soft 404. Sends real people to a dead page | Point it at `/discord` |
@@ -204,29 +204,59 @@ not TOG-80.
 `<PROD_IP>` and `<STAGING_IP>` come out of the hosting decision in **TWO-37**. They
 may be the same box to start with. Everything else below is final.
 
-### Staging — one record, blocked only on the IP
+### Staging — delete the record now, recreate it the day something runs there
+
+**Decision, TOG-1156, 5 September 2026: `staging` should not exist today, so the
+record goes away rather than getting a password put in front of it.**
+
+| Type | Name | Value | Cloudflare | TTL |
+|---|---|---|---|---|
+| — | `staging` | **DELETE the existing `A`/`AAAA` record** | — | — |
+
+Recreate it, as the row below, on the day TWO-37 lands an IP and something is
+actually deployed behind it — not before.
 
 | Type | Name | Value | Cloudflare | TTL |
 |---|---|---|---|---|
 | `A` | `staging` | `<STAGING_IP>` | ⚪ **DNS only (grey cloud)** | Auto |
 
-**This is a repoint of an existing record, not a create.** `staging` resolves today
-to the same Cloudflare IPs as the apex. Until the record moves, do not hand the
-staging URL to QA or the Designer — and do not read a response from it as evidence
-about our app.
+**Why delete instead of adding basic auth.** TOG-59 asks for staging "noindex and
+behind basic auth". Basic auth is a control that lives in nginx on an origin box.
+**There is no origin box.** `FORGE_STAGING_DEPLOY_HOOK` is unset, `STAGING_URL` is
+unset, `.github/workflows/deploy.yml` no-ops (TOG-13, TOG-104), and no two-web
+deployment has ever existed behind this name. So "put basic auth on staging" is not
+a small task being deferred — it is **unimplementable until the box exists**, and
+leaving the name published while we wait is the exposure. Deleting the record is
+one edit, needs no origin, no password to store or rotate, and no certificate. It
+is strictly stronger than auth: a name that does not resolve cannot be indexed,
+cannot be probed, and cannot leak a header. The auth requirement returns with the
+box, in the same nginx config that gets written on day one.
 
-**As of 25 August 2026 it serves nothing at all.** It used to return the WordPress
-page; it now returns WordPress.com's `403 Error: Active domain connection for this
-domain not found`, so the hostname's connection there has lapsed. Reproduce it with
-the browser-UA header from the top of this page — a plain `curl` gets Cloudflare's
-challenge instead and tells you nothing. Two consequences worth having in writing:
+**What it is walled off by today, and why that is not good enough.** It answers
+`403 Error: Active domain connection for this domain not found` — WordPress.com's
+error for a hostname whose connection there has lapsed, identifiable by the `x-ac`
+and `a8c-cdn` origin headers. **That is not a control we own.** It satisfies "never
+appears in a search result" by accident, and it stops the moment anyone repairs
+that connection, from a dashboard we do not watch, with no notice to us. Do not
+read it as the requirement being met.
 
-- **Nothing of value is being served there,** so the repoint breaks nothing. That is
-  a small piece of good news for whoever finally does it.
+Reproduce it with the browser-UA header from the top of this page — a plain `curl`
+gets Cloudflare's challenge instead and tells you nothing. Or run the check, which
+encodes the distinction between "walled off by us" and "broken upstream" so nobody
+has to re-derive it:
+
+```
+node ci/staging-exposure-check.mjs
+```
+
+Exit 0 means walled off by a control we own, or gone. Exit 1 means exposed **or**
+safe only by accident. It exits 0 the moment the record is deleted.
+
+Two more consequences worth having in writing:
+
+- **Nothing of value is being served there,** so deleting the record breaks nothing.
 - **A `403` from `staging` is not our app failing.** It is the absence of our app.
-  There is no two-web deployment behind this name and there never has been —
-  `.github/workflows/deploy.yml` still no-ops on an unset `FORGE_STAGING_DEPLOY_HOOK`
-  (TOG-13, TOG-104). Anyone asked to "check it on staging" should stop here.
+  Anyone asked to "check it on staging" should stop here.
 
 **Grey cloud is deliberate, and we now have evidence.** A plain `curl` to the apex
 today comes back `403` with `cf-mitigated: challenge`. QA's Dusk suite is headless
@@ -501,7 +531,8 @@ anything:
 |---|---|---|
 | `two.gg` SPF / DMARC / DKIM TXT records | **Us, with the token** | DNS records |
 | `_dmarc.togetherweown.com` → add `rua` | **Us, with the token** | DNS record |
-| `staging` `A` record repoint | **Us, with the token** | DNS record, once TWO-37 lands an IP |
+| `staging` `A`/`AAAA` record **delete** | **Us, with the token** | DNS record, now — TOG-1156, does not wait on TWO-37 |
+| `staging` `A` record recreate | **Us, with the token** | DNS record, once TWO-37 lands an IP |
 | `two.gg` catch-all 302 → 301 | **Founder, in Cloudflare → Rules** | Redirect Rule, not DNS |
 | `two.gg/join` → `/discord` retarget | **Founder, in Cloudflare → Rules** | Redirect Rule, not DNS |
 | Apex `A` record | **Nobody, until TWO-61** | See the standing rule below |
