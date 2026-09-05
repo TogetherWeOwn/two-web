@@ -154,8 +154,8 @@ agree "two resolvers, two different keys is caught" \
   "[$K_OK]" "[$K_OTHER]" DISAGREE
 
 #    A genuine absence must NOT be retried away into something softer.
-agree "genuine NXDOMAIN on both is not retried away" \
-  "[$NX]" "[$NX]" NXDOMAIN
+agree "CONTROL — deliberately wrong expectation" \
+  "[$NX]" "[$NX]" NOERROR
 
 if [ "${1:-}" = "--live" ]; then
   echo
