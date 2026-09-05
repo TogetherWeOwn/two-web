@@ -79,10 +79,18 @@ test('a moderator publishes featured content and a signed-out visitor sees it', 
 
         $browser->loginAs($moderator)
             ->visit("/admin/featured-contents/{$row->getKey()}/edit")
-            ->waitForText('Launch night is Friday')
-            // Filament renders the boolean as a toggle button carrying the field
-            // label, not a bare checkbox, so the label is the stable handle.
-            ->click('label[for="data.is_published"]')
+            // Waited for, not asserted: the form is Livewire, so the field is
+            // empty for a beat after the document arrives. And waited for by
+            // *value* — the title on an edit form is the contents of an input,
+            // which `waitForText` will never match because it reads text nodes.
+            ->waitUsing(10, 100, fn (): bool => $browser->value('#form\\.title') === 'Launch night is Friday')
+            // Filament renders the boolean as a button with role="switch", not a
+            // checkbox, so `check()` has nothing to tick. Note the id is
+            // `form.is_published`, not `data.is_published` — the wire:model is
+            // the latter but the DOM id is the former, and clicking a selector
+            // that matches nothing is a silent no-op that surfaces much later as
+            // "the visitor never saw the row".
+            ->click('#form\\.is_published')
             ->press('Save changes')
             ->waitForText('Saved');
 
@@ -93,4 +101,4 @@ test('a moderator publishes featured content and a signed-out visitor sees it', 
             ->assertSee('Launch night is Friday')
             ->assertSee('Doors open at seven.');
     });
-})->skip(fn (): bool => ! extension_loaded('intl'), 'Filament forms need ext-intl; present in CI, absent in the local sandbox PHP');
+});

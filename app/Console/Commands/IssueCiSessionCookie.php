@@ -2,7 +2,7 @@
 
 namespace App\Console\Commands;
 
-use Database\Factories\UserFactory;
+use App\Models\User;
 use Illuminate\Console\Command;
 use Illuminate\Cookie\CookieValuePrefix;
 use Illuminate\Support\Facades\Auth;
@@ -47,13 +47,17 @@ class IssueCiSessionCookie extends Command
             return self::FAILURE;
         }
 
-        $factory = UserFactory::new();
-
-        if ($this->option('moderator')) {
-            $factory = $factory->moderator();
-        }
-
-        $user = $factory->createOne();
+        // Built by hand rather than with UserFactory, which is not a style choice:
+        // the budgets job installs --no-dev to measure what production serves, and
+        // fakerphp/faker is a dev dependency. A factory here loads fine in every
+        // local run and dies in the only job that actually calls this command.
+        $user = User::create([
+            'discord_id' => (string) random_int(100000000000000000, 999999999999999999),
+            'username' => 'ci-'.Str::lower(Str::random(12)),
+            'display_name' => 'CI Budget Probe',
+            'is_moderator' => $this->option('moderator'),
+            'discord_synced_at' => now(),
+        ]);
 
         // Build a real session record through the configured driver rather than
         // faking a row, so this keeps working if the driver changes. And log in
