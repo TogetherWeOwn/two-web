@@ -120,6 +120,17 @@ jobs:
       - name: Budget verdict self-test
         run: ./ci/lh-annotate-selftest.sh
 
+      # The mail-auth parser and its resolver-agreement logic (TOG-1154). Offline
+      # only: the fixtures are generated keys and a scripted resolver, so there is
+      # no network and a third party rotating a selector cannot turn us red — the
+      # live third-party fixtures sit behind `--live` and stay manual.
+      # Worth gating on because both defects this catches were silent. A 1024-bit
+      # key and a revoked `p=` both publish clean and pass any check that only asks
+      # whether the record answers; and comparing resolvers on rcode alone called
+      # two DIFFERENT published keys "agreement".
+      - name: Mail auth self-test
+        run: ./ci/mail-auth-check-selftest.sh
+
       - uses: shivammathur/setup-php@v2
         with:
           php-version: ${{ env.PHP_VERSION }}
