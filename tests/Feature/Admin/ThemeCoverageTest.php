@@ -32,7 +32,19 @@ use App\Filament\Resources\Events\Pages\ListEvents;
 use App\Filament\Resources\FeaturedContents\FeaturedContentResource;
 use App\Filament\Resources\FeaturedContents\Pages\CreateFeaturedContent;
 use App\Filament\Resources\FeaturedContents\Pages\ListFeaturedContents;
+use Filament\Actions\Action;
+use Filament\Actions\DeleteAction;
+use Filament\Actions\EditAction;
+use Filament\Forms\Components\DateTimePicker;
+use Filament\Forms\Components\Select;
+use Filament\Forms\Components\Textarea;
+use Filament\Forms\Components\TextInput;
+use Filament\Forms\Components\Toggle;
 use Filament\Schemas\Schema;
+use Filament\Tables\Columns\IconColumn;
+use Filament\Tables\Columns\TextColumn;
+use Filament\Tables\Filters\SelectFilter;
+use Filament\Tables\Filters\TernaryFilter;
 use Filament\Tables\Table;
 use Livewire\Livewire;
 
@@ -99,26 +111,26 @@ function componentStylesheetMap(): array
 {
     return [
         // Form fields: one file each under filament/forms.
-        \Filament\Forms\Components\DateTimePicker::class => 'forms/resources/css/components/date-time-picker.css',
-        \Filament\Forms\Components\Select::class => 'forms/resources/css/components/select.css',
-        \Filament\Forms\Components\TextInput::class => 'forms/resources/css/components/text-input.css',
-        \Filament\Forms\Components\Textarea::class => 'forms/resources/css/components/textarea.css',
+        DateTimePicker::class => 'forms/resources/css/components/date-time-picker.css',
+        Select::class => 'forms/resources/css/components/select.css',
+        TextInput::class => 'forms/resources/css/components/text-input.css',
+        Textarea::class => 'forms/resources/css/components/textarea.css',
         // Toggle's own rules live in support, next to the other input primitives.
-        \Filament\Forms\Components\Toggle::class => 'support/resources/css/components/toggle.css',
+        Toggle::class => 'support/resources/css/components/toggle.css',
 
         // Table columns.
-        \Filament\Tables\Columns\IconColumn::class => 'tables/resources/css/columns/icon.css',
-        \Filament\Tables\Columns\TextColumn::class => 'tables/resources/css/columns/text.css',
+        IconColumn::class => 'tables/resources/css/columns/icon.css',
+        TextColumn::class => 'tables/resources/css/columns/text.css',
 
         // Row actions, including their confirmation modals.
-        \Filament\Actions\Action::class => 'actions/resources/css/actions.css',
-        \Filament\Actions\DeleteAction::class => 'actions/resources/css/actions.css',
-        \Filament\Actions\EditAction::class => 'actions/resources/css/actions.css',
+        Action::class => 'actions/resources/css/actions.css',
+        DeleteAction::class => 'actions/resources/css/actions.css',
+        EditAction::class => 'actions/resources/css/actions.css',
 
         // Filters render inside the tables container dropdown; they have no
         // stylesheet of their own.
-        \Filament\Tables\Filters\SelectFilter::class => null,
-        \Filament\Tables\Filters\TernaryFilter::class => null,
+        SelectFilter::class => null,
+        TernaryFilter::class => null,
     ];
 }
 
