@@ -217,6 +217,20 @@ function readSeo(html) {
   };
 }
 
+// Which WordPress object actually got rendered, read off the body class WordPress
+// writes on every front-end response. This is the difference between "each page has
+// a bad setting" and "no page is being rendered at all", and nothing in the <head>
+// can tell those apart — see the `pages-render-their-own-content` check for why that
+// distinction decides who fixes this and how.
+function readTemplate(html) {
+  const cls = grab(html, /<body[^>]*\bclass="([^"]*)"/i) || '';
+  const id = cls.match(/\bpostid-(\d+)\b/);
+  return {
+    templateId: id ? id[1] : null,
+    isBricksTemplate: /\bsingle-bricks_template\b/.test(cls),
+  };
+}
+
 // "index" is the default, so absence of a robots meta is indexable, and so is
 // anything that does not say noindex. Rank Math writes both orders — `index,
 // follow` and `follow, noindex` — so match the token, not the string.
@@ -297,6 +311,32 @@ function selftest() {
     // perfectly ordinary "max-image-preview" family as a noindex and silently
     // stop reporting indexable pages.
     ['"index, follow, max-snippet:-1" is indexable', isIndexable('index, follow, max-snippet:-1, max-image-preview:large'), true],
+
+    // readTemplate decides the `pages-render-their-own-content` verdict, and its
+    // failure mode is silent in exactly the way that matters: if the body-class
+    // regex stops matching, every page reads "not a template" and the check goes
+    // green on a site that is 100% hijacked. The first case is the real class
+    // string measured off /shop/ on 2026-09-05.
+    [
+      'the live hijacked body class is recognised',
+      readTemplate(
+        '<body  class="wp-singular bricks_template-template-default single ' +
+          'single-bricks_template postid-21 wp-theme-bricks brx-body">'
+      ).isBricksTemplate,
+      true,
+    ],
+    [
+      'the hijacking template id is read off the body class',
+      readTemplate('<body class="single-bricks_template postid-21">').templateId,
+      '21',
+    ],
+    [
+      'an ordinary page is not a bricks template',
+      readTemplate('<body class="page-template-default page page-id-12">').isBricksTemplate,
+      false,
+    ],
+    ['a body with no class is not a bricks template', readTemplate('<body>').isBricksTemplate, false],
+    ['no postid means no template id', readTemplate('<body class="page">').templateId, null],
   ];
 
   let bad = 0;
@@ -314,13 +354,14 @@ function main() {
   const probe = (path, tag) => {
     const r = chase(path.startsWith('http') ? path : `${ORIGIN}${path}`);
     const seo = r.body ? readSeo(r.body) : {};
+    const tpl = r.body ? readTemplate(r.body) : {};
     // Keep the query string in the label. The sitemap advertises `/?mailpoet_page=
     // subscriptions` and `/?mailpoet_page=captcha` alongside `/`, and stripping the
     // query renders three different pages as three identical rows reading `/`.
     const label = path.startsWith('http')
       ? new URL(path).pathname + new URL(path).search
       : path;
-    const row = { tag, path: label, ...r, ...seo };
+    const row = { tag, path: label, ...r, ...seo, ...tpl };
     delete row.body;
     measured.push(row);
     return row;
@@ -413,9 +454,47 @@ function main() {
       : 'every advertised page unfurls as itself'
   );
 
+  // -- 4b ------------------------------------------------------------------
+  // The cause of checks 3 and 4, and the reason neither is a Rank Math bug.
+  //
+  // Bricks "Coming Soon" mode replaces the response body of every front-end URL
+  // with one template — `/template/coming-soon/`, post 21 — via `template_include`.
+  // WordPress still resolves the right post first, so `<title>` is per-page and
+  // looks correct, but Rank Math then reads its canonical and og:url off the
+  // *rendered* object and honestly reports post 21. Measured 2026-09-05: every URL
+  // on this host, including `/robots.txt` and `/feed/`, renders `postid-21`.
+  //
+  // Two independent controls prove the settings themselves are fine, so nobody
+  // re-derives this by editing Rank Math:
+  //   - core WordPress's oEmbed link on /sample-page/ and /2026/08/01/hello-world/
+  //     emits those pages' own URLs on the same response whose canonical says 21;
+  //   - /page-sitemap.xml and /wp-json (which never reach template_include) list
+  //     every real page at its real URL.
+  // So there is no per-page setting to correct. Turning the mode off (TOG-1159)
+  // is the fix, and this check is what proves it worked.
+  const hijacked = measured.filter(
+    (r) => r.tag === 'sitemap' && r.status === 200 && r.isBricksTemplate
+  );
+  const ids = [...new Set(hijacked.map((r) => r.templateId))];
+  check(
+    'pages-render-their-own-content',
+    hijacked.length === 0,
+    hijacked.length
+      ? `${hijacked.length} advertised page(s) render Bricks template postid-${ids.join('/')} ` +
+        'instead of themselves — Coming Soon mode is intercepting every URL (TOG-1159). ' +
+        'The canonical/og:url failures above are a symptom of this, not a Rank Math setting.'
+      : 'every advertised page renders its own content, not a Bricks template'
+  );
+
   // -- 5 -------------------------------------------------------------------
   // robots.txt has to be a text file at exactly that path. A redirect to an HTML
   // page means there is no robots.txt, which means the sitemap is never announced.
+  //
+  // Note the shape of the failure here, because it names the same cause: the 301 to
+  // `/robots.txt/` is WordPress's trailing-slash canonical redirect treating the
+  // path as a page, and what comes back is postid-21 again. WordPress serves
+  // robots.txt from a rewrite rule, not a file, so there is nothing to upload — it
+  // is the same interception, and it clears with the same flip.
   const robotsOk =
     robotsTxt.status === 200 &&
     robotsTxt.chain.length === 0 &&
