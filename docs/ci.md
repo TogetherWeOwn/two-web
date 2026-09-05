@@ -294,24 +294,52 @@ QA does not block on style preference. Only on the six boxes, and always by numb
 
 ## Deploys
 
-`.github/workflows/deploy.yml`, designed against the hosting decision in TWO-37.
+`.github/workflows/deploy.yml`. The deploy layer is **Coolify, self-hosted** (owner
+decision, 2026-08-31 — TOG-780), which supersedes Forge (TOG-407 closed).
 
 - **CI green on `main` → staging deploys automatically.** That is box 5, done for
   you.
 - **This workflow deploys staging only.** Production is not in CI at all — see
   below. `workflow_dispatch` re-runs staging and takes no environment argument.
 - **GitHub Actions never SSHes into a server.** No deploy key lives in CI. A deploy
-  is one authenticated POST to a Forge webhook; Forge pulls on the box, migrates,
-  and swaps the symlink. That constraint is the Web Lead's and it is a good one.
-- The job **skips cleanly, green, when its secret is unset.** Nothing is
-  provisioned yet. A missing deploy target must never look like a broken build —
-  that is how a team learns to ignore a red X.
+  is one authenticated POST to a deploy webhook; the panel pulls on the box,
+  migrates, and swaps the release. That constraint is the Web Lead's and it is a
+  good one — it is why changing hosts from Forge to Coolify altered the name of a
+  secret and nothing else about this file.
+- **The job fails when it has no deploy target.** `staging` is red today, on every
+  push to `main`, and stays red until Coolify is provisioned. That is expected, and
+  it is not a broken build.
 
-Secrets and variables to add once TWO-37 is approved and provisioned:
+> #### `staging` is red on purpose, and it used to be the other way round
+>
+> Until TOG-913 this job did the opposite: with no secret set it skipped every step
+> and **exited green in about three seconds having deployed nothing**. The reasoning
+> was written down and was not silly — *"a missing deploy target must never look like
+> a broken build; that is how a team learns to ignore a red X"* — but it was a bet
+> that the target would arrive soon, and it did not.
+>
+> On TOG-48 an agent read that green `staging` check as "it shipped" and told the
+> owner the landing page was live on staging. Nothing had been deployed. The agent
+> was wrong and CI had told them so, which makes it a CI defect rather than an agent
+> one: **a control that reports success for work it did not do keeps producing false
+> claims regardless of who is on shift.**
+>
+> It was also unfixable by waiting, because `FORGE_STAGING_DEPLOY_HOOK` was a Forge
+> secret and Forge is gone. It would have skipped, silently, reporting success,
+> forever.
+>
+> So green now means *deployed, and answering*. Do not re-add a skip-and-pass guard.
+> `ci/deploy-target-selftest.sh` runs in `static` and fails the pull request that
+> tries — both by executing the guard with no target and by rejecting any step in
+> `deploy.yml` gated on a secret or variable being set.
+
+Secrets and variables to add once Coolify is provisioned (TOG-780). **Both** are
+required: a hook without a URL is refused, because a deploy that cannot be
+health-checked is the same false green in a smaller box.
 
 | Name | Kind | Value |
 |---|---|---|
-| `FORGE_STAGING_DEPLOY_HOOK` | secret | Forge staging deploy webhook URL |
+| `COOLIFY_STAGING_DEPLOY_HOOK` | secret | Coolify staging deploy webhook URL, token included |
 | `STAGING_URL` | variable | e.g. `https://staging.togetherweown.com` |
 
 Do not add a production deploy hook as a repo secret. Nothing reads it, and the
@@ -319,8 +347,9 @@ staging job logs a warning if one appears.
 
 ### What goes in the staging box's own `.env`
 
-Not in GitHub. Forge holds the environment file on the server, and these are read
-by the application at runtime, so putting them in the table above does nothing.
+Not in GitHub. The hosting panel holds the environment file on the server, and these
+are read by the application at runtime, so putting them in the table above does
+nothing.
 
 | Variable | Value on staging | If it is missed |
 |---|---|---|
@@ -347,9 +376,9 @@ real box — check that on the box.
 reads of member data must be logged first). That is a condition of the security
 ruling, not a preference.
 
-A 200 from Forge means the deploy was *queued*, not that it is live, so the job
-then polls `/up` until the new release answers. Ten minutes of silence is a failure
-and the previous release is one click away in Forge.
+A 200 from Coolify means the deploy was *queued*, not that it is live, so the job
+then polls `/up` until the new release answers. Ten minutes of silence is a failure,
+and the previous release is one rollback away in the Coolify dashboard.
 
 ### Production deploys are manual, in the hosting dashboard
 
@@ -389,7 +418,7 @@ A pipeline nobody has watched fail is a pipeline nobody knows works.
 ```bash
 ./ci/verify-pipeline.sh --lint             # offline, half a second, no gh — runs in `static`
 ./ci/verify-lint-selftest.sh               # proves --lint still catches things — runs in `static`
-./ci/verify-pipeline.sh --assert-selftest  # proves --run's assertions, and its cleanup, say what they claim
+./ci/verify-pipeline.sh --assert-selftest  # proves --run's assertions, and its cleanup, say what they claim — runs in `static`
 ./ci/verify-run-preconditions-selftest.sh  # proves --run still refuses, and --cleanup still clears — runs in `static`
 ./ci/verify-pipeline.sh                    # dry run — prints what it would do
 cd "$(./ci/scratch-clone.sh)"              # --run needs a checkout of its own — see below
@@ -434,6 +463,16 @@ The third runs `--assert-selftest`, which feeds recorded check conclusions throu
 assertions `--run` makes and checks each is accepted or rejected as intended. Those
 assertions otherwise execute only during a live run, which is how a wrong one survived
 review and cost forty minutes of runner time to find (TWO-94).
+
+`static` also runs `--assert-selftest` directly, as its own step, immediately after
+this one (TOG-8). That is deliberately a second route to the same 29 cases — 17
+assertion, 9 wait, 3 cleanup — and neither is redundant in the way that word usually
+means. This case reaches them through a fixture copy, which is what proves the lint
+and the acceptance script agree about the file on disk; the named step reaches the
+working tree directly, and states the dependency somewhere a reader of `ci.yml` can
+see it. Before TOG-8 the coverage existed only here, hanging off one line inside a
+case about *linting*, where nothing recorded that deleting it would silently retire
+every test of `--run`.
 
 `--assert-selftest` covers cleanup for the same reason, with `gh` and `git` shadowed
 so the real function runs against synthetic responses. Cleanup had the identical
@@ -563,7 +602,59 @@ that pull request and names the file — re-split it, do not allowlist it.
 What that trade costs, said plainly: this case does not prove `useDefault = true` is
 still on. One check-run conclusion is one bit, so a pull request that trips both rule
 sources cannot say which one fired, and the repo-specific rules are the half with no
-other coverage anywhere. That gap is real and is not covered by anything today.
+other coverage anywhere. The trade stands; the other half is covered offline instead,
+by check 11 below.
+
+### That the scan is still looking for more than three things
+
+`.gitleaks.toml` opens with `[extend] useDefault = true`, and that one line is what
+keeps every provider pattern gitleaks maintains — AWS, GCP, Stripe, GitHub PATs,
+private keys — switched on here. Delete it and the scan falls back to our three
+hand-written Discord rules and nothing else, with every job in the pipeline green
+while it happens. The live `secret` case above cannot see this, by design, so
+`--lint` check 11 reads the config directly (TOG-297). It asserts four things:
+
+- `[extend] useDefault` resolves to the boolean `true`;
+- `discord-bot-token`, `discord-mfa-token` and `discord-webhook` are still defined —
+  the stock rule set has no Discord pattern of its own, so deleting one of those
+  blocks removes the only thing anywhere looking for that value;
+- `[extend] disabledRules` is empty. It subtracts from the set being extended, so
+  every entry is one provider pattern carved back out of `useDefault = true` while
+  that line goes on reading correctly;
+- nothing in `[allowlist] regexes` or `paths` matches the empty string. A pattern
+  that matches inside the empty string matches inside every string, so one bare `.*`
+  there is an off switch for the entire scan.
+
+It **parses the file with a TOML parser** rather than matching its text, for the same
+reason check 10 loads `lighthouserc.cjs` through node. Three of these leave
+`useDefault = true` in the file word for word, and all were measured against the
+pinned gitleaks 8.30.1 on a repository holding an AWS key pair and a real-shaped
+Discord bot token — three findings on the real config:
+
+| edit | findings left |
+|---|---|
+| *(unmodified control)* | `aws-access-token`, `generic-api-key`, `discord-bot-token` |
+| `useDefault` line deleted | `discord-bot-token` |
+| a `[[rules]]` stanza inserted **above** the line, re-homing the key | `discord-bot-token` |
+| `useDefault = "false"` — a string, loads clean, exits 0 | `discord-bot-token` |
+| `disabledRules = ['aws-access-token']` | `generic-api-key`, `discord-bot-token` |
+| `discord-bot-token` rule block deleted | `aws-access-token`, `generic-api-key` |
+| `regexes` or `paths` gains a bare `.*` | **nothing at all** |
+
+Only the first of those is visible to a grep for the line.
+
+One thing worth writing down because the obvious guess is wrong: `disabledRules`
+reaches the **default** rules only. An entry naming our own `discord-bot-token` does
+nothing — the rule goes on firing — which is also why a self-test case built on that
+would have gone red while the scan it claimed to protect was unharmed. Measured, not
+assumed. If a stock rule genuinely false-positives on this repository, as
+`discord-client-id` does on public snowflakes, allowlist the specific value rather
+than disabling the pattern.
+
+`--lint` also goes red if `.gitleaks.toml` is missing, if it cannot be parsed as
+TOML, or if `python3` is not on `PATH` — a config that cannot be read is not being
+enforced, same rule as the budgets. `tomllib` has been in the standard library since
+3.11 and `ubuntu-24.04` ships 3.12, so this needs no install step in `static`.
 
 Until this case existed, `gitleaks` was the one required check with no live proof it
 fails — a check nobody had watched work, guarding the one kind of breakage a revert

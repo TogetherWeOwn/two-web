@@ -514,6 +514,176 @@ lint() {
     fi
   fi
 
+  # 11. The secret scan is still scanning for more than three things.
+  #
+  #    `.gitleaks.toml` opens with `[extend] useDefault = true`. That one line is
+  #    what keeps every provider pattern gitleaks maintains — AWS, GCP, Stripe,
+  #    GitHub PATs, private keys — switched on for this repo. Delete it and the
+  #    scan falls back to our three hand-written Discord rules and nothing else,
+  #    and every job in the pipeline stays green while it happens.
+  #
+  #    Nothing live covers this and nothing live can. The `secret` case in `--run`
+  #    commits a value shaped to match our own `discord-bot-token` rule precisely
+  #    so that a config which stopped being read is caught (docs/ci.md, "Which
+  #    required check stops a committed credential"). A check-run conclusion is
+  #    one bit, so a case that tripped both rule sources could not say which one
+  #    fired, and the repo-specific rules are the half with no other coverage
+  #    anywhere. That trade is written down and it is the right one; it just
+  #    leaves this half uncovered, which is what this check is for (TOG-297).
+  #
+  #    Read through a TOML parser rather than grepped, for the same reason check
+  #    10 loads lighthouserc.cjs through node: matching text is guessing. All
+  #    four of these leave `useDefault = true` in the file word for word and were
+  #    run against the pinned gitleaks 8.30.1 —
+  #
+  #        [allowlist]              # the line intact, the table above it changed:
+  #        useDefault = true        # it now sets allowlist.useDefault. DEFAULTS OFF.
+  #
+  #        useDefault = "false"     # a string. Loads clean, defaults OFF, exit 0.
+  #        useDefault = "yes"       # a string. Config fails to load entirely.
+  #        disabledRules = ['aws-access-token', 'discord-bot-token']
+  #
+  #    — the first because a stanza inserted above it re-homes the key without
+  #    touching it, the middle two because TOML types are not shell truthiness,
+  #    and the last because `[extend]` has a second field that turns rules off by
+  #    name, ours included, with `useDefault` still reading `true`. Measured: a
+  #    repository with an AWS key pair and a real-shaped Discord bot token reports
+  #    4 findings on the real config, 2 with the stanza inserted, 0 with the
+  #    string, and 1 with the two rules disabled. Only the first of those four is
+  #    visible to a grep for the line.
+  #
+  #    The allowlist bullet is not a nicety either. `regexes` is matched against
+  #    every candidate finding, so one bare `.*` there is an off switch for the
+  #    whole scan — the same 4-finding repository reports 0, `discord-bot-token`
+  #    included. `paths` does it too. The entries in the file are narrow on
+  #    purpose and say so in prose; this is what makes that prose a rule.
+  local gitleaks_file="./.gitleaks.toml"
+  if [ ! -f "$gitleaks_file" ]; then
+    fail "${gitleaks_file} not found. Without it the \`gitleaks\` job scans with the stock rule set alone: no \`discord-bot-token\`, and the bot token is the one credential this repository must never hold (.gitleaks.toml's own header)."
+    rc=1
+  elif ! command -v python3 >/dev/null 2>&1; then
+    # Red, not skipped — same rule as check 10. A config check that cannot run is
+    # a config that is not checked, and it should look like one. python3 is on
+    # ubuntu-24.04 (3.12), and `tomllib` has been in the standard library since
+    # 3.11, so this needs no install step in the `static` job where `--lint` runs.
+    fail "python3 is not on PATH, so ${gitleaks_file} cannot be read as gitleaks reads it"
+    rc=1
+  else
+    # One `key=value` line per fact. Parsed, not matched: `extend.useDefault` is
+    # the value the parser resolves, so a key re-homed under another table reads
+    # as absent here exactly as it does to gitleaks.
+    #
+    # `useDefault` is reported with its TOML type attached rather than coerced.
+    # gitleaks unmarshals it into a Go `bool`; a string is either a hard config
+    # load failure or silently not-true, and both of those are the defaults off.
+    # Anything but a real TOML `true` is wrong, so the type is part of the fact.
+    local gitleaks_facts gitleaks_loaded=1
+    gitleaks_facts=$(python3 -c '
+import re, sys, tomllib
+
+with open(sys.argv[1], "rb") as fh:
+    config = tomllib.load(fh)
+
+extend = config.get("extend") or {}
+use_default = extend.get("useDefault")
+print("useDefault=%s:%r" % (type(use_default).__name__, use_default))
+print("disabledRules=%s" % ",".join(sorted(str(r) for r in extend.get("disabledRules") or [])))
+print("rules=%s" % ",".join(sorted(str(r.get("id")) for r in config.get("rules") or [])))
+
+# A pattern that matches somewhere inside the empty string matches inside every
+# string, so it allowlists everything. That is `.*`, `.+` on nothing at all,
+# `(a|)`, `^`, and every other spelling of the same thing — tested rather than
+# enumerated, because a list of shapes to reject is a list to be walked around.
+# Compiled with Python `re`; gitleaks uses Go RE2, and the two disagree on
+# exotica but not on whether a pattern can match nothing.
+allowlists = config.get("allowlists") or []
+if config.get("allowlist"):
+    allowlists = [config["allowlist"]] + list(allowlists)
+trivial = []
+for index, allowlist in enumerate(allowlists):
+    for key in ("regexes", "paths"):
+        for pattern in allowlist.get(key) or []:
+            try:
+                compiled = re.compile(pattern)
+            except re.error:
+                trivial.append("%s[%d]:uncompilable" % (key, index))
+                continue
+            if compiled.search(""):
+                trivial.append("%s[%d]:%s" % (key, index, pattern))
+print("trivialAllowlist=%s" % ",".join(trivial))
+' "$gitleaks_file" 2>&1) || gitleaks_loaded=0
+
+    if [ "$gitleaks_loaded" -eq 0 ]; then
+      fail "${gitleaks_file} could not be parsed as TOML, so gitleaks cannot load it either — and a config it cannot load is a scan running on the stock rule set or not running at all: ${gitleaks_facts}"
+      rc=1
+    else
+      # `bool:True` and nothing else. `"true"` is a string, `1` is an int, and a
+      # key that landed under a different table is `NoneType:None`.
+      if grep -qxF -- 'useDefault=bool:True' <<< "$gitleaks_facts"; then
+        pass "\`.gitleaks.toml\` extends the default rule set — every provider pattern gitleaks maintains is on"
+      else
+        fail "\`[extend] useDefault\` in ${gitleaks_file} does not resolve to the boolean \`true\` — a TOML parser reads \`$(grep -F 'useDefault=' <<< "$gitleaks_facts")\` (type:value). The scan then runs on our three Discord rules alone: no AWS, GCP, Stripe, GitHub PAT or private-key pattern, and every job stays green. If the line still reads \`useDefault = true\` in the file, check what table it is under — a stanza inserted above it re-homes the key without touching the line — and check it is not quoted, because a string is not a bool."
+        rc=1
+      fi
+
+      # The three rules .gitleaks.toml's own header calls the boundary the
+      # integration rests on. The stock rule set has no Discord token pattern of
+      # its own, so deleting one of these blocks is not a relaxation — it is the
+      # only thing anywhere looking for that value, gone.
+      local defined rule
+      defined=$(sed -n 's/^rules=//p' <<< "$gitleaks_facts")
+      for rule in discord-bot-token discord-mfa-token discord-webhook; do
+        if grep -qE "(^|,)${rule}(,|$)" <<< "$defined"; then
+          pass "\`${rule}\` is defined"
+        else
+          fail "${gitleaks_file} no longer defines the rule \`${rule}\`. The stock rule set has no Discord token pattern, so nothing anywhere is looking for one — and \`discord-bot-token\` firing on this repository means the boundary the whole integration rests on has been crossed (${gitleaks_file}, header). Defined: ${defined:-none}"
+          rc=1
+        fi
+      done
+
+      # `[extend]` has a second field, and it is the quiet way to undo the line
+      # above. `disabledRules` names rules to switch off *in the set being
+      # extended*, so every entry is one provider pattern subtracted from the
+      # thing `useDefault = true` is there to supply — with `useDefault = true`
+      # still sitting above it reading correctly.
+      #
+      # Measured against the pinned 8.30.1, and worth stating precisely because
+      # the obvious guess is wrong: it reaches the default rules only. Naming our
+      # own `discord-bot-token` there does nothing at all — the rule goes on
+      # firing — so this is a check about the default half, not about ours, and a
+      # `disabledRules` entry cannot be used to blunt the Discord rules. Naming
+      # `aws-access-token` there does exactly what it looks like: that rule stops
+      # reporting and nothing else changes.
+      #
+      # Empty is the only correct value. Disabling a stock rule is a real thing
+      # to want one day — a pattern that false-positives on this repository the
+      # way `discord-client-id` did (see the allowlist notes below) — and the
+      # answer then is to allowlist the specific value, or to change this line in
+      # the commit that explains which pattern and why. That second edit is the
+      # point, exactly as it is for the Lighthouse budgets in check 10.
+      local disabled
+      disabled=$(sed -n 's/^disabledRules=//p' <<< "$gitleaks_facts")
+      if [ -z "$disabled" ]; then
+        pass "\`[extend] disabledRules\` is empty — no provider pattern is switched off"
+      else
+        fail "\`[extend] disabledRules\` in ${gitleaks_file} switches off ${disabled}. Each entry subtracts a provider pattern from the default rule set that \`useDefault = true\` on the line above exists to turn on, and the config goes on reading as though it were fully armed — verified against the pinned gitleaks 8.30.1. If a stock rule genuinely false-positives here, allowlist the specific value it is catching rather than the whole pattern; if the rule really has to go, say which and why in the commit, and update this check with it."
+        rc=1
+      fi
+
+      # Anything in the allowlist that matches the empty string matches every
+      # finding. Not a warning: this is the one edit in the file that silences
+      # `discord-bot-token` as well as everything else, and it fits on one line.
+      local trivial
+      trivial=$(sed -n 's/^trivialAllowlist=//p' <<< "$gitleaks_facts")
+      if [ -z "$trivial" ]; then
+        pass "no allowlist entry in \`.gitleaks.toml\` matches trivially"
+      else
+        fail "allowlist entr(ies) ${trivial} in ${gitleaks_file} match the empty string, so they match every finding — that is an off switch for the whole scan, \`discord-bot-token\` included, with the job still reporting green. Measured on gitleaks 8.30.1: a repository with four findings reports none. The entries in that file are narrow on purpose and say so; if a real fixture needs allowlisting, name it — see the bar written above \`[allowlist]\`."
+        rc=1
+      fi
+    fi
+  fi
+
   return "$rc"
 }
 

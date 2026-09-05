@@ -5,11 +5,14 @@ namespace App\Providers;
 use App\Models\Profile;
 use App\Models\User;
 use App\Services\Bot\InternalActionClient;
+use App\Support\Counts\CountsReader;
+use App\Support\Counts\CountsSource;
 use App\Support\MemberDataAccess\AccessRecorder;
 use Illuminate\Contracts\Foundation\Application;
 use Illuminate\Support\Facades\Event;
 use Illuminate\Support\Facades\Gate;
 use Illuminate\Support\ServiceProvider;
+use Livewire\Livewire;
 use SocialiteProviders\Discord\DiscordExtendSocialite;
 use SocialiteProviders\Manager\SocialiteWasCalled;
 
@@ -21,6 +24,14 @@ class AppServiceProvider extends ServiceProvider
         // that never resolves it does not accumulate one member's ids into the
         // next member's row.
         $this->app->scoped(AccessRecorder::class);
+
+        // The landing page's counts. The page depends on the interface rather
+        // than on the reader, so it depends on "something that supplies counts"
+        // and not on the bot's database being reachable — which is also the
+        // seam the degraded state is tested through. Not shared: the 60-second
+        // cache inside the reader already does the deduplication, and holding
+        // one for a worker's lifetime would only keep a stale connection alive.
+        $this->app->bind(CountsSource::class, CountsReader::class);
 
         // Bound rather than shared: it reads config at resolve time and holds no
         // state between calls, so a singleton would only buy the chance of a
@@ -49,6 +60,45 @@ class AppServiceProvider extends ServiceProvider
 
     public function boot(): void
     {
+        // Livewire injects its runtime as a plain <script src> with no defer, which
+        // puts 162 KB in the critical path of every Livewire page. On the budget
+        // profile (mid-range phone, 4x CPU, Slow 4G) that is about 900ms of
+        // transfer ahead of the paint, and it measurably breached the LCP budget
+        // when /events shipped: 2616ms against 2000ms, with FCP at 2166ms.
+        //
+        // `defer` rather than `async`, deliberately. The runtime binds to the
+        // components already in the document, so it must run after the parse has
+        // finished; `async` would let it execute mid-parse against a half-built
+        // DOM. `defer` also keeps execution ordered against the app bundle.
+        //
+        // Asserted in tests/Feature/CriticalPathTest.php so this cannot regress
+        // quietly — a Livewire upgrade that changes how the tag is emitted fails
+        // there in half a second, rather than as an unexplained budgets breach.
+        //
+        // What this did and did not fix, measured rather than assumed. `defer`
+        // cleared the FCP warning: 2166ms before, under the 1800ms threshold
+        // after, and the warning has not come back. It did NOT clear LCP, which
+        // went 2616ms -> 2684ms. `fetchpriority="low"` was then tried on the
+        // theory that the runtime was competing for bandwidth with the paint,
+        // and the measurement disproved it: LCP moved to 2666ms, ~18ms, noise.
+        //
+        // Neither attribute is claimed to have fixed LCP. Both are kept because
+        // both are correct on their own terms — defer is load-bearing for FCP,
+        // and low priority is safe precisely because the script is deferred,
+        // with nothing before DOMContentLoaded waiting on it.
+        //
+        // What DID fix LCP was removing bytes, not reordering them. The budget
+        // is bandwidth-bound (ci/lighthouserc.cjs simulates Slow 4G at ~184
+        // KB/s), so a resource that blocks nothing still pushes LCP out while
+        // the largest element waits for its font. Two things were shipping
+        // needlessly: this runtime went over the wire uncompressed because
+        // Livewire serves it from a PHP route nothing in front of the app can
+        // see (fixed in App\Http\Middleware\CompressStaticAssets — 162 KB ->
+        // 55 KB, verified over HTTP), and the app bundle was 48 KB of axios
+        // that nothing imported (fixed in resources/js/app.js). Both are
+        // asserted in tests/Feature/AssetCompressionTest.php.
+        Livewire::useScriptTagAttributes(['defer' => true, 'fetchpriority' => 'low']);
+
         // Socialite ships no Discord driver of its own; this registers the
         // community one. Reason for the dependency: writing our own OAuth2
         // provider is about seventy lines we would then own and get subtly

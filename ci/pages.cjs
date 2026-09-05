@@ -29,6 +29,13 @@ const SESSION_COOKIE = process.env.CI_SESSION_COOKIE || '';
 /** @type {{ path: string, name: string, auth?: boolean }[]} */
 const pages = [
   { path: '/', name: 'Homepage — the top of the join funnel' },
+  // Public on purpose: the empty state is a pitch to join, so a signed-out visitor
+  // arriving from a Discord link has to reach it.
+  //
+  // Worth measuring rather than assumed: most arrivals are a phone in the Discord
+  // in-app browser, and the largest element is the first event card, so anything
+  // that pushes the card down after paint spends the CLS budget.
+  { path: '/events', name: 'Events calendar — list view, the default' },
   {
     path: '/admin',
     name: 'Moderator panel — the dashboard a moderator lands on',

@@ -152,4 +152,22 @@ class Event extends Model
     {
         return $this->hasMany(Rsvp::class);
     }
+
+    /**
+     * The signed-in member's own answer, as an eager-loadable relation.
+     *
+     * This exists for the events page. Every card carries its own RSVP control, and
+     * each control asking the database for its own row is a query per card; eager
+     * loading this turns that back into one query for the whole page.
+     *
+     * It reads `auth()` deliberately — the question is "mine", and a relation that
+     * has to be handed a user cannot be named in `with()`. For a guest the
+     * constraint matches nothing, which is the right answer rather than an error.
+     *
+     * @return HasMany<Rsvp, $this>
+     */
+    public function viewerRsvps(): HasMany
+    {
+        return $this->rsvps()->where('user_id', auth()->id());
+    }
 }

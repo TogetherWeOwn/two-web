@@ -1,5 +1,6 @@
 <?php
 
+use App\Http\Middleware\CompressStaticAssets;
 use App\Http\Middleware\RecordMemberDataAccess;
 use Illuminate\Foundation\Application;
 use Illuminate\Foundation\Configuration\Exceptions;
@@ -21,6 +22,20 @@ return Application::configure(basePath: dirname(__DIR__))
         },
     )
     ->withMiddleware(function (Middleware $middleware): void {
+        // Gzips the text assets PHP serves itself. In practice that is one file and
+        // it is the reason this exists: Livewire's 162 KB runtime comes from a PHP
+        // route rather than from `public/`, so nginx never sees it as a file and
+        // nothing in front of the application can compress it. It went over the
+        // wire uncompressed, which is most of the /events LCP breach on TOG-53.
+        //
+        // Global rather than on `web`, because the package registers
+        // `/livewire/livewire.min.js` outside every group — putting it on `web`
+        // would miss the only asset it is for. It is also the reason this is safe
+        // to run globally: it touches nothing but text-typed responses to clients
+        // that asked for gzip, and the funnel routes answer with redirects.
+        // CompressStaticAssets carries the measurements and the reasoning.
+        $middleware->append(CompressStaticAssets::class);
+
         // The join link is the only web-to-Discord path TWO has, so it stays up
         // through a deploy. Without this, `php artisan down` — an ordinary step
         // in a release — answers it with a 503, which is the outage TOG-77 exists

@@ -12,11 +12,16 @@ use Laravel\Dusk\Browser;
 // round-trip once on staging. What Dusk owns is everything on our side of it:
 // the way in, what you see once you are in, the way out, and the failure message.
 
+// "Log in with Discord", not "Sign in with Discord": the placeholder homepage
+// said the latter, but two-design docs/COPY.md is the authority on the words and
+// its login row says "Log in with Discord". The real landing page (TOG-48) uses
+// the spec's wording, so these assertions follow it. The `data-testid` is the
+// part that must not drift — the text is allowed to, the hook is not.
 test('a signed-out visitor is offered Discord as the way in', function () {
     $this->browse(function (Browser $browser) {
         $browser->visit('/')
             ->assertSee('Together We Own')
-            ->assertSeeLink('Sign in with Discord')
+            ->assertSeeLink('Log in with Discord')
             ->assertAttribute('[data-testid="discord-login"]', 'href', url('/auth/discord/redirect'));
     });
 });
@@ -70,7 +75,7 @@ test('a member can sign out again', function () {
             ->waitForText('Sign out')
             ->waitForReload(fn (Browser $page) => $page->press('Sign out'))
             ->assertPathIs('/')
-            ->assertSeeLink('Sign in with Discord');
+            ->assertSeeLink('Log in with Discord');
     });
 });
 

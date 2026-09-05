@@ -59,6 +59,20 @@ jobs:
       - name: Gate wiring self-test
         run: ./ci/verify-lint-selftest.sh
 
+      # The assertions `--run` makes about the check conclusions a pull request
+      # produced, plus the wait that feeds them and the cleanup that follows. They
+      # otherwise execute only during a live acceptance run, which is how a wrong
+      # one survived review and cost forty minutes of runner time to find (TWO-94).
+      #
+      # `verify-lint-selftest.sh` above already shells out to this, so for the
+      # moment this step is a second route to the same 29 cases. It is here anyway,
+      # because that coverage is incidental: it hangs off one line inside a case
+      # about *linting*, and nothing states that removing it removes the only thing
+      # testing `--run`. Named here, the dependency is visible in the job log and
+      # survives that line being refactored away. Under a second, no network.
+      - name: Acceptance-script self-test
+        run: ./ci/verify-pipeline.sh --assert-selftest
+
       # `ci/verify-protection.sh` proves the jobs below are the checks GitHub
       # actually enforces on `main` — which is a different fact from "the job went
       # red", and the one nothing else here reads. It cannot run in this job: it
@@ -84,6 +98,16 @@ jobs:
       # nobody tests is a recovery command that silently stops recovering.
       - name: Run preconditions self-test
         run: ./ci/verify-run-preconditions-selftest.sh
+
+      # The deploy guard, exercised with no target configured — which is the live
+      # configuration today and the exact case that used to report green while
+      # deploying nothing (TOG-913, surfaced on TOG-48 as a false "live on staging"
+      # claim to the owner). It belongs here rather than in `deploy.yml` because the
+      # interesting case is the *absence* of a deploy target, so it needs no secret,
+      # no network and no server; and because `deploy.yml` only runs once `main` is
+      # already green, which is far too late to stop the pull request that breaks it.
+      - name: Deploy guard self-test
+        run: ./ci/deploy-target-selftest.sh
 
       - uses: shivammathur/setup-php@v2
         with:
@@ -392,8 +416,30 @@ jobs:
       # Three runs per URL, median reported. One run of LCP on a shared runner is
       # noise; see docs/flake-policy.md on why the answer was more samples and a
       # honest headroom margin rather than a retry.
+      #
+      # `continue-on-error` does NOT mean a breach is tolerated — the annotate step
+      # below re-raises it and fails the job. It exists so the breached numbers get
+      # turned into annotations before the job stops, which is the difference
+      # between a red build that names the audit and one that says only "exit 1".
       - name: Lighthouse — performance budget
+        id: lighthouse
+        continue-on-error: true
         run: npx lhci autorun --config=./ci/lighthouserc.cjs
+
+      # Reads what lhci already wrote and re-emits it as ::error::, then exits
+      # non-zero if anything breached. Same verdict, readable without the job log.
+      - name: Report the performance budget
+        run: node ci/lh-annotate.mjs
+
+      # A belt-and-braces guard on the step above: if lhci fell over for a reason
+      # that produced no assertion results at all — a crashed Chrome, a server that
+      # went away mid-run — the annotate step has nothing to fail on, and the job
+      # must still go red rather than sail past a budget that was never measured.
+      - name: Fail if Lighthouse itself failed
+        if: steps.lighthouse.outcome == 'failure'
+        run: |
+          echo "::error::the Lighthouse step failed — see the annotations above for the breached audit, or the budget-reports artifact if there are none."
+          exit 1
 
       - name: Accessibility — WCAG 2.2 AA
         run: node ci/a11y.mjs

@@ -44,6 +44,9 @@ fixture() {
   # pages.cjs. Without it every case would go red on a missing module rather than
   # on the defect it was written for — including `clean`.
   cp "$REPO_ROOT/ci/pages.cjs" "$dir/ci/"
+  # Check 11 reads the secret-scan config. It lives at the repository root rather
+  # than under ci/, so it is copied by name.
+  cp "$REPO_ROOT/.gitleaks.toml" "$dir/"
   echo "$dir"
 }
 
@@ -252,6 +255,86 @@ expect_fail budget-duplicated-computed-key 'budget `largest-contentful-paint`' \
 # The one that looks most like a merge artefact and least like a key at all.
 expect_fail budget-duplicated-spread 'budget `largest-contentful-paint`' \
   sed -i "/'server-response-time':/a\\        ...{ 'largest-contentful-paint': ['warn', { maxNumericValue: 99999 }] }," ci/lighthouserc.cjs
+
+# --- The secret scan stops scanning for anything but Discord (TOG-297) ---------
+#
+# Every case below leaves `secret-scan.yml` untouched, the `gitleaks` job green in
+# every other respect, and the required check arriving on time. What changes is
+# what the scan is looking for. Nothing live covers this: the `secret` case in
+# `--run` commits a value shaped to match our own `discord-bot-token` rule, on
+# purpose, so a check-run conclusion cannot say whether the default rule set is
+# still on (docs/ci.md). These are that missing half, offline.
+#
+# The four `useDefault` cases were each run against the pinned gitleaks 8.30.1 on
+# a repository holding an AWS key pair and a real-shaped Discord bot token — four
+# findings on the real config. Numbers below are measured, not argued.
+
+# The line deleted outright. Four findings become two: the AWS pair goes quiet and
+# nothing but the three Discord rules is left. This is the case the card was filed
+# for and the only one of the four a grep for the line would also catch.
+expect_fail gitleaks-usedefault-deleted 'does not resolve to the boolean `true`' \
+  sed -i '/^useDefault = true$/d' .gitleaks.toml
+
+# The line left word for word, and a stanza inserted above it. `useDefault = true`
+# now belongs to the table immediately above — it sets `rules[0].useDefault`, which
+# nothing reads — and `[extend]` is empty. Measured: defaults off, two findings.
+# This is why the check parses instead of matching text. It is also the variant
+# that looks least like tampering: adding a rule is the ordinary edit to this file.
+expect_fail gitleaks-usedefault-rehomed 'does not resolve to the boolean `true`' \
+  bash -c "sed -i \"/^useDefault = true\$/i[[rules]]\\nid = \\\"placeholder\\\"\\nregex = '''nothing-in-particular'''\\n\" .gitleaks.toml"
+
+# Quoted. TOML types are not shell truthiness: gitleaks unmarshals this field into
+# a Go bool, and a string is not one. `\"false\"` is the dangerous spelling of the
+# two — measured, the config loads clean, the defaults are off and the scan exits
+# 0. (`\"true\"` fails the load outright and is loud; this one is silent.)
+expect_fail gitleaks-usedefault-quoted 'does not resolve to the boolean `true`' \
+  sed -i 's/^useDefault = true$/useDefault = "false"/' .gitleaks.toml
+
+# `[extend]` has a second field, and it undoes the first one a pattern at a time.
+# `disabledRules` subtracts from the set being extended, so this is `useDefault =
+# true` with the AWS rule quietly carved out of it — and the line above still
+# reads `true`, so the config looks fully armed in the diff.
+#
+# Measured on the pinned 8.30.1, against a repository with an AWS pair and a
+# real-shaped bot token: the control reports aws-access-token, generic-api-key
+# and discord-bot-token; with this entry the AWS finding is gone and the other two
+# remain. Names a stock rule rather than one of ours deliberately — `disabledRules`
+# reaches the default set only, and an entry naming `discord-bot-token` changes
+# nothing at all (also measured). A case built on that would have gone red here
+# while the scan it claimed to protect was unharmed.
+expect_fail gitleaks-stock-rule-disabled 'switches off aws-access-token' \
+  bash -c "sed -i \"/^useDefault = true\$/a disabledRules = ['''aws-access-token''']\" .gitleaks.toml"
+
+# The rule deleted rather than disabled. The stock rule set has no Discord token
+# pattern at all, so with this gone nothing anywhere is looking for the one
+# credential this repository must never hold — and `useDefault = true` above it
+# is intact, so the config still looks like it is doing its job.
+expect_fail gitleaks-rule-deleted 'no longer defines the rule `discord-bot-token`' \
+  bash -c "awk '
+    /^\[\[rules\]\]\$/                      { block = \"\"; collecting = 1 }
+    collecting                              { block = block \$0 \"\\n\"
+                                              if (\$0 == \"\") {
+                                                if (block !~ /discord-bot-token/) printf \"%s\", block
+                                                collecting = 0
+                                              }
+                                              next }
+                                            { print }
+  ' .gitleaks.toml > .gitleaks.mutated && mv .gitleaks.mutated .gitleaks.toml"
+
+# One bare `.*` appended to the allowlist. `regexes` is matched against every
+# candidate finding, so this is not a widening — it is an off switch for the whole
+# scan. Measured: the four-finding repository reports none, `discord-bot-token`
+# included, and the job goes green. It is one line, it reads like a broadening of
+# an existing narrow entry, and the file's prose asking people not to do it was
+# until now the only thing standing in the way.
+expect_fail gitleaks-allowlist-trivial 'match the empty string' \
+  bash -c "sed -i \"s|^regexes = \\[\$|regexes = [\\n  '''.*''',|\" .gitleaks.toml"
+
+# The same, in the other list. `paths` allowlists by file rather than by value and
+# has exactly the same reach — measured, also zero findings. Covered separately
+# because a check written for `regexes` alone passes this one.
+expect_fail gitleaks-allowlist-trivial-path 'match the empty string' \
+  bash -c "sed -i \"s|^regexes = \\[\$|paths = ['''.*''']\\nregexes = [|\" .gitleaks.toml"
 
 printf '\n\033[1m==> Tripwires (warn, do not block)\033[0m\n'
 
