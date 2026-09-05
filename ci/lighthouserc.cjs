@@ -138,12 +138,18 @@ module.exports = {
     //
     // /admin is a different surface with a different audience: signed-in
     // moderators, a handful of people, on a page nobody arrives at cold. It is
-    // also almost entirely vendor code — Filament ships a 603KB stylesheet that is
-    // render-blocking and that we do not control. Measured honestly (gzipped, as
-    // ci/compressing-proxy.mjs now serves it) the panel lands at ~2.75s, and no
-    // change to this repo moves that materially; the only real lever is a Filament
-    // theme build that tree-shakes their CSS, which is its own piece of work and
-    // has a follow-up issue.
+    // also almost entirely vendor code — Filament ships a 615KB render-blocking
+    // stylesheet. TOG-1008 tree-shook it to 342KB (63KB gzipped to 33KB) with a
+    // curated theme build, which took the panel from ~2.75s to ~2.55s and lowered
+    // the ceiling below to match.
+    //
+    // That is as far as CSS goes, and the remaining gap is not laziness. Measured
+    // on this harness with the panel stylesheet stubbed out entirely — no Filament
+    // CSS at all, an unusable page — /admin/featured-contents still medians
+    // 2047ms. The public 2000ms budget is therefore not reachable on this surface
+    // by any stylesheet work whatsoever, so the exception below is lowered rather
+    // than deleted. What is left is server render time and Livewire's JS, which is
+    // different work.
     //
     // Holding the panel to a number it cannot meet has exactly one outcome, and it
     // is not a faster panel: it is somebody editing the 2000 above to 3000 six
@@ -159,11 +165,14 @@ module.exports = {
         },
         {
           matchingUrlPattern: '.*\\/admin.*',
-          // Measured at 2736ms and 2772ms median across the two panel pages. 3200
-          // is that plus headroom for runner variance — tight enough that a real
-          // regression (an unbounded table query, a new render-blocking asset)
-          // still goes red.
-          assertions: buildAssertions(3200),
+          // Measured at 2535ms (/admin) and 2606ms (/admin/featured-contents)
+          // median of 3, gzipped through ci/compressing-proxy.mjs, after the
+          // TOG-1008 theme build; 2737ms and 2786ms on the same harness before it.
+          // 3000 is the worse page plus the same ~400ms of runner-variance
+          // headroom the old 3200 carried — tight enough that a real regression (an
+          // unbounded table query, a new render-blocking asset, a component whose
+          // CSS drags the theme back up) still goes red.
+          assertions: buildAssertions(3000),
         },
       ],
     },
