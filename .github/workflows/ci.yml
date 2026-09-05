@@ -120,6 +120,18 @@ jobs:
       - name: Budget verdict self-test
         run: ./ci/lh-annotate-selftest.sh
 
+      # The DKIM key parser (TOG-1154). "The record is published" is not "our
+      # mail authenticates": the Google console defaults to a 1024-bit key, and
+      # `v=DKIM1; p=` is the RFC 6376 revoked form — both look like success to
+      # anything that only asks whether the selector answers. This selftest is
+      # negative controls for exactly those, plus the multi-string rejoin that
+      # every 2048-bit TXT value needs. Offline half only: it generates its own
+      # key pairs and makes no DNS query, so it needs no network. The `--live`
+      # half hits third-party selectors and stays manual, so someone else's key
+      # rotation cannot turn our build red.
+      - name: Mail auth key parser self-test
+        run: ./ci/mail-auth-check-selftest.sh
+
       # The mail-auth parser and its resolver-agreement logic (TOG-1154). Offline
       # only: the fixtures are generated keys and a scripted resolver, so there is
       # no network and a third party rotating a selector cannot turn us red — the
