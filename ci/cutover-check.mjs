@@ -335,6 +335,14 @@ function checkWpJsonGone() {
 // TOG-1156 calls for that record to be deleted — staging should not exist until
 // something is deployed behind it. So NXDOMAIN is the expected pass here, not an
 // inconclusive probe. See docs/dns.md and ci/staging-exposure-check.mjs.
+//
+// Deleted 5 September 2026, 20:20Z (TOG-1160) — and it turned out to be a single
+// proxied `CNAME` to `staging-9a7d-togetherweown9.wpcomstaging.com`, not the
+// `A`/`AAAA` pair we had written down. That is the same lesson as the paragraph
+// above, one step further: the anycast addresses do not reveal the record's
+// *type* either, and a proxied CNAME never appears in a resolver answer at all.
+// This function is unaffected — it passes on absence, so it is type-agnostic —
+// and the branches below are kept for the day the record is recreated.
 function checkStagingRecord() {
   // getent prints one line per (address, socktype) pair, so every address comes
   // back three times. Dedupe, or the output reads like the record has nine
