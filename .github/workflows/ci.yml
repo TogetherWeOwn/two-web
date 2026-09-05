@@ -109,6 +109,17 @@ jobs:
       - name: Deploy guard self-test
         run: ./ci/deploy-target-selftest.sh
 
+      # The `budgets` verdict, which had no test until it shipped a defect. lhci
+      # runs there under `continue-on-error: true`, so its exit code is discarded
+      # and `ci/lh-annotate.mjs` is what actually turns the job red — the whole
+      # gate, untested. It failed on any unpassed assertion without reading
+      # `level`, which promoted every `warn` tripwire to a blocking budget and
+      # made /admin red on FCP while every CEO budget passed with headroom
+      # (TOG-54). Pins both directions: a warning cannot block, and an
+      # error-level breach cannot stop blocking. No Chrome, no lhci, no network.
+      - name: Budget verdict self-test
+        run: ./ci/lh-annotate-selftest.sh
+
       - uses: shivammathur/setup-php@v2
         with:
           php-version: ${{ env.PHP_VERSION }}
@@ -379,9 +390,16 @@ jobs:
 
       # Backgrounded output goes to a file for the same reason as the Dusk job: a
       # process holding the step's pipe open hangs the step.
+      #
+      # The app listens on 8001 and ci/compressing-proxy.mjs fronts it on 8000, so
+      # everything measured below arrives gzipped the way every real host serves
+      # it. `artisan serve` compresses nothing, and measuring an uncompressed
+      # 603KB Filament stylesheet was reporting LCP 6.76s on /admin where the
+      # compressed truth is 2.74s. See the header of that file.
       - name: Start the application server
         run: |
-          php artisan serve --host=127.0.0.1 --port=8000 --no-reload > storage/logs/serve.log 2>&1 &
+          php artisan serve --host=127.0.0.1 --port=8001 --no-reload > storage/logs/serve.log 2>&1 &
+          node ci/compressing-proxy.mjs > storage/logs/proxy.log 2>&1 &
           for i in $(seq 1 30); do
             if curl -fsS http://127.0.0.1:8000/up > /dev/null; then
               echo "server up after ${i}s"; exit 0
@@ -389,13 +407,42 @@ jobs:
             sleep 1
           done
           echo "::error::the application never answered /up — budgets could not be measured"
-          cat storage/logs/serve.log
+          cat storage/logs/serve.log storage/logs/proxy.log
           exit 1
+
+      # Proves the front-end is actually compressing before anything is measured.
+      # Without this a proxy that quietly fell back to passthrough would just look
+      # like a slow site, and the budget failure would be blamed on the page.
+      - name: Verify the budget harness compresses
+        run: |
+          encoding="$(curl -sS -o /dev/null -D - -H 'Accept-Encoding: gzip' http://127.0.0.1:8000/ | tr -d '\r' | awk 'tolower($1) == "content-encoding:" { print tolower($2) }')"
+          if [ "$encoding" != "gzip" ]; then
+            echo "::error::the budgets harness is not compressing (content-encoding: '${encoding:-none}') — the numbers below would not be what production serves"
+            cat storage/logs/proxy.log
+            exit 1
+          fi
+          echo "harness is serving gzip"
 
       # Pinned exactly. An unpinned budget tool is a budget that changes without a
       # commit. Fold these into package.json devDependencies when convenient.
       - name: Install budget tooling
         run: npm i --no-save --no-package-lock @lhci/cli@0.14.0 puppeteer@23.11.1 @axe-core/puppeteer@4.10.2 axe-core@4.10.2
+
+      # The moderator panel is behind Discord auth, so measuring it needs a real
+      # session (TOG-54). Without this both tools would follow the redirect and
+      # score the Discord handoff — a tiny page that passes every budget while
+      # /admin goes unmeasured. ci/pages.cjs throws if this is empty, so a failure
+      # to mint one is loud rather than a silent green.
+      - name: Mint a moderator session for the authenticated pages
+        run: |
+          COOKIE="$(php artisan ci:session-cookie --moderator | tail -1)"
+          if [ -z "$COOKIE" ]; then
+            echo "::error::could not mint a session cookie — /admin cannot be measured"
+            exit 1
+          fi
+          # Masked so the session value never appears in a public build log.
+          echo "::add-mask::${COOKIE#*=}"
+          echo "CI_SESSION_COOKIE=$COOKIE" >> "$GITHUB_ENV"
 
       # Three runs per URL, median reported. One run of LCP on a shared runner is
       # noise; see docs/flake-policy.md on why the answer was more samples and a

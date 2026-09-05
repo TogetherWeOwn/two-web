@@ -88,6 +88,53 @@
     <div class="mx-auto max-w-6xl px-4 py-16 md:px-6 lg:px-8">
         @include('partials.auth-error')
 
+        {{--
+            What moderators put here from /admin (TOG-54). The section is omitted
+            entirely when nothing is live, rather than rendered empty: an empty
+            landmark with a heading and no content is noise for a screen reader,
+            and the join link in the hero must stay the page's one call to action.
+
+            It sits above the ladder because a moderator publishes here to say
+            something timely — an event this weekend, a server that just opened —
+            and the evergreen pitch below it will still be there next month.
+
+            Headings are h2 under the page h1 — axe checks heading-order at both
+            widths in ci/a11y.mjs, and skipping a level is a WCAG failure, not a
+            style preference.
+        --}}
+        @if ($featured->isNotEmpty())
+            <section aria-labelledby="featured-heading" data-testid="featured-content" class="mb-16">
+                <h2 id="featured-heading" class="u-display text-2xl text-ink md:text-3xl">From the community team</h2>
+
+                @foreach ($featured as $item)
+                    <article data-testid="featured-item" class="mt-6">
+                        <h3 class="text-lg text-ink">
+                            @if ($item->url)
+                                {{-- The whole heading is the link target, so the
+                                     accessible name of the link is the headline
+                                     rather than a bare "read more". --}}
+                                <a href="{{ $item->url }}" class="underline">{{ $item->title }}</a>
+                            @else
+                                {{ $item->title }}
+                            @endif
+                        </h3>
+
+                        @if ($item->body)
+                            <p class="mt-2 max-w-prose text-ink-muted">{{ $item->body }}</p>
+                        @endif
+
+                        @if ($item->image_url)
+                            {{-- alt is intentionally empty: the headline beside it
+                                 already carries the meaning, so announcing the image
+                                 too would repeat it. A decorative image with a
+                                 non-empty alt is the more common a11y defect. --}}
+                            <img src="{{ $item->image_url }}" alt="" loading="lazy" decoding="async" class="mt-3">
+                        @endif
+                    </article>
+                @endforeach
+            </section>
+        @endif
+
         {{-- The strongest section on the page: it answers "what actually happens
              if I click join" with something specific and true. The ladder is
              read from the bot, never hardcoded — and it renders all five rungs

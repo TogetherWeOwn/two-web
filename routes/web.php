@@ -8,7 +8,8 @@ use App\Http\Controllers\RsvpController;
 use App\Livewire\EventsCalendar;
 use Illuminate\Support\Facades\Route;
 
-// The landing page reads the bot's counts, so it is a controller rather than the
+// The landing page reads the bot's counts and the featured rows moderators
+// publish from /admin (TOG-54), so it is a controller rather than the
 // `Route::view` it used to be. It stays in the `web` group: unlike `/discord` it
 // is an ordinary page, and it needs the session to know whether to offer "your
 // profile" or "log in with Discord".

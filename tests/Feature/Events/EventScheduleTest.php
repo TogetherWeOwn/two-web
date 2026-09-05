@@ -56,7 +56,12 @@ it('rejects an end time that is not after the start', function () {
 });
 
 it('backfills a legacy row that has no end time, and the migration is reversible', function () {
-    Artisan::call('migrate:rollback', ['--step' => 1]);
+    // By path, not `--step 1`: the step form silently rolls back whatever
+    // migration happens to be newest, and stopped meaning this one the day
+    // TOG-54 added migrations after it.
+    Artisan::call('migrate:rollback', [
+        '--path' => 'database/migrations/2026_08_25_000100_correct_events_schema.php',
+    ]);
 
     // Rolled back, the shipped schema is what we get: nullable ends_at, no key.
     expect(Schema::hasColumn('events', 'event_key'))->toBeFalse()
