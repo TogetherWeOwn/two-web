@@ -59,7 +59,7 @@ curl -s -H 'accept: application/dns-json' 'https://cloudflare-dns.com/dns-query?
 | `_dmarc.togetherweown.com` | `v=DMARC1;p=none;` — **no `rua`**, so nobody is collecting anything | Add reporting |
 | `togetherweown.com` SPF | `v=spf1 include:_spf.wpcloud.com ~all` | Do not edit blind |
 | `two.gg` mail records | **None at all.** No SPF, no DMARC | Free win, see below |
-| Apex HSTS | `max-age=31536000`, **no `includeSubDomains`** | Keep it that way until cutover |
+| Apex HSTS | `max-age=31536000`, **no `includeSubDomains`** | TOG-1161 adds `includeSubDomains` at the edge — see Security headers |
 | Apex indexing | Depends on the `Accept` header — see below. No `robots.txt` at all | An empty site is indexable — TWO-49, TOG-71 |
 
 ### The apex serves two different homepages, and `curl` shows you the wrong one
@@ -368,26 +368,66 @@ blind** — one wrong `-all` does the same damage as a bad DMARC policy.
 
 ## Security headers
 
-Set in nginx on the origin so they apply to staging and the apex alike:
+Two places set these, and confusing them is how you end up with each header twice:
 
-| Header | Value |
-|---|---|
-| `Strict-Transport-Security` | `max-age=31536000; includeSubDomains` |
-| `X-Content-Type-Options` | `nosniff` |
-| `Referrer-Policy` | `strict-origin-when-cross-origin` |
-| `X-Frame-Options` | `DENY` |
-| `Permissions-Policy` | `camera=(), microphone=(), geolocation=()` |
-| `Content-Security-Policy` | Written with the Frontend Engineer once asset origins are known. Report-only first |
+- **Today, at the Cloudflare edge** (TOG-1161) — because the origin is WordPress.com
+  and we cannot configure it. HSTS lives in SSL/TLS → Edge Certificates; the rest in
+  one Transform Rule, using *Set* and never *Add*.
+- **After cutover, in nginx on the origin** — at which point the edge rule should be
+  removed in the same change, not left to double up.
+
+| Header | Value | Note |
+|---|---|---|
+| `Strict-Transport-Security` | `max-age=31536000; includeSubDomains` | No `preload` — see below |
+| `X-Content-Type-Options` | `nosniff` | |
+| `Referrer-Policy` | `strict-origin-when-cross-origin` | |
+| `X-Frame-Options` | `SAMEORIGIN` | Was `DENY` here; TOG-1161 specifies `SAMEORIGIN`, so we keep our own pages framable by us |
+| `Permissions-Policy` | `geolocation=(), microphone=(), camera=()` | **Exactly these three.** Not `fullscreen=()` or `autoplay=()` — the site embeds YouTube and Vimeo and those two break the players |
+| `Content-Security-Policy` | `frame-ancestors 'self'` for now | A full policy is not zero-cost: the homepage has 46 inline `<script>` and 15 `<style>` blocks and pulls from `s0.wp.com`, `stats.wp.com`, `player.vimeo.com`, `www.youtube.com`, so any workable policy needs `'unsafe-inline'`. Own card, with the Frontend Engineer, report-only first |
 
 **The apex already sends `Strict-Transport-Security: max-age=31536000` with no
-`includeSubDomains`.** Do not add `includeSubDomains` at the apex before cutover:
-today it would cover `staging`, which is fine, but it is a year-long commitment made
-from a host we do not control. Add it in our nginx config on the day we own the apex.
+`includeSubDomains`.** TOG-1161 adds `includeSubDomains` at the Cloudflare edge
+*before* cutover. That reverses the instruction this paragraph used to carry, so the
+reasoning is worth keeping rather than just deleting.
+
+The old reasoning was "a year-long commitment made from a host we do not control".
+That turned out to be wrong about *who sets it*: the header comes from **our own
+Cloudflare zone** (`alex`/`betty.ns.cloudflare.com`), not from WordPress.com. The
+origin is theirs; the edge is ours, and the edge is where this is set.
+
+What the commitment actually costs was then measured rather than assumed
+(2026-09-05, and re-checked before the change):
+
+| host | resolves | TLS | HTTP |
+|---|---|---|---|
+| `www` | yes | valid (apex + wildcard cert) | 301 → apex |
+| `cdn` | yes | valid (own cert) | 404 |
+| `staging` | **NXDOMAIN** | — | — |
+
+Every subdomain that resolves already serves valid HTTPS, so `includeSubDomains`
+forbids nothing that works today. `staging` no longer resolves at all — it was a 403
+when TOG-1161 was written and is now gone (TOG-1156), which removes the one host the
+old paragraph was worried about.
+
+**The real cost is the one that survives a rollback.** Removing the directive at the
+edge is instant, but browsers that already saw it keep enforcing it for up to
+`max-age` — twelve months. So this binds *future* subdomains too: anything stood up
+under `togetherweown.com` must be HTTPS from its first request, including short-lived
+demo and preview hosts. That is the trade that was accepted, not an oversight. If you
+need a plaintext subdomain inside the next year, you cannot have one.
+
+Verify with `node ci/security-headers-check.mjs` rather than by eye.
 
 **No `preload` until after the apex cutover.** Preload is a submission to a list
 baked into browsers and it is slow and painful to reverse; it commits every
 subdomain of `togetherweown.com`, including whatever WordPress still owns, to
 HTTPS-only forever. Revisit it once the apex is ours and stable for a month.
+
+It is also a public commitment made in the company's name, which makes it an owner
+decision rather than an operator one — nobody should tick it while they happen to be
+in the HSTS panel for `includeSubDomains`. `ci/security-headers-check.mjs` fails if
+`preload` appears, so an accidental tick surfaces on the next run instead of in a
+year's time.
 
 ---
 
