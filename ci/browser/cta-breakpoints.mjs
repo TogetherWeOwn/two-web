@@ -34,6 +34,24 @@
  *   node ci/browser/cta-breakpoints.mjs --url https://host/
  *   node ci/browser/cta-breakpoints.mjs --file page.html         # served bytes, offline
  *   node ci/browser/cta-breakpoints.mjs --shots DIR              # also write PNGs
+ *   node ci/browser/cta-breakpoints.mjs --url https://host/ --navigate   # opt out of curl
+ *
+ * How `--url` gets the document, and why it is not a Chrome navigation
+ * --------------------------------------------------------------------
+ * It was, and the check was unrunnable because of it: against the live apex
+ * every one of the six widths came back HTTP 403 CHALLENGED, so the script
+ * exited 2 and could neither confirm nor deny the fix. That is trap 1 above
+ * biting the tool that documents it. Cloudflare challenges *headless Chrome*,
+ * not the request: on the same host, in the same second, `curl` with a browser
+ * UA returns 200 and the full 129,783-byte document, three times out of three,
+ * under both a phone and a desktop UA, byte-identical each time.
+ *
+ * So `--url` now fetches the HTML with curl and measures those bytes through
+ * the same path `--file` uses. This is not a workaround that weakens the
+ * check — the document IS the subject, the hero rules are inline in it, and
+ * the external sheets still load from the real origin, so the cascade is the
+ * visitor's. `--navigate` keeps the old behaviour for a host that is not
+ * behind CF, where a real navigation is strictly better.
  *
  * `--file` reads the DOCUMENT from disk and still fetches its stylesheets from
  * their real origin, so the cascade is the one a visitor gets. Only the HTML is
@@ -49,17 +67,67 @@
  *   2  no width could be measured (all challenged, or the CTA is absent)
  */
 import { launch } from './launch.mjs';
-import { mkdirSync, writeFileSync } from 'node:fs';
-import { resolve } from 'node:path';
+import { mkdirSync, writeFileSync, mkdtempSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
+import { resolve, join } from 'node:path';
+import { tmpdir } from 'node:os';
 
 const argv = process.argv.slice(2);
 const arg = (name, fallback = null) => {
   const i = argv.indexOf(name);
   return i === -1 ? fallback : argv[i + 1];
 };
+const flag = (name) => argv.includes(name);
 
-const file = arg('--file');
-const url = file ? 'file://' + resolve(file) : arg('--url', 'https://togetherweown.com/');
+/**
+ * Pull the document with curl and hand back a local path plus the HTTP status.
+ *
+ * Throws rather than returning a partial page: a challenge body measures as
+ * "unstyled at every width", which is exactly the false FAIL this whole script
+ * exists to avoid. A non-200, or a 200 that does not contain the CTA selector's
+ * literal class, is not a subject we can measure.
+ */
+function fetchWithCurl(target, ua) {
+  const dir = mkdtempSync(join(tmpdir(), 'cta-breakpoints-'));
+  const out = join(dir, 'document.html');
+  // -L: a host may canonicalise (http->https, /page -> /page/). Without it a
+  // legitimate 301 reads as "unfetchable" and the check reports exit 2 on a
+  // page that is perfectly measurable. %{http_code} is the FINAL hop's status.
+  const status = execFileSync('curl', [
+    '-sL', '-A', ua, '-o', out, '-w', '%{http_code}', '--max-time', '30', target,
+  ], { encoding: 'utf8' }).trim();
+  return { path: out, status: Number(status) };
+}
+
+// A real browser UA. The default curl UA gets a Cloudflare 403 on this host —
+// that 403 is the bot challenge, not an authz answer, and reading it as "no
+// access" has cost this company a wrong conclusion before.
+const CURL_UA = arg('--ua',
+  'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 ' +
+  '(KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1');
+
+const fileArg = arg('--file');
+const urlArg = arg('--url', 'https://togetherweown.com/');
+const navigate = flag('--navigate');
+
+// Resolve the subject. Three modes collapse to two code paths: anything that
+// ends up as a local document is measured identically, whether it came off disk
+// or off the wire a second ago.
+let file = fileArg;
+let fetchedStatus = null;
+if (!file && !navigate) {
+  const got = fetchWithCurl(urlArg, CURL_UA);
+  if (got.status !== 200) {
+    console.log(`\nRESULT: could not fetch ${urlArg} — HTTP ${got.status}.`);
+    console.log('Nothing was measured. Retry, or pass --file with a saved copy.');
+    process.exit(2);
+  }
+  file = got.path;
+  fetchedStatus = got.status;
+  console.log(`fetched ${urlArg} via curl — HTTP ${got.status}\n`);
+}
+
+const url = file ? 'file://' + resolve(file) : urlArg;
 const shotDir = arg('--shots');
 // The CTA, named the way the page names it, with a generic fallback so this
 // keeps working after the WordPress page is replaced by the Laravel one.
@@ -174,7 +242,7 @@ const measured = rows.filter((r) => r.verdict === 'OK' || r.verdict === 'UNSTYLE
 const bad = rows.filter((r) => r.verdict === 'UNSTYLED' || r.verdict === 'CTA-ABSENT');
 const challenged = rows.filter((r) => r.verdict === 'CHALLENGED');
 
-console.log(`\nsource:      ${url}`);
+console.log(`\nsource:      ${fetchedStatus ? `${urlArg}  (curl HTTP ${fetchedStatus}, measured locally)` : url}`);
 if (rows[0]?.externalSheets !== undefined)
   console.log(`external stylesheets: ${rows[0].externalSheets} loaded from origin`);
 console.log(`measured:    ${measured.length}/${WIDTHS.length}` + (challenged.length ? `  (${challenged.length} challenged — rerun, or use --file)` : ''));
