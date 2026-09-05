@@ -11,8 +11,10 @@ are looking at DNS at 2am, this is the page.
 
 The new Laravel site **replaces the WordPress site** — founder's decision.
 
-1. **Now:** build on `staging.togetherweown.com`, walled off — the name is
-   **deleted** until TWO-37 lands an origin to put behind it (TOG-1156/TOG-1160).
+1. **Now:** build locally. `staging.togetherweown.com` **does not exist** — the
+   record was deleted on 5 September 2026 (TOG-1156/TOG-1160) because there was no
+   origin behind it to wall off. It returns, grey-cloud and behind basic auth, the
+   day TWO-37 lands one.
 2. **Launch:** the **apex**, `togetherweown.com`. One record change, scheduled by
    **TWO-61**, once the site is proven on staging.
 
@@ -52,7 +54,7 @@ curl -s -H 'accept: application/dns-json' 'https://cloudflare-dns.com/dns-query?
 | `www.togetherweown.com` | Same origin, same challenge — no redirect to the apex | Fix at cutover |
 | `togetherweown.com/discord` | **302 into a live Discord OAuth join flow.** The only working web→Discord path we have | **Must survive. See below** |
 | `togetherweown.com/join` | 301 → `/join/` → **HTTP 200, titled "Page Not Found", `<meta name="robots" content="follow, noindex">`** — a soft 404 | No `/join` *page*; a 301 to `/discord` — see below |
-| `staging.togetherweown.com` | **Deleted, 5 September 2026 (TOG-1160)** — NXDOMAIN in both address families. Until then it resolved proxied and answered `403 Error: Active domain connection for this domain not found` from WordPress.com: **upstream breakage, not a control we own**, which is why it was deleted rather than left alone (TOG-1156) | **Recreate only when TWO-37 lands an IP** — see below |
+| `staging.togetherweown.com` | **Deleted 5 September 2026, 20:20Z (TOG-1160)** — `NXDOMAIN` in both address families, 0 records in the zone for that name. It was a proxied **`CNAME`** to `staging-9a7d-togetherweown9.wpcomstaging.com` (**not** the `A`/`AAAA` pair predicted — see below) answering `403 Error: Active domain connection for this domain not found` from WordPress.com: **upstream breakage, not a control we own**, which is why it was deleted rather than left alone (TOG-1156) | **Recreate only when TWO-37 lands an IP** — see below |
 | `two.gg`, `www.two.gg` | **302**, path-preserving, to `https://togetherweown.com/<path>` | Make it 301 |
 | `two.gg/discord` | **301** to `togetherweown.com/discord/` — already correct | Leave it, retarget at cutover |
 | `two.gg/join` | 302 → the apex soft 404. Sends real people to a dead page | Point it at `/discord` |
@@ -219,12 +221,25 @@ section is written in the present tense of the pre-deletion world; it is kept as
 the reasoning behind the decision, and as the instructions for recreating the
 record later.
 
-| Type | Name | Value | Cloudflare | TTL |
-|---|---|---|---|---|
-| — | `staging` | **DELETE the existing `A`/`AAAA` record** — done, TOG-1160 | — | — |
+**It was a `CNAME`, not the `A`/`AAAA` pair this page and TOG-1156 predicted.**
+What was actually deleted, from the Cloudflare record itself:
 
-Recreate it, as the row below, on the day TWO-37 lands an IP and something is
-actually deployed behind it — not before.
+| Type | Name | Value as deleted | Cloudflare | TTL |
+|---|---|---|---|---|
+| `CNAME` | `staging` | `staging-9a7d-togetherweown9.wpcomstaging.com` | 🟠 Proxied | Auto |
+
+⚠️ **Resolved addresses do not reveal a proxied record's type.** We wrote `A`/`AAAA`
+because `staging` resolved to `172.66.40.206` and `2606:4700:3108::ac42:28ce`.
+Those are Cloudflare's proxy anycast addresses — *every* proxied record in this zone
+resolves to them whatever its own type, and a `CNAME` behind the orange cloud is
+never visible in a resolver answer at all. Read the type in the Cloudflare DNS table
+before writing down a rollback, or the rollback will recreate a record that never
+existed. **Rollback for this change:** re-create the `CNAME` row above, proxied.
+Note that doing so restores WordPress.com's `403` — an undo, not a fix.
+
+Recreate it properly, as the row below, on the day TWO-37 lands an IP and something
+is actually deployed behind it — not before. The type changes: a grey-cloud `A` at
+our own origin, not a `CNAME` back to WordPress.com.
 
 | Type | Name | Value | Cloudflare | TTL |
 |---|---|---|---|---|
@@ -548,7 +563,7 @@ anything:
 |---|---|---|
 | `two.gg` SPF / DMARC / DKIM TXT records | **Us, with the token** | DNS records |
 | `_dmarc.togetherweown.com` → add `rua` | **Us, with the token** | DNS record |
-| `staging` `A`/`AAAA` record **delete** | **Us, with the token** | DNS record, now — TOG-1156, does not wait on TWO-37 |
+| `staging` `CNAME` record **delete** | ~~Us, with the token~~ — **done by the operator, 5 Sep 2026 20:20Z** | DNS record — TOG-1156/TOG-1160, did not wait on TWO-37 |
 | `staging` `A` record recreate | **Us, with the token** | DNS record, once TWO-37 lands an IP |
 | `two.gg` catch-all 302 → 301 | **Founder, in Cloudflare → Rules** | Redirect Rule, not DNS |
 | `two.gg/join` → `/discord` retarget | **Founder, in Cloudflare → Rules** | Redirect Rule, not DNS |
