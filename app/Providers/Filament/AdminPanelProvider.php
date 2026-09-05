@@ -49,7 +49,30 @@ class AdminPanelProvider extends PanelProvider
                 // --color-brand from resources/css/two.css. Filament wants a
                 // shade map, not a CSS variable, so the crimson is restated
                 // here; two.css stays the source of truth for the public site.
-                'primary' => Color::hex('#c80154'),
+                //
+                // Shade 600 is overridden because Filament generates the ramp by
+                // holding chroma and hue and walking lightness, and the 600 it
+                // derives — oklch(0.5978 …), #cf4a6c — carries white text at
+                // 4.33:1. That is the background of every primary action button in
+                // dark mode, which this panel forces, so "New featured content"
+                // failed WCAG 2.2 AA 1.4.3 and ci/a11y.mjs failed the build. The
+                // brand crimson itself is fine (5.85:1); only this derived shade
+                // is not, so the fix darkens the one shade rather than changing
+                // the brand.
+                //
+                // 0.575 measured in Chrome at 4.78:1, not calculated: an oklch
+                // string has to be rasterised to sRGB before a contrast ratio
+                // means anything, and reading Chrome's computed value as if it
+                // were RGB gives a confidently wrong number. The threshold sits at
+                // 0.585 (4.60:1); this is two steps darker for margin.
+                //
+                // `+` and not a spread. The shade map is keyed by integers
+                // (50…950), and `[...$map]` renumbers integer keys from zero — it
+                // silently turns the ramp into 0…10, Filament finds no shade it
+                // recognises, and every panel page 500s. The union operator keeps
+                // the left operand's keys, so the 600 here wins and the rest of
+                // the generated ramp is untouched.
+                'primary' => [600 => 'oklch(0.575 0.169136 8.359)'] + Color::hex('#c80154'),
             ])
             // Forced dark: the design system (two.css) is dark-only, and a
             // light admin next to a dark site is exactly the "different

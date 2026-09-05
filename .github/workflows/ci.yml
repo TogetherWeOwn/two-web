@@ -379,9 +379,16 @@ jobs:
 
       # Backgrounded output goes to a file for the same reason as the Dusk job: a
       # process holding the step's pipe open hangs the step.
+      #
+      # The app listens on 8001 and ci/compressing-proxy.mjs fronts it on 8000, so
+      # everything measured below arrives gzipped the way every real host serves
+      # it. `artisan serve` compresses nothing, and measuring an uncompressed
+      # 603KB Filament stylesheet was reporting LCP 6.76s on /admin where the
+      # compressed truth is 2.74s. See the header of that file.
       - name: Start the application server
         run: |
-          php artisan serve --host=127.0.0.1 --port=8000 --no-reload > storage/logs/serve.log 2>&1 &
+          php artisan serve --host=127.0.0.1 --port=8001 --no-reload > storage/logs/serve.log 2>&1 &
+          node ci/compressing-proxy.mjs > storage/logs/proxy.log 2>&1 &
           for i in $(seq 1 30); do
             if curl -fsS http://127.0.0.1:8000/up > /dev/null; then
               echo "server up after ${i}s"; exit 0
@@ -389,8 +396,21 @@ jobs:
             sleep 1
           done
           echo "::error::the application never answered /up — budgets could not be measured"
-          cat storage/logs/serve.log
+          cat storage/logs/serve.log storage/logs/proxy.log
           exit 1
+
+      # Proves the front-end is actually compressing before anything is measured.
+      # Without this a proxy that quietly fell back to passthrough would just look
+      # like a slow site, and the budget failure would be blamed on the page.
+      - name: Verify the budget harness compresses
+        run: |
+          encoding="$(curl -sS -o /dev/null -D - -H 'Accept-Encoding: gzip' http://127.0.0.1:8000/ | tr -d '\r' | awk 'tolower($1) == "content-encoding:" { print tolower($2) }')"
+          if [ "$encoding" != "gzip" ]; then
+            echo "::error::the budgets harness is not compressing (content-encoding: '${encoding:-none}') — the numbers below would not be what production serves"
+            cat storage/logs/proxy.log
+            exit 1
+          fi
+          echo "harness is serving gzip"
 
       # Pinned exactly. An unpinned budget tool is a budget that changes without a
       # commit. Fold these into package.json devDependencies when convenient.

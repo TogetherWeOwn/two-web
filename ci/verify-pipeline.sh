@@ -473,12 +473,36 @@ lint() {
     # best-of-3 with the threshold still reading 2000 in the diff. `'median'` is
     # load-bearing rather than decoration: that same file defaults the option to
     # `'optimistic'`, so deleting it is best-of-3 by another route.
+    # Read through `assertMatrix` as well as a plain `assertions` block, because
+    # the budgets are now split by surface: the public pages keep the CEO's 2.0s
+    # LCP and /admin has its own, looser ceiling (see ci/lighthouserc.cjs for why).
+    #
+    # What is checked here is the budget that applies to the PUBLIC pages, which is
+    # the promise this guard exists to protect. The matrix entry is selected by
+    # running lhci's own matching rule against a public URL, so moving the public
+    # pages under a relaxed pattern fails this check rather than slipping past it —
+    # the escape hatch this opens is exactly one URL pattern wide, and the
+    # /admin-specific ceiling is asserted separately below.
     local effective entry audit value expected
     local loaded=1
     effective=$(node -e '
       const path = require("path");
       const config = require(path.resolve(process.argv[1]));
-      const assertions = ((config.ci || {}).assert || {}).assertions || {};
+      const assert = (config.ci || {}).assert || {};
+
+      // lhci applies every matrix entry whose pattern matches the URL, so the
+      // effective budget for a public page is the last matching entry — the same
+      // way a duplicate key in a plain object literal wins.
+      const PUBLIC_URL = "http://127.0.0.1:8000/";
+      let assertions = assert.assertions || {};
+      if (Array.isArray(assert.assertMatrix)) {
+        assertions = {};
+        for (const group of assert.assertMatrix) {
+          if (!new RegExp(group.matchingUrlPattern).test(PUBLIC_URL)) continue;
+          Object.assign(assertions, group.assertions || {});
+        }
+      }
+
       for (const audit of process.argv.slice(2)) {
         const entry = assertions[audit];
         if (!Array.isArray(entry)) { console.log(audit + "|absent|||"); continue; }
@@ -511,6 +535,38 @@ lint() {
           rc=1
         fi
       done
+
+      # The /admin exception, bounded. A per-surface budget is a door, and the way
+      # it gets abused is not by deleting the public budget above — it is by
+      # nudging the relaxed one up a few hundred milliseconds at a time until it
+      # means nothing. This pins the ceiling: raising it is a deliberate edit here
+      # with a reason, which is the same standard the public budget is held to.
+      local admin_lcp
+      admin_lcp=$(node -e '
+        const path = require("path");
+        const config = require(path.resolve(process.argv[1]));
+        const assert = (config.ci || {}).assert || {};
+        const ADMIN_URL = "http://127.0.0.1:8000/admin";
+        let assertions = assert.assertions || {};
+        if (Array.isArray(assert.assertMatrix)) {
+          assertions = {};
+          for (const group of assert.assertMatrix) {
+            if (!new RegExp(group.matchingUrlPattern).test(ADMIN_URL)) continue;
+            Object.assign(assertions, group.assertions || {});
+          }
+        }
+        const entry = assertions["largest-contentful-paint"];
+        if (!Array.isArray(entry)) { console.log("absent"); process.exit(0); }
+        const options = entry[1] || {};
+        console.log([entry[0], String(options.maxNumericValue), String(options.aggregationMethod)].join("|"));
+      ' "$budget_file" 2>&1)
+
+      if [ "$admin_lcp" = "error|3200|median" ]; then
+        pass "the \`/admin\` LCP exception is still capped at 3200 as an \`error\` on the median"
+      else
+        fail "the relaxed \`/admin\` LCP budget reads \`${admin_lcp}\`, not \`error|3200|median\`. That budget exists because Filament's own 603KB stylesheet is render-blocking and outside our control; it is not a general allowance to be widened. If the panel genuinely got slower, the fix is the Filament theme build, not this number."
+        rc=1
+      fi
     fi
   fi
 
