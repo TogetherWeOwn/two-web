@@ -72,3 +72,5 @@ Route::middleware('auth')->group(function () {
     Route::put('/events/{event}/rsvp', [RsvpController::class, 'update'])->name('events.rsvp.update');
     Route::delete('/events/{event}/rsvp', [RsvpController::class, 'destroy'])->name('events.rsvp.destroy');
 });
+
+Route::fallback(fn () => response('Page Not Found'));
