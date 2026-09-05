@@ -22,7 +22,11 @@ import { AxePuppeteer } from '@axe-core/puppeteer';
 import puppeteer from 'puppeteer';
 import pages from './pages.cjs';
 
-const { urls } = pages;
+const { urls, SESSION_COOKIE, BASE_URL, assertMeasurable } = pages;
+
+// Before Chrome even starts: an authenticated page with no session would be
+// measured as the Discord redirect, which passes everything.
+assertMeasurable();
 
 // wcag22aa implies the earlier levels are still checked — axe tags are additive,
 // not a replacement — so all six are listed. `best-practice` is deliberately absent:
@@ -81,12 +85,38 @@ try {
         isMobile: viewport.isMobile,
       });
 
+      // Authenticated pages (/admin) are a redirect to Discord without this. The
+      // cookie is set for every page: on a signed-out page it is simply ignored.
+      if (SESSION_COOKIE) {
+        const [name, ...rest] = SESSION_COOKIE.split('=');
+        await page.setCookie({
+          name,
+          value: rest.join('='),
+          url: BASE_URL,
+        });
+      }
+
       const response = await page.goto(url, { waitUntil: 'networkidle0', timeout: 30_000 });
 
       // A 500 that renders an error page can otherwise pass the accessibility check
       // with flying colours.
       if (!response || !response.ok()) {
         console.error(`::error::${where} returned HTTP ${response ? response.status() : 'no response'}`);
+        violationCount += 1;
+        await page.close();
+        continue;
+      }
+
+      // A session that did not take lands on the Discord handoff, which is a
+      // small, clean, entirely accessible page — so it passes axe and reports
+      // that /admin is fine when /admin was never opened. Landing somewhere
+      // other than the requested URL is a failure, not a redirect to follow.
+      const landed = page.url();
+      if (new URL(landed).pathname !== new URL(url).pathname) {
+        console.error(
+          `::error::${where} redirected to ${landed}. The page was never measured — ` +
+            'if this is an authenticated page, CI_SESSION_COOKIE is missing or expired.'
+        );
         violationCount += 1;
         await page.close();
         continue;

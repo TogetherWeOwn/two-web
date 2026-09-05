@@ -9,12 +9,30 @@
 // that says so. A budget quietly relaxed inside a feature PR is the failure mode
 // this whole file exists to prevent.
 
-const { urls } = require('./pages.cjs');
+const { urls, extraHeaders, assertMeasurable } = require('./pages.cjs');
 
 module.exports = {
   ci: {
     collect: {
-      url: urls,
+      // A getter, not `url: urls`, and the reason is not cosmetic. This file is
+      // require()d by two callers with opposite needs: lhci, which is about to
+      // open these pages and must refuse to do it signed out, and
+      // `ci/verify-pipeline.sh --lint`, which only reads the thresholds below and
+      // runs in `static` where there is no session. Checking at load time made the
+      // gate's own wiring check red on every PR; checking here fires for whoever
+      // actually asks for the list, which is only ever the tool that loads it.
+      get url() {
+        assertMeasurable();
+
+        return urls;
+      },
+
+      // The moderator panel is behind auth, so without this Lighthouse would
+      // score the Discord redirect instead — a tiny, fast page that passes every
+      // budget while /admin goes unmeasured (TOG-54). The cookie comes from
+      // `artisan ci:session-cookie --moderator`; ci/pages.cjs throws outright if
+      // an authenticated page is listed and the cookie is absent.
+      extraHeaders,
 
       // Lighthouse's default preset is already the mid-range phone: a Moto G Power
       // class device, 4x CPU slowdown, simulated Slow 4G. We do not loosen it — the

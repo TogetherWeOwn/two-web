@@ -373,6 +373,22 @@ jobs:
       - name: Install budget tooling
         run: npm i --no-save --no-package-lock @lhci/cli@0.14.0 puppeteer@23.11.1 @axe-core/puppeteer@4.10.2 axe-core@4.10.2
 
+      # The moderator panel is behind Discord auth, so measuring it needs a real
+      # session (TOG-54). Without this both tools would follow the redirect and
+      # score the Discord handoff — a tiny page that passes every budget while
+      # /admin goes unmeasured. ci/pages.cjs throws if this is empty, so a failure
+      # to mint one is loud rather than a silent green.
+      - name: Mint a moderator session for the authenticated pages
+        run: |
+          COOKIE="$(php artisan ci:session-cookie --moderator | tail -1)"
+          if [ -z "$COOKIE" ]; then
+            echo "::error::could not mint a session cookie — /admin cannot be measured"
+            exit 1
+          fi
+          # Masked so the session value never appears in a public build log.
+          echo "::add-mask::${COOKIE#*=}"
+          echo "CI_SESSION_COOKIE=$COOKIE" >> "$GITHUB_ENV"
+
       # Three runs per URL, median reported. One run of LCP on a shared runner is
       # noise; see docs/flake-policy.md on why the answer was more samples and a
       # honest headroom margin rather than a retry.
