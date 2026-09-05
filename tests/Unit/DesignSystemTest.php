@@ -26,12 +26,33 @@ it('ships every font file the tokens ask the browser for', function () use ($tok
     }
 });
 
-it('declares the typeface in exactly one place', function () use ($tokens) {
+// The moderator panel's stylesheet is Filament's own chrome, not the design
+// system, and it is exempt from the rule below. The exemption is narrow and it
+// is conditional — see the test immediately after this one, which is what makes
+// it safe.
+$adminTheme = 'resources/css/filament/admin/theme.css';
+
+it('declares the typeface in exactly one place', function () use ($tokens, $adminTheme) {
     // The Designer owns the font stack and it lives in the base layer of
     // two.css. A `font-family` anywhere else — or a stray Tailwind `@theme`
     // block, which is how Laravel's default Instrument Sans got here — means
     // two sources of truth and a component that quietly stops matching the
     // spec.
+    //
+    // /admin is the one exemption, and it is not a relaxation of the rule so
+    // much as a statement of where the rule applies. The panel is Filament's
+    // vendor chrome in Filament's own Inter Variable; it has never rendered
+    // Archivo and TOG-1008 did not change that — measured, both before and
+    // after, as `Inter Variable` computed on `.fi-body`. What TOG-1008 changed
+    // is *where the vendor's font tokens sit*: tree-shaking the 615KB
+    // stylesheet meant replacing Filament's `index.css` manifests with the
+    // subset of imports this panel renders, and the manifests' `@theme` block
+    // had to come across verbatim with them. So the same vendor bytes that used
+    // to sit unscanned in `vendor/` now sit in `resources/` and this scan finds
+    // them. Nothing about the public site's typeface moved.
+    //
+    // The exemption is only safe while that file's font tokens really are the
+    // vendor's and not somebody's opinion, which is the next test's job.
     $offenders = [];
 
     $files = new RecursiveIteratorIterator(
@@ -41,7 +62,7 @@ it('declares the typeface in exactly one place', function () use ($tokens) {
     foreach ($files as $file) {
         $relative = str_replace(base_path().'/', '', $file->getPathname());
 
-        if (! $file->isFile() || $relative === $tokens) {
+        if (! $file->isFile() || $relative === $tokens || $relative === $adminTheme) {
             continue;
         }
 
@@ -53,6 +74,55 @@ it('declares the typeface in exactly one place', function () use ($tokens) {
     }
 
     expect($offenders)->toBe([], "The typeface is set in {$tokens} and nowhere else:\n".implode("\n", $offenders));
+});
+
+it('exempts the admin panel theme only while its font tokens are still the vendor\'s', function () use ($adminTheme) {
+    // The exemption above is worth exactly this test. Without it, that file is a
+    // hole in the one-typeface rule that anyone could set a font in — and the
+    // failure would be silent, because a panel in the wrong typeface still
+    // renders, still passes axe, and still scores fine.
+    //
+    // So: every font token in the panel theme has to be a byte-for-byte copy of
+    // the installed Filament manifest it came from. Change one and this fails,
+    // whether the change is a typo, a well-meant `Archivo` (which belongs in
+    // two.css, not here), or a Filament upgrade that moved a token underneath
+    // us. The vendor file is the comparison, so there is nothing to keep in
+    // sync by hand.
+    $vendorManifest = base_path('vendor/filament/filament/resources/css/index.css');
+
+    expect($vendorManifest)->toBeReadableFile();
+
+    $fontLines = static function (string $path): array {
+        $lines = [];
+
+        foreach (file($path) as $line) {
+            if (preg_match('/font-family|--font-/', $line)) {
+                $lines[] = trim($line);
+            }
+        }
+
+        return $lines;
+    };
+
+    $ours = $fontLines(base_path($adminTheme));
+    $vendors = $fontLines($vendorManifest);
+
+    expect($ours)->not->toBeEmpty(
+        "{$adminTheme} declares no font tokens at all. Filament resolves every ".
+        '`font-sans` utility in the panel against them, so without the copied '.
+        '@theme block the panel falls back to the browser default — measured as '.
+        'plain -apple-system/Segoe UI instead of Inter Variable. Restore the '.
+        'block, or drop the exemption in the test above.'
+    );
+
+    expect($ours)->toBe(
+        $vendors,
+        "The font tokens in {$adminTheme} are no longer a verbatim copy of ".
+        "{$vendorManifest}. That file is exempt from the one-typeface rule only ".
+        'because its font tokens are the vendor\'s own, so this is either a '.
+        'Filament upgrade to copy across, or a typeface decision in the wrong '.
+        'file — the design system lives in resources/css/two.css.'
+    );
 });
 
 it('preloads the headline font and tells the browser the page is dark', function () {

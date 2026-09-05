@@ -1,0 +1,335 @@
+/*
+ * The moderator panel's stylesheet.
+ *
+ * WHY THIS IS NOT THE ONE LINE THE GENERATOR WROTE
+ *
+ * `php artisan make:filament-theme` generates a file whose whole body is
+ * `@import '../../../../vendor/filament/filament/resources/css/theme.css'`,
+ * and that is what this file was until TOG-1008. It tree-shakes nothing, and
+ * the reason is worth writing down, because "we set up a custom theme build"
+ * sounds like it should be the fix and is not.
+ *
+ * Filament's stylesheet is not utilities generated from the classes our markup
+ * happens to use. It is hand-authored `.fi-*` component CSS in
+ * `layer(components)`, shipped as source and pulled in through a chain of
+ * `@import`s, plus a few vendored third-party sheets. Tailwind's content
+ * scanning never removes a rule a human wrote — it only decides which
+ * *utilities* to generate. Measured: the generated theme compiled to 614,649
+ * bytes against the vendor build's 617,236, a 0.4% saving for a whole build
+ * pipeline, because the components layer (584,314B of that output) is not
+ * scannable and only the utilities layer (22,810B) ever shrank.
+ *
+ * The theme mechanism is still the right vehicle; the tree-shaking has to be
+ * this explicit import list, because in Filament the imports are the only thing
+ * that decides what ships. So the vendor `index.css` manifests are replaced
+ * below by the subset of their imports this panel can render. Those manifests
+ * are pure `@import` lists — checked, not assumed — except for two `@theme`
+ * blocks and a `@variant`, which are reproduced verbatim at the bottom.
+ *
+ * HOW THE SUBSET WAS CHOSEN, AND THE TRAP IN THE OBVIOUS METHOD
+ *
+ * From what the panel is built out of in code: two resources whose forms use
+ * TextInput, Textarea, Select, Toggle and DateTimePicker, whose tables use
+ * TextColumn and IconColumn with SelectFilter/TernaryFilter and row actions,
+ * plus the Dashboard page and AccountWidget.
+ *
+ * Not from which classes appear in the rendered HTML. That distinction is
+ * load-bearing, because most of what this panel can show is not on screen when
+ * it loads. Every confirmation modal, every dropdown, every notification toast
+ * and the whole column manager are absent from the initial DOM and appear only
+ * after a moderator clicks something; a probe that scrapes classes off the
+ * loaded pages says to delete `modal.css`, `dropdown/*`, `notification*.css`
+ * and `column-manager.css`, and is confidently wrong about all of them. They
+ * are kept because an action or a `->toggleable()` declares them.
+ *
+ * So the cuts below are restricted to components this panel has no way to
+ * produce — fields nothing constructs, column types nothing declares, packages
+ * nothing registers. `support`'s shared primitives are imported almost whole,
+ * because the panel chrome and every overlay are built out of them.
+ *
+ * IF YOU ADD A COMPONENT, ADD ITS IMPORT
+ *
+ * A `RichEditor` added to a form with no line added here renders unstyled, and
+ * no other check will tell you: Lighthouse scores it faster and axe still
+ * passes, because unstyled is not inaccessible.
+ * `tests/Feature/Admin/ThemeCoverageTest.php` reads the schemas this panel
+ * actually declares and fails when one names a component whose CSS is not
+ * imported here.
+ */
+
+@import 'tailwindcss' source(none);
+
+@source '../../../../app/Filament/**/*';
+@source '../../../../resources/views/filament/**/*';
+
+/* --- support: the shared primitives ---------------------------------------
+ *
+ * Buttons, inputs, modals, dropdowns, badges, pagination, sections, tooltips.
+ * The panel chrome and every overlay a moderator can open are built from these,
+ * so this package is imported whole apart from the four leaves noted below.
+ * `dist/index.css` is Tippy's own stylesheet, which backs the `x-tooltip`
+ * attributes in button, icon-button and table-column CSS.
+ */
+@import '../../../../vendor/filament/support/resources/css/base.css' layer(base);
+@import '../../../../vendor/filament/support/resources/css/utilities.css' layer(utilities);
+@import '../../../../vendor/filament/support/dist/index.css' layer(components);
+@import '../../../../vendor/filament/support/resources/css/components/avatar.css' layer(components);
+@import '../../../../vendor/filament/support/resources/css/components/badge.css' layer(components);
+@import '../../../../vendor/filament/support/resources/css/components/breadcrumbs.css' layer(components);
+@import '../../../../vendor/filament/support/resources/css/components/button.css' layer(components);
+@import '../../../../vendor/filament/support/resources/css/components/callout.css' layer(components);
+@import '../../../../vendor/filament/support/resources/css/components/dropdown/header.css' layer(components);
+@import '../../../../vendor/filament/support/resources/css/components/dropdown/index.css' layer(components);
+@import '../../../../vendor/filament/support/resources/css/components/dropdown/list/index.css' layer(components);
+@import '../../../../vendor/filament/support/resources/css/components/dropdown/list/item.css' layer(components);
+@import '../../../../vendor/filament/support/resources/css/components/empty-state.css' layer(components);
+@import '../../../../vendor/filament/support/resources/css/components/grid.css' layer(components);
+@import '../../../../vendor/filament/support/resources/css/components/icon.css' layer(components);
+@import '../../../../vendor/filament/support/resources/css/components/icon-button.css' layer(components);
+@import '../../../../vendor/filament/support/resources/css/components/input/checkbox.css' layer(components);
+@import '../../../../vendor/filament/support/resources/css/components/input/index.css' layer(components);
+@import '../../../../vendor/filament/support/resources/css/components/input/select.css' layer(components);
+@import '../../../../vendor/filament/support/resources/css/components/input/wrapper.css' layer(components);
+@import '../../../../vendor/filament/support/resources/css/components/link.css' layer(components);
+@import '../../../../vendor/filament/support/resources/css/components/loading-indicator.css' layer(components);
+@import '../../../../vendor/filament/support/resources/css/components/loading-section.css' layer(components);
+@import '../../../../vendor/filament/support/resources/css/components/modal.css' layer(components);
+@import '../../../../vendor/filament/support/resources/css/components/pagination.css' layer(components);
+@import '../../../../vendor/filament/support/resources/css/components/section.css' layer(components);
+@import '../../../../vendor/filament/support/resources/css/components/tabs.css' layer(components);
+@import '../../../../vendor/filament/support/resources/css/components/toggle.css' layer(components);
+@import '../../../../vendor/filament/support/resources/css/components/tooltip.css' layer(components);
+
+/* Cut from support: `input/one-time-code.css` and `input/radio.css` (no OTP or
+ * Radio field is constructed), `fieldset.css` (no Fieldset), and
+ * `sortable.css` (nothing is reorderable — neither table calls
+ * `->reorderable()`, there is no Repeater, and the column manager's reorder
+ * handle only appears for a reorderable set of columns). Small files; they are
+ * cut for the same reason as the large ones rather than for the bytes. */
+
+/* --- actions --------------------------------------------------------------
+ * Alignment and width classes shared by every action button, header action and
+ * confirmation modal — the publish/cancel/edit/delete actions on both tables.
+ */
+@import '../../../../vendor/filament/actions/resources/css/actions.css' layer(components);
+
+/* --- forms: the five field types the two schemas construct -----------------
+ *
+ * `field.css` is the shared label/helper-text/error chrome every field needs;
+ * the rest is one file per field type, and the list is exactly what EventForm
+ * and FeaturedContentForm name.
+ */
+@import '../../../../vendor/filament/forms/resources/css/components/field.css' layer(components);
+@import '../../../../vendor/filament/forms/resources/css/components/date-time-picker.css' layer(components);
+@import '../../../../vendor/filament/forms/resources/css/components/select.css' layer(components);
+@import '../../../../vendor/filament/forms/resources/css/components/text-input.css' layer(components);
+@import '../../../../vendor/filament/forms/resources/css/components/textarea.css' layer(components);
+
+/* Cut from forms, and this is the single largest saving here: the rich text and
+ * markdown editors (29.6KB of source between them), repeater, builder, file
+ * upload, key-value, checkbox-list, code-editor, color-picker, slider,
+ * tags-input, toggle-buttons, radio, modal-table-select — no schema constructs
+ * any of them. With those gone, `forms/dist/index.css` goes too: its 39.2KB is
+ * entirely FilePond, EasyMDE/CodeMirror, Cropper and noUiSlider, the vendored
+ * stylesheets for exactly those cut fields, and it contains no `.fi-` rule at
+ * all. */
+
+/* --- schemas: the layout components ---------------------------------------- */
+@import '../../../../vendor/filament/schemas/resources/css/schema.css' layer(components);
+@import '../../../../vendor/filament/schemas/resources/css/components/actions.css' layer(components);
+@import '../../../../vendor/filament/schemas/resources/css/components/flex.css' layer(components);
+@import '../../../../vendor/filament/schemas/resources/css/components/form.css' layer(components);
+@import '../../../../vendor/filament/schemas/resources/css/components/icon.css' layer(components);
+@import '../../../../vendor/filament/schemas/resources/css/components/image.css' layer(components);
+@import '../../../../vendor/filament/schemas/resources/css/components/section.css' layer(components);
+@import '../../../../vendor/filament/schemas/resources/css/components/tabs.css' layer(components);
+@import '../../../../vendor/filament/schemas/resources/css/components/text.css' layer(components);
+@import '../../../../vendor/filament/schemas/resources/css/components/unordered-list.css' layer(components);
+
+/* Cut from schemas: `fused-group.css` (9.8KB — `FusedGroup` is constructed only
+ * by the query-builder package, which this panel does not use) and `wizard.css`
+ * (5.5KB — no `Wizard`; both forms are a flat schema). */
+
+/* --- tables: the two column types the two tables declare ------------------- */
+@import '../../../../vendor/filament/tables/resources/css/actions.css' layer(components);
+@import '../../../../vendor/filament/tables/resources/css/cell.css' layer(components);
+@import '../../../../vendor/filament/tables/resources/css/column-manager.css' layer(components);
+@import '../../../../vendor/filament/tables/resources/css/columns/icon.css' layer(components);
+@import '../../../../vendor/filament/tables/resources/css/columns/text.css' layer(components);
+@import '../../../../vendor/filament/tables/resources/css/container.css' layer(components);
+@import '../../../../vendor/filament/tables/resources/css/content.css' layer(components);
+@import '../../../../vendor/filament/tables/resources/css/empty-state.css' layer(components);
+@import '../../../../vendor/filament/tables/resources/css/header-cell.css' layer(components);
+@import '../../../../vendor/filament/tables/resources/css/row.css' layer(components);
+@import '../../../../vendor/filament/tables/resources/css/table.css' layer(components);
+
+/* `column-manager.css` is kept because both tables call `->toggleable()`, which
+ * puts the column-manager dropdown in the header.
+ *
+ * Cut from tables: the column types neither table declares (checkbox, color,
+ * image, select, text-input, toggle), every `columns/layout/*` (no grid, panel,
+ * split or stack layout), and every `columns/summaries/*` (no `->summarize()`
+ * anywhere). */
+
+/* --- notifications ---------------------------------------------------------
+ * The toast a moderator gets after publishing, cancelling, saving or deleting.
+ */
+@import '../../../../vendor/filament/notifications/resources/css/notification.css' layer(components);
+@import '../../../../vendor/filament/notifications/resources/css/notifications.css' layer(components);
+
+/* Cut: `database-notifications.css` — the panel does not call
+ * `->databaseNotifications()`, so that polling panel and its modal never
+ * render. */
+
+/* --- widgets --------------------------------------------------------------- */
+@import '../../../../vendor/filament/widgets/resources/css/widget.css' layer(components);
+
+/* Cut: `chart-widget.css` and `stats-overview-widget.css`. The panel registers
+ * exactly one widget, `AccountWidget`, and `discoverPages` finds no others. */
+
+/* Cut entirely: the `infolists` package (15.2KB of source). Filament v4 routes
+ * infolists through schemas, and this panel builds none — both resources are
+ * List/Create/Edit with no `->infolist()` and no ViewRecord page. */
+
+/* --- the panel shell ------------------------------------------------------- */
+@import '../../../../vendor/filament/filament/resources/css/base.css' layer(base);
+@import '../../../../vendor/filament/filament/resources/css/components/global-search.css' layer(components);
+@import '../../../../vendor/filament/filament/resources/css/components/header.css' layer(components);
+@import '../../../../vendor/filament/filament/resources/css/components/layout.css' layer(components);
+@import '../../../../vendor/filament/filament/resources/css/components/logo.css' layer(components);
+@import '../../../../vendor/filament/filament/resources/css/components/page.css' layer(components);
+@import '../../../../vendor/filament/filament/resources/css/components/sidebar.css' layer(components);
+@import '../../../../vendor/filament/filament/resources/css/components/topbar.css' layer(components);
+@import '../../../../vendor/filament/filament/resources/css/components/user-menu.css' layer(components);
+@import '../../../../vendor/filament/filament/resources/css/widgets/account-widget.css' layer(components);
+@import '../../../../vendor/filament/filament/resources/css/utilities.css' layer(utilities);
+
+/* Cut from the shell: `tenant-menu.css` (no multi-tenancy), `theme-switcher.css`
+ * (the panel is `->darkMode(isForced: true)`, so the switcher is never
+ * rendered) and `widgets/filament-info-widget.css` (that widget is not
+ * registered). */
+
+/* --- the non-import content of the manifests we replaced -------------------
+ *
+ * `support/resources/css/index.css` and `filament/resources/css/index.css` each
+ * carry one `@theme inline` block alongside their imports, and the latter also
+ * declares the dark variant. Every rule above resolves `text-gray-500`,
+ * `bg-primary-600` and `font-sans` against these, and every `dark:` utility
+ * against the variant, so skipping those two manifests means reproducing this
+ * here. Copied verbatim from Filament 4.12.8; there is nothing to trim in it.
+ * ThemeCoverageTest checks it still matches the installed vendor files, so
+ * a `composer update` that changes a token fails the suite rather than silently
+ * dropping a colour.
+ */
+@variant dark (&:where(.dark, .dark *));
+
+@theme inline {
+    --color-color-50: var(--color-50);
+    --color-color-100: var(--color-100);
+    --color-color-200: var(--color-200);
+    --color-color-300: var(--color-300);
+    --color-color-400: var(--color-400);
+    --color-color-500: var(--color-500);
+    --color-color-600: var(--color-600);
+    --color-color-700: var(--color-700);
+    --color-color-800: var(--color-800);
+    --color-color-900: var(--color-900);
+    --color-color-950: var(--color-950);
+
+    --color-danger-50: var(--danger-50);
+    --color-danger-100: var(--danger-100);
+    --color-danger-200: var(--danger-200);
+    --color-danger-300: var(--danger-300);
+    --color-danger-400: var(--danger-400);
+    --color-danger-500: var(--danger-500);
+    --color-danger-600: var(--danger-600);
+    --color-danger-700: var(--danger-700);
+    --color-danger-800: var(--danger-800);
+    --color-danger-900: var(--danger-900);
+    --color-danger-950: var(--danger-950);
+
+    --color-gray-50: var(--gray-50);
+    --color-gray-100: var(--gray-100);
+    --color-gray-200: var(--gray-200);
+    --color-gray-300: var(--gray-300);
+    --color-gray-400: var(--gray-400);
+    --color-gray-500: var(--gray-500);
+    --color-gray-600: var(--gray-600);
+    --color-gray-700: var(--gray-700);
+    --color-gray-800: var(--gray-800);
+    --color-gray-900: var(--gray-900);
+    --color-gray-950: var(--gray-950);
+
+    --color-info-50: var(--info-50);
+    --color-info-100: var(--info-100);
+    --color-info-200: var(--info-200);
+    --color-info-300: var(--info-300);
+    --color-info-400: var(--info-400);
+    --color-info-500: var(--info-500);
+    --color-info-600: var(--info-600);
+    --color-info-700: var(--info-700);
+    --color-info-800: var(--info-800);
+    --color-info-900: var(--info-900);
+    --color-info-950: var(--info-950);
+
+    --color-primary-50: var(--primary-50);
+    --color-primary-100: var(--primary-100);
+    --color-primary-200: var(--primary-200);
+    --color-primary-300: var(--primary-300);
+    --color-primary-400: var(--primary-400);
+    --color-primary-500: var(--primary-500);
+    --color-primary-600: var(--primary-600);
+    --color-primary-700: var(--primary-700);
+    --color-primary-800: var(--primary-800);
+    --color-primary-900: var(--primary-900);
+    --color-primary-950: var(--primary-950);
+
+    --color-success-50: var(--success-50);
+    --color-success-100: var(--success-100);
+    --color-success-200: var(--success-200);
+    --color-success-300: var(--success-300);
+    --color-success-400: var(--success-400);
+    --color-success-500: var(--success-500);
+    --color-success-600: var(--success-600);
+    --color-success-700: var(--success-700);
+    --color-success-800: var(--success-800);
+    --color-success-900: var(--success-900);
+    --color-success-950: var(--success-950);
+
+    --color-warning-50: var(--warning-50);
+    --color-warning-100: var(--warning-100);
+    --color-warning-200: var(--warning-200);
+    --color-warning-300: var(--warning-300);
+    --color-warning-400: var(--warning-400);
+    --color-warning-500: var(--warning-500);
+    --color-warning-600: var(--warning-600);
+    --color-warning-700: var(--warning-700);
+    --color-warning-800: var(--warning-800);
+    --color-warning-900: var(--warning-900);
+    --color-warning-950: var(--warning-950);
+
+    --color-custom-50: var(--color-50);
+    --color-custom-100: var(--color-100);
+    --color-custom-200: var(--color-200);
+    --color-custom-300: var(--color-300);
+    --color-custom-400: var(--color-400);
+    --color-custom-500: var(--color-500);
+    --color-custom-600: var(--color-600);
+    --color-custom-700: var(--color-700);
+    --color-custom-800: var(--color-800);
+    --color-custom-900: var(--color-900);
+    --color-custom-950: var(--color-950);
+}
+
+@theme inline {
+    --font-mono:
+        var(--mono-font-family), ui-monospace, SFMono-Regular, Menlo, Monaco,
+        Consolas, 'Liberation Mono', 'Courier New', monospace;
+    --font-sans:
+        var(--font-family), ui-sans-serif, system-ui, sans-serif,
+        'Apple Color Emoji', 'Segoe UI Emoji', 'Segoe UI Symbol',
+        'Noto Color Emoji';
+    --font-serif:
+        var(--serif-font-family), ui-serif, Georgia, Cambria, 'Times New Roman',
+        Times, serif;
+}

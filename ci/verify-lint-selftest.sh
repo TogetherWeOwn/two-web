@@ -257,6 +257,20 @@ expect_fail budget-aggregation-swapped 'budget `server-response-time` is not ass
 expect_fail budget-aggregation-removed 'budget `largest-contentful-paint` is not asserted' \
   sed -i "s/{ maxNumericValue: lcpBudgetMs, aggregationMethod: 'median' }/{ maxNumericValue: lcpBudgetMs }/" ci/lighthouserc.cjs
 
+# The /admin exception widened. This is what the public budget is protected *by*:
+# the reason the CEO's 2000 above survives contact with a slow vendor panel is
+# that the panel has a ceiling of its own that nobody may nudge. Widen that and
+# there is no pressure left on the public number — which makes an unnoticed edit
+# here strictly worse than an edit to the 2000, because it looks like it costs
+# nothing.
+#
+# TOG-1008 lowered it from 3200 to 3000 against a measurement, which is the
+# standard: a deliberate edit here in a commit that says what it measured. The
+# lint reads the effective value through node, so raising the literal, downgrading
+# the exception to a warning, or dropping its median all read the same way — red.
+expect_fail admin-exception-widened 'the relaxed `/admin` LCP budget reads' \
+  sed -i 's/buildAssertions(3000)/buildAssertions(4000)/' ci/lighthouserc.cjs
+
 # A second entry appended for an audit that already has one. The pinned line is
 # left exactly as it was — and a JavaScript object literal keeps the *last*
 # duplicate key, so lhci loads the new one and the CEO's LCP budget is gone. The
