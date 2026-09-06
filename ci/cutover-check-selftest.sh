@@ -118,7 +118,7 @@ pass "live-seo-probe selftest passes"
 # ---------------------------------------------------------------------------
 # 6. The staging cutover assertion is the same Access gate as the standalone check
 
-for name in no-wildcard apex-ipv4 apex-ipv6 staging-ipv4 staging-ipv6 staging-own-record staging-access-redirect staging-authenticated-up; do
+for name in no-wildcard apex-ipv4 apex-ipv6 staging-ipv4 staging-ipv6 staging-own-record staging-access-redirect staging-authenticated-up staging-noindex-header; do
   grep -qE "(PASS|FAIL) +${name}" <<<"$after_out" \
     || fail "'--phase after' emitted no ${name} result — staging Access coverage drifted out of the cutover gate"
 done

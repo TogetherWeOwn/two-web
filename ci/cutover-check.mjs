@@ -335,9 +335,10 @@ function checkWpJsonGone() {
 }
 
 // Staging is an intentional, separate Coolify application now. The cutover gate
-// must prove that the record resolves and remains behind Cloudflare Access; a
-// stale NXDOMAIN assertion would reject the secured state and encourage deleting
-// the application hostname. Keep this delegated to the same implementation as
+// must prove that the record resolves, remains behind Cloudflare Access and
+// returns the staging-only noindex header; a stale NXDOMAIN assertion would reject
+// the secured state and encourage deleting the application hostname. Keep this
+// delegated to the same implementation as
 // ci/staging-exposure-check.mjs so the cutover and standalone gates cannot drift.
 function checkStagingRecord() {
   for (const result of checkStagingAccess()) {

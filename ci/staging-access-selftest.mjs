@@ -11,7 +11,7 @@ const successProbe = (url, options = {}) => {
   if (url.endsWith('/up')) {
     assert.equal(options.headers['CF-Access-Client-Id'], 'test-id');
     assert.equal(options.headers['CF-Access-Client-Secret'], 'test-secret');
-    return { status: 200, headers: {} };
+    return { status: 200, headers: { 'x-robots-tag': 'noindex, nofollow' } };
   }
   return {
     status: 302,
@@ -27,9 +27,11 @@ const run = ({ dns = successDns, probe = successProbe, env } = {}) =>
 const result = (results, name) => results.find((item) => item.name === name);
 
 const success = run();
-assert.equal(success.length, 8);
+assert.equal(success.length, 9);
 assert.equal(success.every((item) => item.status === 'PASS'), true);
-console.log('ok  success fixture passes dual-stack DNS, Access redirect and authenticated /up');
+console.log(
+  'ok  success fixture passes dual-stack DNS, Access redirect, authenticated /up and exact noindex header',
+);
 
 const ipv6Missing = new Map(successDns);
 ipv6Missing.set('staging.togetherweown.com', addresses(['104.21.1.1']));
@@ -79,6 +81,21 @@ const unhealthy = run({
 assert.equal(result(unhealthy, 'staging-authenticated-up').status, 'FAIL');
 console.log('ok  authenticated /up must return HTTP 200');
 
+for (const [robotsTag, label] of [
+  [undefined, 'missing'],
+  ['noindex', 'incomplete'],
+  ['nofollow, noindex', 'reordered'],
+]) {
+  const responseHeaders = robotsTag === undefined ? {} : { 'x-robots-tag': robotsTag };
+  const failed = run({
+    probe: (url, options) =>
+      url.endsWith('/up') ? { status: 200, headers: responseHeaders } : successProbe(url, options),
+  });
+  assert.equal(result(failed, 'staging-authenticated-up').status, 'PASS');
+  assert.equal(result(failed, 'staging-noindex-header').status, 'FAIL');
+  console.log(`ok  ${label} X-Robots-Tag fails the exact staging directive gate`);
+}
+
 assert.equal(isCloudflareAccessRedirect('https://team.cloudflareaccess.com/login'), true);
 assert.equal(isCloudflareAccessRedirect('https://nested.team.cloudflareaccess.com/login'), false);
 assert.equal(isCloudflareAccessRedirect('https://cloudflareaccess.com.evil.example/login'), false);
@@ -106,4 +123,4 @@ assert.equal(invocation.args.join(' ').includes(secret), false);
 assert.equal(invocation.options.input.includes(secret), true);
 console.log('ok  service-token values go through curl stdin, never argv');
 
-console.log('\n11/11 ok');
+console.log('\n14/14 ok');

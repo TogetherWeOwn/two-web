@@ -7,6 +7,7 @@ const UA =
 export const STAGING_HOST = 'staging.togetherweown.com';
 export const APEX_HOST = 'togetherweown.com';
 export const CONTROL_HOST = 'nonexistent-probe-tog1284.togetherweown.com';
+export const STAGING_ROBOTS_TAG = 'noindex, nofollow';
 
 export const PASS = 'PASS';
 export const FAIL = 'FAIL';
@@ -196,11 +197,10 @@ export function checkStagingAccess({
   const clientId = env.CF_ACCESS_CLIENT_ID;
   const clientSecret = env.CF_ACCESS_CLIENT_SECRET;
   if (!clientId || !clientSecret) {
-    record(
-      FAIL,
-      'staging-authenticated-up',
-      'CF_ACCESS_CLIENT_ID and CF_ACCESS_CLIENT_SECRET are required to prove authenticated /up',
-    );
+    const detail =
+      'CF_ACCESS_CLIENT_ID and CF_ACCESS_CLIENT_SECRET are required to prove authenticated /up';
+    record(FAIL, 'staging-authenticated-up', detail);
+    record(FAIL, 'staging-noindex-header', `${detail} and its X-Robots-Tag header`);
   } else {
     const authenticated = makeRequest(`https://${host}/up`, {
       headers: {
@@ -216,6 +216,16 @@ export function checkStagingAccess({
         : `authenticated GET /up returned HTTP ${authenticated.status}${
             authenticated.status === 200 ? '' : ' — expected 200'
           }`,
+    );
+    const robotsTag = authenticated.headers?.['x-robots-tag'];
+    record(
+      !authenticated.error && robotsTag === STAGING_ROBOTS_TAG ? PASS : FAIL,
+      'staging-noindex-header',
+      authenticated.error
+        ? `authenticated /up probe failed before the X-Robots-Tag header could be checked: ${authenticated.error}`
+        : robotsTag === STAGING_ROBOTS_TAG
+          ? `authenticated GET /up returns X-Robots-Tag: ${STAGING_ROBOTS_TAG}`
+          : `authenticated GET /up returned X-Robots-Tag: ${robotsTag ?? '(missing)'} — expected exactly ${STAGING_ROBOTS_TAG}`,
     );
   }
 
