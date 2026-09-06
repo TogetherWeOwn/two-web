@@ -36,11 +36,10 @@ return Application::configure(basePath: dirname(__DIR__))
         // CompressStaticAssets carries the measurements and the reasoning.
         $middleware->append(CompressStaticAssets::class);
 
-        // The join link is the only web-to-Discord path TWO has, so it stays up
-        // through a deploy. Without this, `php artisan down` — an ordinary step
-        // in a release — answers it with a 503, which is the outage TOG-77 exists
-        // to prevent. `/up` is already excepted by `health:` above.
-        $middleware->preventRequestsDuringMaintenance(except: ['discord', 'join']);
+        // `/discord` is the break-glass route during a deploy. The one-click
+        // `/join` flow needs a session and the bot, so maintenance mode must not
+        // pretend it can complete; the plain invite remains available here.
+        $middleware->preventRequestsDuringMaintenance(except: ['discord']);
 
         // nginx terminates TLS and hands PHP-FPM a plain http request, so without
         // this the application believes every https page is http. That breaks the

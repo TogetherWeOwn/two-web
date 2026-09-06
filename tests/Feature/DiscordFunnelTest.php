@@ -109,46 +109,31 @@ it('touches no database at all, even with a database-backed session', function (
     $this->get('/discord')->assertStatus(302);
 });
 
-it('carries no session, cookie or throttle middleware on the funnel routes', function () {
+it('carries no session, cookie or throttle middleware on the invite fallback', function () {
     // The structural half of the test above: query counting proves today's code
-    // is clean, this proves the route was not quietly moved back into a group
-    // that would make it dirty again.
-    foreach (['discord', 'join'] as $name) {
-        $route = Route::getRoutes()->getByName($name);
+    // is clean, this proves `/discord` was not quietly moved back into a group
+    // that would make it dirty again. One-click `/join` deliberately needs OAuth
+    // state and therefore belongs in the web group.
+    $route = Route::getRoutes()->getByName('discord');
 
-        expect($route)->not->toBeNull("Route [{$name}] is missing. It is the funnel — it must exist.");
-        expect($route->gatherMiddleware())->toBe([], "Route [{$name}] has picked up middleware.");
-    }
+    expect($route)->not->toBeNull('Route [discord] is missing. It is the funnel floor — it must exist.');
+    expect($route->gatherMiddleware())->toBe([], 'Route [discord] has picked up middleware.');
 });
 
-it('keeps answering while the site is in maintenance mode', function () {
-    // A deploy runs `php artisan down`. The funnel does not get to go dark for
-    // it — 503 is the same outage as 404 to somebody holding the link.
+it('keeps the invite fallback answering while the site is in maintenance mode', function () {
     $this->artisan('down')->assertSuccessful();
 
     try {
         $this->get('/discord')->assertStatus(302);
-        $this->get('/join')->assertStatus(301);
+        $this->get('/join')->assertStatus(503);
     } finally {
         $this->artisan('up')->assertSuccessful();
     }
 });
 
-it('sends /join permanently to /discord', function () {
-    // `two.gg/join` is already in the wild and lands on the WordPress soft 404
-    // today. docs/dns.md settles the name: one door, called /discord. 301 is how
-    // the browsers and the crawlers are told, and unlike /discord itself there is
-    // no future in which this destination changes.
-    $this->get('/join')
-        ->assertStatus(301)
-        ->assertRedirect(route('discord'));
-});
-
-it('offers the join link on the homepage', function () {
-    // The link the whole funnel hangs off. If the page stops carrying it, every
-    // other test here is guarding a door nobody can find.
+it('offers the one-click join journey on the homepage', function () {
     $this->get('/')
         ->assertOk()
         ->assertSee('data-testid="discord-join"', escape: false)
-        ->assertSee(route('discord'), escape: false);
+        ->assertSee(route('join'), escape: false);
 });
