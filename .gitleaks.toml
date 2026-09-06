@@ -69,5 +69,5 @@ regexes = [
   # whose name ends in _id. A real bot token is base64 with dots in it and does
   # not match this, so `discord-bot-token` above still fires. `=>` is in the
   # separator list because these land in PHP arrays, not just env files.
-  '''(?i)(DISCORD|GUILD|CHANNEL|ROLE|APPLICATION|CLIENT|USER|CATEGORY)_ID['"]?\s*(?:=>|[:=])\s*['"]?[0-9]{17,20}['"]?''',
+  '''(?i)(DISCORD|GUILD|CHANNEL|ROLE|APPLICATION|CLIENT|USER|CATEGORY)_IDS?['"]?\s*(?:=>|[:=])\s*['"]?[0-9]{17,20}['"]?''',
 ]
