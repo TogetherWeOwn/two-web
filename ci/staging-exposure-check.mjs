@@ -7,7 +7,8 @@
 // Exit 0 only when all of these are true:
 //   - the zone has no wildcard and both apex/staging resolve over IPv4 and IPv6;
 //   - an unauthenticated GET is redirected to *.cloudflareaccess.com;
-//   - the Access service token reaches staging's /up endpoint with HTTP 200.
+//   - the Access service token reaches staging's /up endpoint with HTTP 200;
+//   - that authenticated response has exactly X-Robots-Tag: noindex, nofollow.
 //
 // Token values are passed to curl on stdin through --config -, never in argv and
 // never in output. The shared implementation also powers cutover-check.mjs so
