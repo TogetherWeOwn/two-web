@@ -16,7 +16,7 @@
       `web_v1.live_counts`, and when it is not there the block is omitted
       rather than zeroed.
 
-    One primary button per screen, and on this page it is `route('discord')`.
+    One primary button per screen, and on this page it is `route('join')`.
 --}}
 <x-layouts.app title="Together We Own — a gaming clan since 1998">
     {{-- The hero. The violet is a flat band, never a gradient (BRAND.md), and
@@ -45,7 +45,7 @@
                  tests/Feature/DiscordFunnelTest.php and the Dusk journey both
                  assert the funnel still has its door. --}}
             <div class="mt-8">
-                <a href="{{ route('discord') }}"
+                <a href="{{ route('join') }}"
                    data-testid="discord-join"
                    class="inline-flex min-h-11 items-center justify-center gap-2 rounded-md bg-brand px-6
                           font-semibold text-on-brand transition-colors duration-fast ease-out-quick

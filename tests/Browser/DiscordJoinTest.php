@@ -30,6 +30,11 @@ test('a visitor is offered the way into Discord', function () {
             // A real anchor with a real href — which is what makes it
             // keyboard-reachable, middle-clickable and copyable. A div with a
             // click handler passes "looks like a button" and fails all three.
-            ->assertAttribute('[data-testid="discord-join"]', 'href', url('/discord'));
+            ->assertAttribute('[data-testid="discord-join"]', 'href', url('/join'))
+            ->click('[data-testid="discord-join"]')
+            ->assertPathIs('/join')
+            ->assertSeeLink('Join with Discord')
+            ->assertVisible('[data-testid="one-click-join"]')
+            ->assertVisible('[data-testid="invite-link"]');
     });
 });

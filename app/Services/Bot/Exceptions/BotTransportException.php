@@ -2,8 +2,6 @@
 
 namespace App\Services\Bot\Exceptions;
 
-use Throwable;
-
 /**
  * We asked, and got back nothing we can act on.
  *
@@ -19,11 +17,11 @@ use Throwable;
  */
 final class BotTransportException extends BotException
 {
-    public static function unreachable(string $url, Throwable $previous): self
+    public static function unreachable(string $url): self
     {
-        // $previous carries the underlying message; the URL is a config value and
-        // holds no credential, so both are safe to surface.
-        return new self("The bot internal action endpoint at {$url} could not be reached.", 0, $previous);
+        // Do not chain the HTTP exception. Guzzle can quote the request body in
+        // its message, and guild.add_member's body holds a live OAuth token.
+        return new self("The bot internal action endpoint at {$url} could not be reached.");
     }
 
     public static function unreadable(string $why, int $status): self
