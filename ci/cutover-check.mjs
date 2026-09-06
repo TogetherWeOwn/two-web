@@ -35,6 +35,7 @@
 // not.
 
 import { execFileSync } from 'node:child_process';
+import { checkStagingAccess } from './staging-access.mjs';
 
 const UA =
   'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 ' +
@@ -333,79 +334,15 @@ function checkWpJsonGone() {
   );
 }
 
-// The danger this guards: if `staging` follows the apex, the cutover silently
-// points staging at production.
-//
-// It used to infer that from "staging resolves to the apex's own addresses".
-// That inference is wrong — every *proxied* record in a Cloudflare zone resolves
-// to the same anycast addresses, so shared IPs are the expected state for a
-// record that exists, not evidence of a missing one. TOG-1156 measured it: a
-// nonexistent sibling is NXDOMAIN, so there is no wildcard, so `staging` has an
-// explicit record of its own.
-//
-// TOG-1156 calls for that record to be deleted — staging should not exist until
-// something is deployed behind it. So NXDOMAIN is the expected pass here, not an
-// inconclusive probe. See docs/dns.md and ci/staging-exposure-check.mjs.
-//
-// Deleted 5 September 2026, 20:20Z (TOG-1160) — and it turned out to be a single
-// proxied `CNAME` to `staging-9a7d-togetherweown9.wpcomstaging.com`, not the
-// `A`/`AAAA` pair we had written down. That is the same lesson as the paragraph
-// above, one step further: the anycast addresses do not reveal the record's
-// *type* either, and a proxied CNAME never appears in a resolver answer at all.
-// This function is unaffected — it passes on absence, so it is type-agnostic —
-// and the branches below are kept for the day the record is recreated.
+// Staging is an intentional, separate Coolify application now. The cutover gate
+// must prove that the record resolves and remains behind Cloudflare Access; a
+// stale NXDOMAIN assertion would reject the secured state and encourage deleting
+// the application hostname. Keep this delegated to the same implementation as
+// ci/staging-exposure-check.mjs so the cutover and standalone gates cannot drift.
 function checkStagingRecord() {
-  // getent prints one line per (address, socktype) pair, so every address comes
-  // back three times. Dedupe, or the output reads like the record has nine
-  // entries when it has three.
-  //
-  // Both families — `staging` had an A and an AAAA, and asking only `ahostsv4`
-  // calls an AAAA-only leftover NXDOMAIN and passes. Kept identical to
-  // ci/staging-exposure-check.mjs; ci/staging-exposure-check-selftest.sh pins
-  // the two together.
-  const resolve = (host) => {
-    const addresses = [];
-    for (const db of ['ahostsv4', 'ahostsv6']) {
-      try {
-        addresses.push(
-          ...execFileSync('getent', [db, host], { encoding: 'utf8' })
-            .split('\n')
-            .map((line) => line.trim().split(/\s+/)[0])
-            .filter(Boolean),
-        );
-      } catch {
-        // NXDOMAIN for this family; the other may still answer.
-      }
-    }
-    return [...new Set(addresses)].sort();
-  };
-
-  const staging = resolve('staging.togetherweown.com');
-
-  // Gone is the intended state (TOG-1156), and it is unambiguously safe: a name
-  // that does not resolve cannot follow the apex anywhere.
-  if (staging.length === 0) {
-    record(PASS, 'staging-own-record', 'staging is NXDOMAIN — no record to follow the apex');
-    return;
+  for (const result of checkStagingAccess()) {
+    record(result.status, result.name, result.detail);
   }
-
-  const apex = new Set(resolve('togetherweown.com'));
-  if (apex.size === 0) {
-    record(UNKNOWN, 'staging-own-record', 'could not resolve the apex');
-    return;
-  }
-
-  // Shared anycast IPs no longer prove anything either way (see above), so this
-  // reports the exposure that matters instead: the record is still there, and if
-  // it is proxied alongside the apex it will follow the flip.
-  const sharesApex = staging.every((ip) => apex.has(ip));
-  record(
-    FAIL,
-    'staging-own-record',
-    sharesApex
-      ? `staging still resolves, proxied, to the apex's own addresses (${staging.join(', ')}) — TOG-1156 calls for this record to be deleted; while it exists it will follow the apex at the flip`
-      : `staging still resolves to ${staging.join(', ')} — TOG-1156 calls for this record to be deleted; confirm what it points at and that it is walled off (ci/staging-exposure-check.mjs)`,
-  );
 }
 
 function checkOtherWpcomSite() {
