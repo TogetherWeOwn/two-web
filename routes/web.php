@@ -16,6 +16,20 @@ use Illuminate\Support\Facades\Route;
 // profile" or "log in with Discord".
 Route::get('/', HomeController::class)->name('home');
 
+// Public pages only. Keep this explicit: auth callbacks, signed-in profiles and
+// event-detail URLs do not belong in the index, while the event collection does.
+Route::get('/sitemap_index.xml', function () {
+    $urls = [
+        ['loc' => route('home'), 'changefreq' => 'weekly', 'priority' => '1.0'],
+        ['loc' => route('join'), 'changefreq' => 'monthly', 'priority' => '0.9'],
+        ['loc' => route('events.index'), 'changefreq' => 'daily', 'priority' => '0.8'],
+    ];
+
+    return response()
+        ->view('sitemap', ['urls' => $urls])
+        ->header('Content-Type', 'application/xml; charset=UTF-8');
+})->name('sitemap');
+
 // One-click join needs the web session for OAuth state and for signing the new
 // member in after Discord adds them. `/discord` remains the database-free invite
 // fallback in routes/funnel.php.
