@@ -2,6 +2,7 @@
 
 namespace App\Services\Bot;
 
+use App\Enums\JoinOutcome;
 use App\Services\Bot\Exceptions\BotNotConfiguredException;
 use App\Services\Bot\Exceptions\BotTransportException;
 use App\Services\Bot\Exceptions\InvalidActionRequestException;
@@ -27,21 +28,20 @@ use Throwable;
  * Wire format: two-bot `docs/INTERNAL_ACTIONS.md`, v0.4. v0.4 changed neither
  * the wire format nor the allowlist, so v0.3's rules below still stand verbatim.
  *
- * ## The three live actions
+ * ## The four live actions
  *
  * One public method each, and the signature carries §3's *needs key* column
  * rather than a runtime flag:
  *
- * - `assignRole()` takes **no** idempotency key. Idempotency is natural —
- *   assigning a held role is a no-op at Discord — and §3 is explicit that this
- *   action does not send one.
+ * - `assignRole()` and `addMember()` take **no** idempotency key. Both actions
+ *   are naturally idempotent at Discord.
  * - `postAnnouncement()` and `upsertEvent()` **require** one. A repeat without a
  *   key posts a second message or creates a second event.
  *
- * There is no `guild.add_member` here, and it is not an oversight. §5 requires
- * it to be *synchronous* precisely so a live member credential is never written
- * into the `jobs` table, and it is switched off pending sign-off (TOG-57). It
- * does not belong on this queued path.
+ * `addMember()` is the deliberate synchronous exception to the queued rule. It
+ * receives a live member OAuth token which must never enter a queue payload,
+ * failed-jobs row or database backup, so the browser request owns its one short
+ * attempt and falls back to the plain invite when the bot does not answer.
  *
  * ## The nonce and the idempotency key are different things
  *
@@ -151,6 +151,39 @@ final readonly class InternalActionClient
     }
 
     /**
+     * Add somebody to the TWO server with their one-use OAuth token.
+     *
+     * No idempotency key, no retry and no queue. The token exists only in this
+     * stack frame and the signed request body; callers must not store it.
+     *
+     * @throws BotNotConfiguredException when there is no url, secret or key id
+     * @throws BotTransportException when the bot did not answer the contract
+     */
+    public function addMember(string $discordId, string $accessToken): AddMemberResult
+    {
+        $answer = $this->send([
+            'action' => 'guild.add_member',
+            'discord_id' => $discordId,
+            'access_token' => $accessToken,
+        ], null, [$accessToken]);
+
+        if ($answer instanceof InternalActionFailure) {
+            return AddMemberResult::failed($answer);
+        }
+
+        [$body, $status] = $answer;
+
+        $result = $this->resultObject($body, $status);
+        $outcome = JoinOutcome::tryFrom(is_string($result['outcome'] ?? null) ? $result['outcome'] : '');
+
+        if ($outcome === null) {
+            throw BotTransportException::unreadable('a guild.add_member outcome this release does not know', $status);
+        }
+
+        return AddMemberResult::succeeded($outcome, $this->requestId($body));
+    }
+
+    /**
      * Post one announcement to a channel, by key.
      *
      * @param  string  $idempotencyKey  From newIdempotencyKey(), stored against
@@ -256,6 +289,7 @@ final readonly class InternalActionClient
      * One signed attempt.
      *
      * @param  array<string, mixed>  $payload
+     * @param  list<string>  $redactions
      * @param  string|null  $idempotencyKey  null only for an action §3 marks
      *                                       *natural*, which sends no
      *                                       `Idempotency-Key` header at all.
@@ -270,7 +304,7 @@ final readonly class InternalActionClient
      * @throws BotTransportException
      * @throws InvalidActionRequestException
      */
-    private function send(array $payload, ?string $idempotencyKey): array|InternalActionFailure
+    private function send(array $payload, ?string $idempotencyKey, array $redactions = []): array|InternalActionFailure
     {
         $url = $this->endpoint();
 
@@ -315,9 +349,9 @@ final readonly class InternalActionClient
                 ->withBody($json, 'application/json')
                 ->post($url);
         } catch (ConnectionException $e) {
-            $this->logUndelivered($payload, $idempotencyKey, $e);
+            $this->logUndelivered($payload, $idempotencyKey, $e, $redactions);
 
-            throw BotTransportException::unreachable($url, $e);
+            throw BotTransportException::unreachable($url);
         }
 
         return $this->interpret($response, $payload, $idempotencyKey, $startedAt);
@@ -443,15 +477,26 @@ final readonly class InternalActionClient
         return rtrim((string) $this->url, '/').InternalActionSigner::PATH;
     }
 
-    /** @param  array<string, mixed>  $payload */
-    private function logUndelivered(array $payload, ?string $idempotencyKey, Throwable $e): void
+    /**
+     * @param  array<string, mixed>  $payload
+     * @param  list<string>  $redactions
+     */
+    private function logUndelivered(array $payload, ?string $idempotencyKey, Throwable $e, array $redactions = []): void
     {
+        $message = $e->getMessage();
+
+        foreach ([...$redactions, (string) $this->secret] as $secret) {
+            if ($secret !== '') {
+                $message = str_replace($secret, '[redacted]', $message);
+            }
+        }
+
         // No request_id: the bot never saw this one. Logged anyway, so that a run
         // of these reads as a network or timeout problem rather than as silence.
         Log::warning('Bot internal action could not be delivered.', [
             'action' => is_string($payload['action'] ?? null) ? $payload['action'] : null,
             'idempotency_key' => $idempotencyKey,
-            'exception' => $e->getMessage(),
+            'exception' => $message,
         ]);
     }
 }

@@ -7,6 +7,10 @@
 <x-layouts.app title="Your profile">
     <h1>Your profile</h1>
 
+    @if (session('join_result'))
+        <p role="status" data-testid="join-result">{{ __('join.result.'.session('join_result')) }}</p>
+    @endif
+
     <p>Signed in as {{ auth()->user()->display_name ?? auth()->user()->username }}.</p>
 
     @can('access-admin')

@@ -4,6 +4,7 @@ use App\Http\Controllers\Auth\DiscordLoginController;
 use App\Http\Controllers\EventController;
 use App\Http\Controllers\EventStatusController;
 use App\Http\Controllers\HomeController;
+use App\Http\Controllers\JoinController;
 use App\Http\Controllers\RsvpController;
 use App\Livewire\EventsCalendar;
 use Illuminate\Support\Facades\Route;
@@ -14,6 +15,17 @@ use Illuminate\Support\Facades\Route;
 // is an ordinary page, and it needs the session to know whether to offer "your
 // profile" or "log in with Discord".
 Route::get('/', HomeController::class)->name('home');
+
+// One-click join needs the web session for OAuth state and for signing the new
+// member in after Discord adds them. `/discord` remains the database-free invite
+// fallback in routes/funnel.php.
+Route::get('/join', [JoinController::class, 'show'])->name('join');
+Route::get('/join/discord', [JoinController::class, 'redirect'])
+    ->middleware('throttle:10,1')
+    ->name('join.redirect');
+Route::get('/join/callback', [JoinController::class, 'callback'])
+    ->middleware('throttle:10,1')
+    ->name('join.callback');
 
 // The events page, and it is deliberately outside the `auth` group below.
 //
