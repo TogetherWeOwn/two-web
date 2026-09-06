@@ -215,11 +215,22 @@ function checkFunnel(origin, label, phase) {
     record(FAIL, `${label}-join`, `unreachable: ${join.error}`);
   } else if (join.status >= 300 && join.status < 400) {
     record(PASS, `${label}-join`, `HTTP ${join.status} -> ${join.redirect}`);
+  } else if (
+    phase === 'after' &&
+    join.status === 200 &&
+    join.body.includes('data-testid="one-click-join"') &&
+    join.body.includes('data-testid="invite-link"')
+  ) {
+    // TOG-80 replaced the temporary redirect with a real one-click join page.
+    // Require both the primary OAuth action and its raw-invite fallback: a 200
+    // alone could still be the old WordPress soft 404 this check was written to
+    // catch.
+    record(PASS, `${label}-join`, 'HTTP 200, one-click join and invite fallback rendered');
   } else {
     // /join is in the wild in stream titles and DMs. On the WordPress install
     // it lands on a soft 404, which is the status quo we are replacing, so
     // before the flip this is a note and not a failure.
-    record(phase === 'before' ? UNKNOWN : FAIL, `${label}-join`, `HTTP ${join.status}, no redirect`);
+    record(phase === 'before' ? UNKNOWN : FAIL, `${label}-join`, `HTTP ${join.status}, no working join journey detected`);
   }
 }
 

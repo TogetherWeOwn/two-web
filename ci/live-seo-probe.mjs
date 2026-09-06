@@ -61,15 +61,14 @@ const MUST_NOT_EXIST = [
   { path: '/members', kind: 'dead' },
   { path: '/gamipress/points/', kind: 'dead' },
   { path: '/events/month/2024-01/', kind: 'dead' },
-  { path: '/join', kind: 'dead' },
   { path: '/this-url-never-existed-abc123xyz/', kind: 'never' },
 ];
 
-// `/discord` is the only conversion path on the site (docs/dns.md). It is probed
-// so that a run of this file also tells you the funnel is alive, but it is exempt
-// from the canonical and status checks — it is a redirect into Discord's OAuth
-// flow and is supposed to be one.
+// The two live conversion paths are deliberately exempt from the dead-URL set.
+// `/discord` is the database-free raw-invite floor. `/join` became a real page in
+// TOG-80 and carries the one-click OAuth journey plus the invite fallback.
 const FUNNEL = '/discord';
+const JOIN_PAGE = '/join';
 
 const args = process.argv.slice(2);
 const asJson = args.includes('--json');
@@ -361,7 +360,15 @@ function main() {
     const label = path.startsWith('http')
       ? new URL(path).pathname + new URL(path).search
       : path;
-    const row = { tag, path: label, ...r, ...seo, ...tpl };
+    const row = {
+      tag,
+      path: label,
+      ...r,
+      ...seo,
+      ...tpl,
+      hasOneClickJoin: r.body.includes('data-testid="one-click-join"'),
+      hasInviteFallback: r.body.includes('data-testid="invite-link"'),
+    };
     delete row.body;
     measured.push(row);
     return row;
@@ -373,6 +380,7 @@ function main() {
   for (const { path, kind } of MUST_NOT_EXIST) probe(path, kind);
   const robotsTxt = chase(`${ORIGIN}/robots.txt`);
   const funnel = probe(FUNNEL, 'funnel');
+  const joinPage = probe(JOIN_PAGE, 'funnel');
 
   // Nothing below can pass on an empty set. Both canonical checks are "no row in
   // this set is wrong", so zero rows is a green light that measured nothing — the
@@ -540,15 +548,18 @@ function main() {
   // -- 7 -------------------------------------------------------------------
   // Not an SEO check. The funnel either works or nothing else on this page is
   // worth reading. See "/discord is launch-blocking" in docs/dns.md.
-  const funnelAlive = funnel.chain.length > 0 || funnel.status === 200;
+  const inviteFloorAlive = funnel.chain.length > 0 || funnel.status === 200;
+  const joinJourneyAlive =
+    joinPage.status === 200 && joinPage.hasOneClickJoin && joinPage.hasInviteFallback;
   check(
     'discord-funnel-alive',
-    funnelAlive,
-    funnelAlive
+    inviteFloorAlive && joinJourneyAlive,
+    inviteFloorAlive && joinJourneyAlive
       ? `${FUNNEL} -> ${funnel.chain[0]?.status ?? funnel.status} ${
           funnel.chain.length ? new URL(funnel.finalUrl).host : ''
-        }`
-      : `${FUNNEL} returned ${funnel.status} — the only conversion path on the site is down`
+        }; ${JOIN_PAGE} renders one-click join and invite fallback`
+      : `${FUNNEL} returned ${funnel.status}; ${JOIN_PAGE} returned ${joinPage.status} ` +
+        `(one-click=${joinPage.hasOneClickJoin}, fallback=${joinPage.hasInviteFallback})`
   );
 
   // -----------------------------------------------------------------------
