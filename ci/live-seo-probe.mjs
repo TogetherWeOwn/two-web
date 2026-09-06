@@ -257,21 +257,37 @@ function samePage(a, b) {
 // hardcoding a list means this keeps measuring the right pages after someone adds
 // one, and it also means a site that publishes no sitemap gets an empty set rather
 // than a false green.
+//
+// WordPress serves a sitemap index at this path, while the Laravel app serves its
+// small page list directly as a urlset. The filename does not decide the XML root,
+// so inspect the document instead of treating every <loc> as a child sitemap.
+function parseSitemap(xml) {
+  const locs = [...xml.matchAll(/<loc>([^<]+)<\/loc>/g)].map((m) => m[1].trim());
+  if (/<urlset(?:\s|>)/i.test(xml)) return { kind: 'urlset', locs };
+  if (/<sitemapindex(?:\s|>)/i.test(xml)) return { kind: 'index', locs };
+  return { kind: 'unknown', locs: [] };
+}
+
 function sitemapUrls() {
   const index = chase(`${ORIGIN}/sitemap_index.xml`);
-  const locs = (s) => [...s.matchAll(/<loc>([^<]+)<\/loc>/g)].map((m) => m[1].trim());
 
   if (index.status !== 200) return { urls: [], error: `sitemap_index.xml -> ${index.status}` };
 
-  const children = locs(index.body);
-  const urls = new Set();
-
-  for (const child of children) {
-    const page = chase(child);
-    if (page.status === 200) locs(page.body).forEach((u) => urls.add(u));
+  const root = parseSitemap(index.body);
+  if (root.kind === 'urlset') return { urls: root.locs, children: [] };
+  if (root.kind !== 'index') {
+    return { urls: [], error: 'sitemap_index.xml is neither a urlset nor a sitemap index' };
   }
 
-  return { urls: [...urls], children };
+  const urls = new Set();
+  for (const child of root.locs) {
+    const page = chase(child);
+    if (page.status !== 200) continue;
+    const parsed = parseSitemap(page.body);
+    if (parsed.kind === 'urlset') parsed.locs.forEach((u) => urls.add(u));
+  }
+
+  return { urls: [...urls], children: root.locs };
 }
 
 // ---------------------------------------------------------------------------
@@ -295,6 +311,33 @@ const check = (id, ok, detail) => results.push({ id, ok, detail });
 function selftest() {
   const cases = [
     // [name, actual, expected]
+    [
+      'a direct urlset advertises pages',
+      JSON.stringify(
+        parseSitemap(
+          '<?xml version="1.0"?><urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">' +
+            '<url><loc>https://a.com/</loc></url><url><loc>https://a.com/join</loc></url></urlset>'
+        )
+      ),
+      JSON.stringify({ kind: 'urlset', locs: ['https://a.com/', 'https://a.com/join'] }),
+    ],
+    [
+      'a sitemap index advertises child sitemaps',
+      JSON.stringify(
+        parseSitemap(
+          '<?xml version="1.0"?><sitemapindex xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">' +
+            '<sitemap><loc>https://a.com/page-sitemap.xml</loc></sitemap></sitemapindex>'
+        )
+      ),
+      JSON.stringify({ kind: 'index', locs: ['https://a.com/page-sitemap.xml'] }),
+    ],
+    [
+      'unrecognised XML advertises nothing',
+      JSON.stringify(
+        parseSitemap('<?xml version="1.0"?><feed><loc>https://a.com/not-a-sitemap</loc></feed>')
+      ),
+      JSON.stringify({ kind: 'unknown', locs: [] }),
+    ],
     ['identical URLs are the same page', samePage('https://a.com/x/', 'https://a.com/x/'), true],
     ['trailing slash is not a difference', samePage('https://a.com/x', 'https://a.com/x/'), true],
     ['a different path is a different page', samePage('https://a.com/x/', 'https://a.com/y/'), false],
