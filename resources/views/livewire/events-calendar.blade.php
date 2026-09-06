@@ -151,7 +151,10 @@
             </button>
         </div>
 
-        <div class="mt-4 overflow-x-auto">
+        <div class="mt-4 overflow-x-auto"
+             tabindex="0"
+             aria-label="Events calendar; scroll horizontally to see all days"
+             data-testid="events-calendar-scroll">
             <table class="w-full min-w-2xl table-fixed border-collapse"
                    data-testid="events-calendar-grid">
                 <caption class="sr-only">Events in {{ $monthLabel }}</caption>
@@ -178,8 +181,7 @@
                                     <span @class([
                                         'u-numeric text-xs',
                                         'text-ink font-semibold' => $day['isToday'],
-                                        'text-ink-muted' => ! $day['isToday'] && $day['inMonth'],
-                                        'text-ink-disabled' => ! $day['inMonth'],
+                                        'text-ink-muted' => ! $day['isToday'],
                                     ])>
                                         {{ $day['date']->format('j') }}
                                     </span>

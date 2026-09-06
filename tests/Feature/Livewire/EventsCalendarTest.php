@@ -227,6 +227,24 @@ it('switches to the calendar view and renders a real month grid', function () {
         ->assertSeeHtml('data-testid="calendar-day"');
 });
 
+it('makes the horizontally scrolling calendar keyboard accessible', function () {
+    Livewire::test(EventsCalendar::class)
+        ->call('setView', 'calendar')
+        ->assertSeeHtml('data-testid="events-calendar-scroll"')
+        ->assertSeeHtml('tabindex="0"')
+        ->assertSeeHtml('aria-label="Events calendar; scroll horizontally to see all days"');
+});
+
+it('uses AA contrast text for dates outside the current month', function () {
+    $html = Livewire::test(EventsCalendar::class)
+        ->call('setView', 'calendar')
+        ->html();
+
+    expect($html)
+        ->toContain('text-ink-muted')
+        ->not->toContain('text-ink-disabled');
+});
+
 it('still renders a month when the month property is nonsense', function () {
     // `month` is a public Livewire property and therefore client input. A wrong
     // month is a page somebody can navigate away from; a fatal is a blank screen.
