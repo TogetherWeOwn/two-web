@@ -115,4 +115,13 @@ node ci/live-seo-probe.mjs --selftest >/dev/null 2>&1 \
   || fail "ci/live-seo-probe.mjs --selftest failed — the SEO measurements cannot be trusted"
 pass "live-seo-probe selftest passes"
 
-printf '\n7/7 ok\n'
+# ---------------------------------------------------------------------------
+# 6. The staging cutover assertion is the same Access gate as the standalone check
+
+for name in no-wildcard apex-ipv4 apex-ipv6 staging-ipv4 staging-ipv6 staging-own-record staging-access-redirect staging-authenticated-up; do
+  grep -qE "(PASS|FAIL) +${name}" <<<"$after_out" \
+    || fail "'--phase after' emitted no ${name} result — staging Access coverage drifted out of the cutover gate"
+done
+pass "cutover after-phase runs every Access-protected staging assertion"
+
+printf '\n8/8 ok\n'
