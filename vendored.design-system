@@ -16,9 +16,9 @@
 # It prints the digests it wanted. Paste them here in the same commit, and name the
 # two-design commit you copied from in the PR body.
 
-upstream two-design @ bc65c29
+upstream two-design @ 311d24c
 
 c05a2f02a7f5841133002697f0bcf5c8320397c3952b56f9180a302fdd41562b  resources/css/two.css
-e3a28eade21a900c7155a247757f4b2834c07bb7ef07ad7efa55cebaac1e8f5e  public/fonts/archivo-latin.woff2
+852ec4edfc142ce3f062fb518ae4f2bda333f2f7d37a2043357be1f2f5d8f10f  public/fonts/archivo-latin.woff2
 5717f37059660ca5c899bad6c48ee22c3ac55cb3c484055241689d0f905a1a86  public/fonts/archivo-latin-ext.woff2
 108b4e57c9c796d3d38d0428ca7ee39de47ad93187302718d9b2d8864b9b716b  public/fonts/Archivo-OFL.txt
