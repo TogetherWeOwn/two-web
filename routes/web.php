@@ -1,6 +1,7 @@
 <?php
 
 use App\Http\Controllers\Auth\DiscordLoginController;
+use App\Http\Controllers\Auth\StagingQaLoginController;
 use App\Http\Controllers\EventController;
 use App\Http\Controllers\EventStatusController;
 use App\Http\Controllers\HomeController;
@@ -67,6 +68,15 @@ Route::get('/auth/discord/redirect', [DiscordLoginController::class, 'redirect']
 Route::get('/auth/discord/callback', [DiscordLoginController::class, 'callback'])
     ->middleware('throttle:10,1')
     ->name('login.callback');
+
+// Staging's QA route is deliberately absent from every other environment. The
+// controller repeats the environment check so a cached or manually registered
+// route still fails closed, and it owns the secret comparison before fixture lookup.
+if (app()->environment('staging')) {
+    Route::get('/auth/qa/{identity}', StagingQaLoginController::class)
+        ->middleware('throttle:10,1')
+        ->name('qa.login');
+}
 
 // POST only. A logout on GET can be fired by any <img src> a member loads.
 Route::post('/logout', [DiscordLoginController::class, 'logout'])->name('logout');

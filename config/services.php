@@ -3,6 +3,12 @@
 return [
     'dusk_test_seams' => (bool) env('DUSK_TEST_SEAMS', false),
 
+    // An inner gate for the staging-only QA identities. Cloudflare Access stays in
+    // front; the value is injected only into staging and never belongs in this repo.
+    'staging_qa_auth' => [
+        'token' => env('TWO_WEB_STAGING_QA_AUTH_TOKEN'),
+    ],
+
     /*
     |--------------------------------------------------------------------------
     | Third Party Services
