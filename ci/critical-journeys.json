@@ -28,10 +28,9 @@
             "name": "View and edit profile",
             "tests": [
                 {
-                    "file": "tests/Browser/DiscordLoginTest.php",
-                    "name": "a member signs in through Discord and lands on their profile",
-                    "complete": false,
-                    "gap": "The browser proves the profile renders but does not edit and persist profile data."
+                    "file": "tests/Browser/MemberProfileTest.php",
+                    "name": "lets a member edit their sparse profile with the keyboard-visible form",
+                    "complete": true
                 }
             ]
         },

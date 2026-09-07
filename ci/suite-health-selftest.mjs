@@ -44,7 +44,7 @@ expect('manifest maps six real Dusk tests', validation.status === 0, validation.
 
 const baseline = run(['--input', EXAMPLE]);
 expect('PR 259 runtime is measured as 4m 50s', baseline.status === 0 && baseline.stdout.includes('**4m 50s**'), baseline.stderr || baseline.stdout);
-expect('remaining partial journey is reported incomplete', baseline.stdout.includes('Complete critical journeys: **5/6**') && baseline.stdout.includes('**INCOMPLETE:**'), baseline.stdout);
+expect('all six critical journeys are reported complete', baseline.stdout.includes('Complete critical journeys: **6/6**') && !baseline.stdout.includes('**INCOMPLETE:**'), baseline.stdout);
 const baselineJsonResult = run(['--input', EXAMPLE, '--format', 'json']);
 const baselineJson = JSON.parse(baselineJsonResult.stdout);
 expect('all six required checks are used', baselineJsonResult.status === 0 && JSON.stringify(baselineJson.requiredChecks) === JSON.stringify(['static', 'pest', 'dusk', 'budgets', 'tests', 'gitleaks']), baselineJsonResult.stderr || baselineJsonResult.stdout);
@@ -80,7 +80,9 @@ const missingJourneyResult = run(['--validate-manifest', '--manifest', missingJo
 expect('an unmapped required journey fails validation', missingJourneyResult.status === 1 && missingJourneyResult.stderr.includes('must map at least one Dusk test'), missingJourneyResult.stderr || missingJourneyResult.stdout);
 
 const falseComplete = JSON.parse(await readFile(MANIFEST, 'utf8'));
-delete falseComplete.journeys.find((journey) => journey.id === 'profile-view-edit').tests[0].gap;
+const incompleteProfile = falseComplete.journeys.find((journey) => journey.id === 'profile-view-edit').tests[0];
+incompleteProfile.complete = false;
+delete incompleteProfile.gap;
 const falseCompleteManifest = join(work, 'false-complete.json');
 await writeFile(falseCompleteManifest, JSON.stringify(falseComplete));
 const falseCompleteResult = run(['--validate-manifest', '--manifest', falseCompleteManifest]);
