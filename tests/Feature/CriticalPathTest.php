@@ -36,35 +36,36 @@ it('never lets the Livewire runtime block the first paint', function () {
 
     expect($html)->toBeString();
 
-    // The tag Livewire injects, whatever else is on it. `livewire.min.js` in
-    // production and `livewire.js` when debug is on, so the pattern takes either —
-    // matching only the minified name would make this test silently vacuous in the
-    // very environment it runs in.
-    preg_match('/<script[^>]*livewire(\.min)?\.js[^>]*>/', (string) $html, $matches);
+    // The runtime must not be fetched by the parser. A `defer` attribute was not
+    // enough on the slower staging host: Chrome still executed Livewire before
+    // DOMContentLoaded, and that CPU work competed with the empty-state LCP.
+    preg_match('/<script[^>]*src="[^"]*livewire(\.min)?\.js[^>]*>/', (string) $html, $matches);
 
-    expect($matches)->not->toBeEmpty('the Livewire runtime is not on the events page at all');
-    // `defer` and not `async`: Livewire's runtime has to run after the document is
-    // parsed, because it binds to the components already in it. `async` would let
-    // it execute mid-parse against a half-built DOM.
-    expect($matches[0])->toContain('defer');
+    expect($matches)->toBeEmpty('the Livewire runtime is still on the parser-discovered critical path');
 
-    // fetchpriority="low" tells the browser to fund the paint first and the
-    // interactivity after. It is safe precisely because the script is deferred —
-    // nothing before DOMContentLoaded is waiting on it.
-    //
-    // Honest about what it bought: it was added on the theory that the runtime
-    // competed for bandwidth with the paint, and the measurement disproved that
-    // theory — LCP went 2684ms -> 2666ms, which is noise. It is asserted here
-    // because it is still the correct hint for a script nothing is waiting on,
-    // NOT because it fixed the budget.
-    //
-    // The budget breach on /events was a separate fact that this test does not
-    // cover, and it was not fixed by any script attribute. FCP was 1258ms on
-    // /events against 1276ms on /, so the paint was never delayed; the ~1400ms
-    // sat after it, and the fix was removing bytes from the connection rather
-    // than reordering them. See tests/Feature/AssetCompressionTest.php, which
-    // asserts the two reductions that actually moved it. TOG-53.
-    expect($matches[0])->toContain('fetchpriority="low"');
+    // Keep the configuration inline and tiny, then append the runtime only after
+    // all paint-critical resources have completed. `Livewire.start()` is explicit
+    // because @livewireScriptConfig deliberately disables the runtime's automatic
+    // DOMContentLoaded start.
+    expect($html)->toContain('window.livewireScriptConfig');
+    expect($html)->toContain("window.addEventListener('load'");
+    expect($html)->toContain('livewire.onload = () => Livewire.start()');
+    expect($html)->toContain('document.head.appendChild(livewire)');
+
+    // The normal app shell must not pay for Livewire when it renders a non-Livewire
+    // page. The delay is scoped to /events, not a global asset policy change.
+    $home = (string) $this->get(route('home'))->assertOk()->getContent();
+    expect($home)->not->toContain('window.livewireScriptConfig');
+    expect($home)->not->toContain('document.head.appendChild(livewire)');
+
+    // The server-rendered component and the versioned runtime URL remain present;
+    // only parser discovery and startup timing change.
+    expect($html)->toContain('data-testid="events-view-list"');
+    expect($html)->toContain('data-testid="events-list"');
+    expect($html)->toContain('wire:snapshot');
+    expect($html)->toMatch('/livewire(\.min)?\.js\?id=/');
+    expect(substr_count($html, 'Livewire.start()'))->toBe(1);
+    expect(substr_count($html, 'window.livewireScriptConfig'))->toBe(1);
 });
 
 it('serves the events page without a render-blocking script in the head', function () {
