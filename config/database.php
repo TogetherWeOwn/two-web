@@ -41,7 +41,8 @@ return [
              | half the year. UTC in, UTC out. The zone an event is rendered in is
              | its own column on the row, which is a different question.
              */
-            'timezone' => 'UTC',
+            // PostgreSQL accepts the canonical IANA spelling, not PHP's UTC alias.
+            'timezone' => 'Etc/UTC',
         ],
 
         /*

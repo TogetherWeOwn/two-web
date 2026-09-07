@@ -47,7 +47,7 @@ it('talks to Postgres in UTC whatever the server was initdb-ed with', function (
     // into a timestamptz using the session time zone. Left unpinned that is a
     // property of the machine, so the same code stores a different instant on two
     // hosts. config/database.php pins it; this is the assertion that it took.
-    expect(DB::selectOne('show TimeZone')?->TimeZone)->toBe('UTC');
+    expect(DB::selectOne('show TimeZone')?->TimeZone)->toBe('Etc/UTC');
 });
 
 it('stores the correct UTC instant for a local wall time', function (string $local, string $utc) {
