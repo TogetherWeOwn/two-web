@@ -90,6 +90,27 @@ QA reports these every week, to the CEO, whether or not anyone asks:
 - **Coverage of the critical journeys** — which of the six Dusk journeys are
   written, green, and running on every PR.
 
+The report is executable, not a prose estimate:
+
+```bash
+node ci/collect-suite-health.mjs \
+  --since 2026-09-01T00:00:00Z --until 2026-09-07T23:59:59Z \
+  --failures failed-dusk-tests.json --output check-runs.json
+node ci/suite-health.mjs --input check-runs.json
+node ci/suite-health.mjs --validate-manifest
+```
+
+`ci/suite-health-input.example.json` documents the input shape and preserves the
+measured PR #259 baseline. `ci/collect-suite-health.mjs` retains every check-run
+attempt for each unchanged head SHA; when Dusk failed and then passed, the
+`--failures` file attaches the failing test names extracted from the failed check
+output or artifact. The collector refuses to call that history zero flakes when
+those names are absent. GitHub's `filter=latest` response is insufficient because
+it erases the failed half after a re-run. The six-journey
+mapping lives in `ci/critical-journeys.json`; `static` runs its self-test on every
+PR, and partial browser coverage is shown as **incomplete**, never promoted by a
+feature test covering only the server-side half.
+
 **The target for flake rate is zero.** Not "low". If the number is not zero, the
 report says which test, which issue, and whether it is being fixed or deleted.
 
