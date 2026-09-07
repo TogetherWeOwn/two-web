@@ -22,5 +22,24 @@
     <main id="main">
         {{ $slot }}
     </main>
+
+    @if ($deferLivewire ?? false)
+        {{-- The page is complete HTML before Livewire arrives. Starting the runtime
+             after window.load keeps its CPU work out of the staged LCP path while
+             preserving every calendar and RSVP interaction once loading settles. --}}
+        @php
+            $livewireTag = \Livewire\Mechanisms\FrontendAssets\FrontendAssets::js([]);
+            preg_match('/\bsrc="([^"]+)"/', $livewireTag, $livewireSource);
+        @endphp
+        @livewireScriptConfig
+        <script>
+            window.addEventListener('load', () => {
+                const livewire = document.createElement('script');
+                livewire.src = @js(html_entity_decode($livewireSource[1] ?? ''));
+                livewire.onload = () => Livewire.start();
+                document.head.appendChild(livewire);
+            }, { once: true });
+        </script>
+    @endif
 </body>
 </html>

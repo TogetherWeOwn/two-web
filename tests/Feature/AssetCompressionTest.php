@@ -38,7 +38,7 @@ use App\Models\Event;
  * It is `livewire.min.js` normally and `livewire.js` when APP_DEBUG is on, and the
  * route carries no name to ask for instead. Hardcoding the minified path made both
  * tests below 404 in CI — which copies .env.example, where APP_DEBUG=true — while
- * passing locally against a production-shaped .env. Taking it from the rendered tag
+ * passing locally against a production-shaped .env. Taking it from the rendered page
  * also means these tests assert the asset the page really requests, so a Livewire
  * release that moves it fails here as a 404 on a real URL rather than passing
  * vacuously against one nobody loads.
@@ -47,15 +47,20 @@ function livewireRuntimeUrl(): string
 {
     $html = (string) test()->get(route('events.index'))->assertOk()->getContent();
 
-    expect($html)->toMatch('/<script[^>]*livewire(\.min)?\.js/');
+    preg_match(
+        '/(?:<script[^>]*\bsrc=|livewire\.src\s*=)\s*([\'\"])([^\'\"]*livewire(?:\.min)?\.js[^\'\"]*)\1/',
+        $html,
+        $matches,
+    );
 
-    preg_match('/<script[^>]*src="([^"]*livewire(?:\.min)?\.js[^"]*)"/', $html, $matches);
+    expect($matches)->not->toBeEmpty('the Livewire runtime URL is not on the events page at all');
 
-    expect($matches)->not->toBeEmpty('the Livewire runtime is not on the events page at all');
+    // `?id=...` cache-buster and an absolute host both come along on the URL;
+    // @js also escapes slashes when the runtime is appended after window.load.
+    // The test client wants a plain path.
+    $url = str_replace('\/', '/', html_entity_decode($matches[2]));
 
-    // `?id=...` cache-buster and an absolute host both come along on that attribute;
-    // the test client wants a path.
-    return (string) parse_url(html_entity_decode($matches[1]), PHP_URL_PATH);
+    return (string) parse_url($url, PHP_URL_PATH);
 }
 
 it('serves the Livewire runtime compressed when the client offers gzip', function () {
