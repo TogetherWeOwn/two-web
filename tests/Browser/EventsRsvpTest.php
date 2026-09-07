@@ -5,6 +5,7 @@ use App\Enums\RsvpStatus;
 use App\Models\Event;
 use App\Models\Rsvp;
 use App\Models\User;
+use Illuminate\Support\Facades\DB;
 use Laravel\Dusk\Browser;
 
 /*
@@ -95,6 +96,66 @@ test('a member RSVPs, the bot receives it, and the page advances to synced', fun
         ])->and($received['body'])->not->toHaveKey('channel_key')
             ->and($received['headers']['idempotencyKey'])->not->toBeNull();
     });
+});
+
+test('a failed RSVP write returns the control and succeeds on retry', function () {
+    $member = User::factory()->create();
+    $event = browsableEvent();
+
+    // The application server is a separate process, so a mocked service in this
+    // PHPUnit process would not reach the browser journey. This trigger lives in the
+    // real Dusk database and rejects exactly the first RSVP insert; dropping it after
+    // the failed click restores the normal write path for the retry.
+    DB::unprepared(<<<'SQL'
+        CREATE OR REPLACE FUNCTION dusk_fail_first_rsvp_insert()
+        RETURNS trigger AS $$
+        BEGIN
+            RAISE EXCEPTION 'Dusk: reject the first RSVP insert';
+        END;
+        $$ LANGUAGE plpgsql;
+
+        CREATE TRIGGER dusk_fail_first_rsvp_insert
+        BEFORE INSERT ON rsvps
+        FOR EACH STATEMENT
+        EXECUTE FUNCTION dusk_fail_first_rsvp_insert();
+        SQL);
+
+    try {
+        $this->browse(function (Browser $browser) use ($member) {
+            $browser->loginAs($member)
+                ->resize(360, 780)
+                ->visit('/events')
+                ->waitUntil('window.Livewire?.initialRenderIsFinished === true')
+                ->waitFor('[data-testid="rsvp-going"]')
+                ->click('[data-testid="rsvp-going"]')
+                ->waitFor('[data-testid="rsvp-failed"]')
+                ->assertSeeIn('[data-testid="rsvp-failed"]', "That RSVP didn't save. Try once more.")
+                ->assertVisible('[data-testid="rsvp-going"]')
+                ->assertButtonEnabled('[data-testid="rsvp-going"]')
+                ->assertMissing('[data-testid="rsvp-confirmed"]')
+                ->assertMissing('[data-testid="rsvp-syncing"]');
+
+            expect(Rsvp::query()->count())->toBe(0);
+
+            DB::unprepared('DROP TRIGGER dusk_fail_first_rsvp_insert ON rsvps');
+
+            $browser->click('[data-testid="rsvp-going"]')
+                ->waitFor('[data-testid="rsvp-confirmed"]')
+                ->assertSeeIn('[data-testid="rsvp-confirmed"]', "You're in")
+                ->assertVisible('[data-testid="rsvp-check"]')
+                ->assertVisible('[data-testid="rsvp-syncing"]')
+                ->assertMissing('[data-testid="rsvp-failed"]');
+        });
+    } finally {
+        DB::unprepared('DROP TRIGGER IF EXISTS dusk_fail_first_rsvp_insert ON rsvps');
+        DB::unprepared('DROP FUNCTION IF EXISTS dusk_fail_first_rsvp_insert()');
+    }
+
+    expect(Rsvp::query()
+        ->where('event_id', $event->id)
+        ->where('user_id', $member->id)
+        ->where('status', RsvpStatus::Going)
+        ->exists())->toBeTrue();
 });
 
 test('a member can stand down again', function () {
