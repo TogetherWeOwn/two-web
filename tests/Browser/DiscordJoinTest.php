@@ -26,7 +26,7 @@ test('a visitor is offered the way into Discord', function () {
         $browser->visit('/')
             ->assertSee('Together We Own')
             ->assertVisible('h1')
-            ->assertSeeIn('h1', 'THE LOBBY IS OPEN.')
+            ->assertSeeIn('h1', 'The lobby is open.')
             ->assertSeeLink('Come say hello')
             ->assertVisible('[data-testid="discord-join"]')
             // A real anchor with a real href — which is what makes it

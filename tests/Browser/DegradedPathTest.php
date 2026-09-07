@@ -15,7 +15,7 @@ use Laravel\Dusk\Browser;
 test('the site keeps its join path when the bot is unreachable', function () {
     $this->browse(function (Browser $browser) {
         $browser->visit('/')
-            ->assertSeeIn('h1', 'THE LOBBY IS OPEN.')
+            ->assertSeeIn('h1', 'The lobby is open.')
             ->assertVisible('[data-testid="discord-join"]')
             ->assertAttribute('[data-testid="discord-join"]', 'href', url('/join'))
             ->assertDontSee('SQLSTATE')
