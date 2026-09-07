@@ -9,6 +9,7 @@ use App\Models\Rsvp;
 use App\Models\User;
 use App\Services\Bot\Exceptions\BotTransportException;
 use App\Services\EventService;
+use App\Support\RsvpRateLimit;
 use Illuminate\Support\Facades\Queue;
 use Livewire\Livewire;
 
@@ -284,6 +285,31 @@ it('clears a previous failure once the retry works', function () {
         ->call('rsvp', RsvpStatus::Going->value)
         ->assertDontSee("That RSVP didn't save.", false)
         ->assertSee("You're in", false);
+});
+
+it('shares the HTTP RSVP allowance and returns Retry-After from a limited Livewire action', function () {
+    $this->freezeTime();
+
+    for ($attempt = 0; $attempt < RsvpRateLimit::MAX_ATTEMPTS; $attempt++) {
+        $this->actingAs($this->member)
+            ->putJson(route('events.rsvp.update', $this->event), [
+                'status' => RsvpStatus::Going->value,
+            ])
+            ->assertSuccessful();
+    }
+
+    Livewire::actingAs($this->member)
+        ->test(RsvpButton::class, ['event' => $this->event])
+        ->call('withdraw')
+        ->assertStatus(429)
+        ->assertHeader('Retry-After', RsvpRateLimit::DECAY_SECONDS);
+
+    $this->travel(RsvpRateLimit::DECAY_SECONDS + 1)->seconds();
+
+    Livewire::actingAs($this->member)
+        ->test(RsvpButton::class, ['event' => $this->event])
+        ->call('withdraw')
+        ->assertSee("I'm in", false);
 });
 
 /* ---------------------------------------------------------------------------

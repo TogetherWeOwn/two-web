@@ -10,6 +10,8 @@ use App\Models\Event;
 use App\Models\Rsvp;
 use App\Models\User;
 use App\Services\EventService;
+use App\Support\RsvpRateLimit;
+use Illuminate\Http\Exceptions\ThrottleRequestsException;
 use Illuminate\View\View;
 use Livewire\Attributes\Locked;
 use Livewire\Component;
@@ -75,6 +77,7 @@ class RsvpButton extends Component
         $this->full = false;
 
         try {
+            RsvpRateLimit::hit($user);
             $events->rsvp($this->event, $user, $answer);
         } catch (EventAtCapacityException) {
             $this->full = true;
@@ -82,6 +85,11 @@ class RsvpButton extends Component
             // Cancelled or already over while they were looking at it. Re-rendering
             // against the fresh row is the honest answer; the reason shows there.
             $this->event = $this->event->fresh() ?? $this->event;
+        } catch (ThrottleRequestsException $exception) {
+            // Unlike an internal write failure, this is an intentional HTTP refusal.
+            // Let Livewire return the 429 and its Retry-After rather than rendering a
+            // generic "try once more" message that invites an immediately doomed retry.
+            throw $exception;
         } catch (Throwable) {
             // Deliberately not surfaced. Whatever the reason is — the queue, the
             // database, the bot's client — it is ours, and the member's next action
@@ -101,7 +109,10 @@ class RsvpButton extends Component
         $this->failed = false;
 
         try {
+            RsvpRateLimit::hit($user);
             $events->withdrawRsvp($this->event, $user);
+        } catch (ThrottleRequestsException $exception) {
+            throw $exception;
         } catch (Throwable) {
             $this->failed = true;
         }
