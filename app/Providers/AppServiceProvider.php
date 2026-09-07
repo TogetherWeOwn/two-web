@@ -8,6 +8,8 @@ use App\Services\Bot\InternalActionClient;
 use App\Support\Counts\CountsReader;
 use App\Support\Counts\CountsSource;
 use App\Support\MemberDataAccess\AccessRecorder;
+use App\Support\Profiles\MemberStatsReader;
+use App\Support\Profiles\MemberStatsSource;
 use Illuminate\Contracts\Foundation\Application;
 use Illuminate\Support\Facades\Event;
 use Illuminate\Support\Facades\Gate;
@@ -32,6 +34,12 @@ class AppServiceProvider extends ServiceProvider
         // cache inside the reader already does the deduplication, and holding
         // one for a worker's lifetime would only keep a stale connection alive.
         $this->app->bind(CountsSource::class, CountsReader::class);
+
+        // A profile performs two fixed reads against the bot's versioned views:
+        // one member row, then the complete milestone list. The controller sees
+        // only this non-throwing contract, so an unavailable bot database cannot
+        // take the member-owned half of the profile down with it.
+        $this->app->bind(MemberStatsSource::class, MemberStatsReader::class);
 
         // Bound rather than shared: it reads config at resolve time and holds no
         // state between calls, so a singleton would only buy the chance of a
