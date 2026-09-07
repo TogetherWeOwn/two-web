@@ -51,10 +51,10 @@ it('serves the landing page when the bot database refuses the connection', funct
     // Everything that has to survive the bot being gone: the pitch, the ladder
     // prose, and above all the join button. The funnel does not depend on the
     // counts and this is the test that says so.
-    $response->assertSee('Since 1998.')
-        ->assertSee('You start as a Prospect')
+    $response->assertSee('The lobby is open.')
+        ->assertSee('No application. No interview.')
         ->assertSee('data-testid="discord-join"', escape: false)
-        ->assertSee(route('discord'), escape: false);
+        ->assertSee(route('join'), escape: false);
 });
 
 it('shows no number and no error when the bot database is unreachable', function () {

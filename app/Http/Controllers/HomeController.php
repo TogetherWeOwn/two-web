@@ -4,6 +4,7 @@ namespace App\Http\Controllers;
 
 use App\Models\FeaturedContent;
 use App\Support\Counts\CountsSource;
+use App\Support\Home\HomePageContent;
 use Illuminate\View\View;
 
 /**
@@ -28,6 +29,7 @@ final class HomeController
     public function __invoke(CountsSource $counts): View
     {
         return view('home', [
+            'content' => HomePageContent::lobbyLedger(),
             'counts' => $counts->liveCounts(),
             'ranks' => $counts->ranks(),
             // `currentlyVisible()` is the only question the public site asks of

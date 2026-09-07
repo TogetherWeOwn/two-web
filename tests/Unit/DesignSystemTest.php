@@ -125,14 +125,16 @@ it('exempts the admin panel theme only while its font tokens are still the vendo
     );
 });
 
-it('preloads the headline font and tells the browser the page is dark', function () {
-    // Archivo carries the width axis the headline uses. Without the preload the
-    // hero reflows on first paint and the join button moves under the reader's
-    // thumb. Without color-scheme the browser paints scrollbars and form
-    // controls light before our stylesheet has parsed.
+it('preloads the headline font and chooses the page color scheme before paint', function () {
+    // Archivo remains the dark system's headline face and still needs the
+    // preload. The Lobby Ledger homepage is the one deliberate light scheme;
+    // the layout decides that before CSS parses so neither scheme flashes the
+    // other's native controls or scrollbar colour.
     $layout = file_get_contents(resource_path('views/components/layouts/app.blade.php'));
 
     expect($layout)->toContain('rel="preload"', 'href="/fonts/archivo-latin.woff2"');
-    expect($layout)->toContain('name="color-scheme"', 'content="dark"');
-    expect($layout)->toContain('<html lang="en" class="dark');
+    expect($layout)->toContain('name="color-scheme"');
+    expect($layout)->toContain("\$ledgerScheme ? 'light' : 'dark'");
+    expect($layout)->toContain("\$ledgerScheme ? '' : 'dark '");
+    expect($layout)->toContain("\$ledgerScheme ? 'bg-ledger-paper text-ledger-ink '");
 });
