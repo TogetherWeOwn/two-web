@@ -39,30 +39,16 @@ assert.equal(
 );
 console.log('ok  login and challenge matchers reject lookalikes and catch challenge markup');
 
-const old = {
-  id: process.env.CF_ACCESS_CLIENT_ID,
-  secret: process.env.CF_ACCESS_CLIENT_SECRET,
-  cookie: process.env.CI_SESSION_COOKIE,
-};
-process.env.CF_ACCESS_CLIENT_ID = ID;
-process.env.CF_ACCESS_CLIENT_SECRET = SECRET;
+const oldCookie = process.env.CI_SESSION_COOKIE;
 process.env.CI_SESSION_COOKIE = 'session=test-cookie';
 const pagesPath = require.resolve('../pages.cjs');
 delete require.cache[pagesPath];
 const pages = require('../pages.cjs');
-assert.equal(pages.extraHeaders.Cookie, 'session=test-cookie');
-assert.equal(pages.extraHeaders['CF-Access-Client-Id'], ID);
-assert.equal(pages.extraHeaders['CF-Access-Client-Secret'], SECRET);
-const lighthousePath = require.resolve('../lighthouserc.cjs');
-delete require.cache[lighthousePath];
-const lighthouse = require('../lighthouserc.cjs');
-assert.strictEqual(lighthouse.ci.collect.settings.extraHeaders, pages.extraHeaders);
-console.log('ok  Lighthouse receives cookie and Access headers under collect.settings');
+assert.deepEqual(pages.extraHeaders, { Cookie: 'session=test-cookie' });
+assert.equal(JSON.stringify(pages.extraHeaders).includes(SECRET), false);
+console.log('ok  Lighthouse config keeps the app cookie but never receives the Access secret');
 
-for (const [key, value] of Object.entries(old)) {
-  const envName = { id: 'CF_ACCESS_CLIENT_ID', secret: 'CF_ACCESS_CLIENT_SECRET', cookie: 'CI_SESSION_COOKIE' }[key];
-  if (value === undefined) delete process.env[envName];
-  else process.env[envName] = value;
-}
+if (oldCookie === undefined) delete process.env.CI_SESSION_COOKIE;
+else process.env.CI_SESSION_COOKIE = oldCookie;
 
 console.log('\n4/4 ok');

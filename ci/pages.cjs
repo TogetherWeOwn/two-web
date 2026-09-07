@@ -21,8 +21,6 @@
 // to /admin is a redirect, and scoring a redirect green is precisely the false
 // comfort this file exists to prevent.
 
-const { accessHeaders } = require('./browser/cloudflare-access.cjs');
-
 const BASE_URL = process.env.CI_BASE_URL || 'http://127.0.0.1:8000';
 
 // Set by the budgets job from `artisan ci:session-cookie --moderator`.
@@ -62,12 +60,7 @@ const allPages = [
  *
  * Call it from anything that is about to actually load a page.
  */
-const stagingPaths = process.env.CI_STAGING_PATHS
-  ? process.env.CI_STAGING_PATHS.split(',').map((path) => path.trim()).filter(Boolean)
-  : null;
-const pages = stagingPaths
-  ? stagingPaths.map((path) => ({ path, name: `Staging ${path}` }))
-  : allPages;
+const pages = allPages;
 
 function assertMeasurable() {
   const authPages = pages.filter((page) => page.auth);
@@ -82,19 +75,13 @@ function assertMeasurable() {
   }
 }
 
-const extraHeaders = {
-  ...(SESSION_COOKIE ? { Cookie: SESSION_COOKIE } : {}),
-  ...(accessHeaders() || {}),
-};
-
 module.exports = {
   BASE_URL,
   SESSION_COOKIE,
   assertMeasurable,
   pages,
   urls: pages.map((page) => new URL(page.path, BASE_URL).toString()),
-  // Lighthouse takes one extra-headers map for the whole run. Cloudflare Access
-  // credentials belong here, under collect.settings, so Chrome sends them before
-  // the first navigation; local CI leaves them unset and keeps its existing cookie.
-  extraHeaders: Object.keys(extraHeaders).length ? extraHeaders : undefined,
+  // Lighthouse takes one extra-headers map for the whole run, so the cookie goes
+  // on every request. Harmless on `/`: a session cookie a signed-out page ignores.
+  extraHeaders: SESSION_COOKIE ? { Cookie: SESSION_COOKIE } : undefined,
 };

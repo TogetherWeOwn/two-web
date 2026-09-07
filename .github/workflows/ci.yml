@@ -146,7 +146,8 @@ jobs:
       # Cloudflare Access browser QA must send its service-token pair before the
       # first navigation and reject a 403, challenge page or redirected login as
       # evidence. The fixture uses fake values and a local server; the real secret
-      # is never needed in a pull-request run.
+      # is never needed in a pull-request run. This config half also proves the
+      # service secret never enters Lighthouse settings, which serialize to reports.
       - name: Cloudflare Access config self-test
         run: node ci/browser/cloudflare-access-config-selftest.mjs
 

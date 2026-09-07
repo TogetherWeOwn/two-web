@@ -53,11 +53,9 @@ node ci/browser/gif.mjs     /tmp/frames /tmp/walkthrough.gif 300 110
 
 ## Cloudflare Access staging QA
 
-Both browser capture and Lighthouse read the service token from
-`CF_ACCESS_CLIENT_ID` and `CF_ACCESS_CLIENT_SECRET`. The Puppeteer path attaches
-it only to same-origin requests before the first navigation. Lighthouse receives
-the same pair through `collect.settings.extraHeaders`. Neither command prints the
-values.
+`capture.mjs` reads the service token from `CF_ACCESS_CLIENT_ID` and
+`CF_ACCESS_CLIENT_SECRET` and attaches it only to same-origin requests before the
+first navigation. It never prints either value.
 
 From a shell where Paperclip has injected the two variables:
 
@@ -65,38 +63,24 @@ From a shell where Paperclip has injected the two variables:
 source ci/browser/env.sh
 node ci/browser/capture.mjs "$PAPERCLIP_RUN_SCRATCH_DIR/staging-shots" \
   https://staging.togetherweown.com / /events
-
-CI_BASE_URL=https://staging.togetherweown.com \
-CI_STAGING_PATHS=/,/events \
-  npx lhci autorun --config=./ci/lighthouserc.cjs
-node ci/lh-annotate.mjs
-rm -rf .lighthouseci
 ```
 
-`CI_STAGING_PATHS` is required for this public staging run because the normal
-local budget matrix also includes moderator pages and requires a locally minted
-Laravel session cookie. Give it a comma-separated list of non-redirecting paths.
-
-The capture exits non-zero and writes no successful row for an HTTP 403, a
+The command exits non-zero and writes no successful row for an HTTP 403, a
 `cf-mitigated: challenge` response, recognizable Cloudflare challenge markup, or
-a navigation that ends on a Cloudflare Access login URL. The Lighthouse report
-verdict applies the same final-document checks before accepting any budget
-result.
+a navigation that ends on a Cloudflare Access login URL. `report.json` records
+the final URL but never the request headers.
 
-Lighthouse embeds `settings.extraHeaders` in its JSON and HTML reports, including
-the service-token values. Treat `.lighthouseci` as secret-bearing for staging:
-do not upload it, attach it, commit it, or retain it after reading the verdict.
-Delete it immediately after the run:
+Do **not** pass the Access pair through Lighthouse `settings.extraHeaders`.
+Lighthouse serializes those settings into its reports, which makes the secret an
+artifact. Authenticated staging Lighthouse is therefore intentionally not part
+of this command. Use the capture path above for deterministic staging browser QA
+and keep Lighthouse on the local production-shaped budget harness, where no
+Cloudflare credential is required. That split is safer than producing a report
+that contains a reusable service secret.
 
-```bash
-rm -rf .lighthouseci
-```
-
-This does not affect the local CI budget job, where those variables are absent.
-The Puppeteer `report.json` and screenshots do not contain the header values.
-
-The regression tests use fake values. The config half needs only Node; the
-browser half is offline except for launching the installed Chrome:
+The regression tests use fake values. The config half proves Lighthouse remains
+secret-free; the browser half is offline except for launching the installed
+Chrome:
 
 ```bash
 node ci/browser/cloudflare-access-config-selftest.mjs

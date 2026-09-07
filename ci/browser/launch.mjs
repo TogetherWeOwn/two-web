@@ -64,15 +64,23 @@ export function chromeEnv() {
   };
 }
 
-export async function launch() {
+export async function launch(options = {}) {
   const chrome = findChrome();
   preflight(chrome);
+  const { args = [], ...rest } = options;
   return puppeteer.launch({
     executablePath: chrome,
     headless: true,
+    ...rest,
     // --hide-scrollbars keeps a shot the width it claims to be. dbus errors in
     // the log are benign: there is no system bus here and Chrome renders anyway.
-    args: ['--no-sandbox', '--disable-gpu', '--disable-dev-shm-usage', '--hide-scrollbars'],
+    args: [
+      '--no-sandbox',
+      '--disable-gpu',
+      '--disable-dev-shm-usage',
+      '--hide-scrollbars',
+      ...args,
+    ],
     env: chromeEnv(),
   });
 }
