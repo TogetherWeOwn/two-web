@@ -96,6 +96,10 @@
             <p class="text-xs text-ink-muted" role="status" data-testid="rsvp-syncing">
                 Saved. Syncing to Discord.
             </p>
+        @elseif ($going)
+            <p class="text-xs text-ink-muted" role="status" data-testid="rsvp-synced">
+                Synced to Discord.
+            </p>
         @endif
 
         @if ($failed)

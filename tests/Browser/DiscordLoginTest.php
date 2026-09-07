@@ -5,12 +5,10 @@ use Laravel\Dusk\Browser;
 
 // The login journey in a real browser.
 //
-// The one thing Dusk deliberately does NOT do here is drive the actual Discord
-// consent screen. That would mean a real Discord account, a real password and a
-// real third party in our merge pipeline — flaky by construction. The OAuth leg is
-// covered by the Pest suite against a stubbed provider, and by QA doing the real
-// round-trip once on staging. What Dusk owns is everything on our side of it:
-// the way in, what you see once you are in, the way out, and the failure message.
+// Discord itself is not a merge dependency. The application server registers a
+// Discord-shaped provider whose endpoints are ci/dusk-stub.mjs, so the browser
+// still clicks the real login link and traverses Socialite's state, code, token and
+// user exchange before the real callback creates the local member.
 
 // "Log in with Discord", not "Sign in with Discord": the placeholder homepage
 // said the latter, but two-design docs/COPY.md is the authority on the words and
@@ -26,16 +24,24 @@ test('a signed-out visitor is offered Discord as the way in', function () {
     });
 });
 
-test('a member lands on their profile and is not offered the admin panel', function () {
-    $member = User::factory()->create(['display_name' => 'Wren']);
-
-    $this->browse(function (Browser $browser) use ($member) {
-        $browser->loginAs($member)
-            ->visit('/profile')
+test('a member signs in through Discord and lands on their profile', function () {
+    $this->browse(function (Browser $browser) {
+        $browser->visit('/')
+            ->assertSeeLink('Log in with Discord')
+            ->click('[data-testid="discord-login"]')
+            ->waitForLocation('/profile')
+            ->assertPathIs('/profile')
             ->assertSee('Your profile')
             ->assertSee('Wren')
             ->assertMissing('[data-testid="admin-link"]');
     });
+
+    $member = User::query()->sole();
+
+    expect($member->discord_id)->toBe('111222333444555666')
+        ->and($member->username)->toBe('wren')
+        ->and($member->display_name)->toBe('Wren')
+        ->and($member->discord_synced_at)->not->toBeNull();
 });
 
 test('a moderator is offered the admin panel', function () {

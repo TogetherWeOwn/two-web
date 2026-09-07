@@ -15,6 +15,9 @@
              write to it. That is normal Dusk; do not point this at anything you
              care about, and never at staging or production. -->
         <env name="APP_ENV" value="local"/>
-        <env name="QUEUE_CONNECTION" value="sync"/>
+        <!-- The separately running application and worker use the real database
+             queue configured in .env. A PHPUnit-only sync override would bypass
+             the cross-process seam this suite exists to prove. -->
+        <env name="QUEUE_CONNECTION" value="database"/>
     </php>
 </phpunit>
