@@ -132,9 +132,13 @@ async function validateManifest(manifest) {
             }
             const singleQuoted = test.name.replaceAll('\\', '\\\\').replaceAll("'", "\\'");
             const doubleQuoted = test.name.replaceAll('\\', '\\\\').replaceAll('"', '\\"');
-            const exactDeclaration = `test('${singleQuoted}'`;
-            const alternateDeclaration = `test("${doubleQuoted}"`;
-            if (!source.includes(exactDeclaration) && !source.includes(alternateDeclaration)) {
+            const declarations = [
+                `test('${singleQuoted}'`,
+                `test("${doubleQuoted}"`,
+                `it('${singleQuoted}'`,
+                `it("${doubleQuoted}"`,
+            ];
+            if (!declarations.some((declaration) => source.includes(declaration))) {
                 errors.push(`${journey.id}: ${test.file} does not declare test ${JSON.stringify(test.name)}`);
             }
         }

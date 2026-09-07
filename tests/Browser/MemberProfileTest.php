@@ -24,6 +24,11 @@ it('lets a member edit their sparse profile with the keyboard-visible form', fun
             ->waitFor('[data-testid="profile-saved"]')
             ->assertSee('Usually on after work.')
             ->assertSee('Helldivers 2')
+            ->assertSee('Europe/London')
+            ->refresh()
+            ->waitForText('Usually on after work.')
+            ->assertSee('Usually on after work.')
+            ->assertSee('Helldivers 2')
             ->assertSee('Europe/London');
     });
 
