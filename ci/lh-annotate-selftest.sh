@@ -51,7 +51,7 @@ n=0
 # case <slug> <expected exit> <expected substring> <assertion-results.json, or the
 # literal NO_FILE / NO_DIR>
 case_is() {
-  local slug="$1" want="$2" expected="$3" body="$4"
+  local slug="$1" want="$2" expected="$3" body="$4" lhr="${5:-}"
   local dir out status
   n=$((n + 1))
   dir="$WORK/$slug"
@@ -60,6 +60,7 @@ case_is() {
   if [ "$body" != "NO_DIR" ]; then
     mkdir -p "$dir/.lighthouseci"
     [ "$body" != "NO_FILE" ] && printf '%s\n' "$body" > "$dir/.lighthouseci/assertion-results.json"
+    [ -n "$lhr" ] && printf '%s\n' "$lhr" > "$dir/.lighthouseci/lhr-fixture.json"
   fi
 
   out="$( cd "$dir" && node "$ANNOTATE" 2>&1 )"
@@ -119,8 +120,22 @@ printf '\n\033[1m==> Nothing breached, and nothing measured\033[0m\n'
 
 case_is all-passed 0 'Every performance assertion passed' '[]'
 
+printf '\n\033[1m==> A Cloudflare page is never accepted as a measurement\033[0m\n'
+
+case_is access-login 1 'Cloudflare Access login URL' '[]' \
+'{"requestedUrl":"https://staging.togetherweown.com/","finalUrl":"https://team.cloudflareaccess.com/cdn-cgi/access/login/app","audits":{"http-status-code":{"details":{"items":[{"statusCode":200}]}}}}'
+
+case_is access-403 1 'main document returned HTTP 403' '[]' \
+'{"requestedUrl":"https://staging.togetherweown.com/events","finalUrl":"https://staging.togetherweown.com/events","audits":{"http-status-code":{"details":{"items":[{"statusCode":403}]}}}}'
+
+case_is staging-page 0 'Every performance assertion passed' '[]' \
+'{"requestedUrl":"https://staging.togetherweown.com/","finalUrl":"https://staging.togetherweown.com/","audits":{"http-status-code":{"details":{"items":[{"statusCode":200}]}}}}'
+
 # lhci writes no assertion-results.json when nothing asserted. Not a failure.
 case_is no-results-file 0 'nothing to annotate' NO_FILE
+
+case_is access-login-no-assertions 1 'Cloudflare Access login URL' NO_FILE \
+'{"requestedUrl":"https://staging.togetherweown.com/","finalUrl":"https://team.cloudflareaccess.com/cdn-cgi/access/login/app","audits":{"http-status-code":{"details":{"items":[{"statusCode":200}]}}}}'
 
 # But no .lighthouseci at all means Lighthouse never produced a result — a
 # crashed Chrome, a server that went away. That must be red: a budget that was

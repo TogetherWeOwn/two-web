@@ -51,6 +51,58 @@ node ci/browser/record.mjs  /tmp/frames http://127.0.0.1:8000/
 node ci/browser/gif.mjs     /tmp/frames /tmp/walkthrough.gif 300 110
 ```
 
+## Cloudflare Access staging QA
+
+Both browser capture and Lighthouse read the service token from
+`CF_ACCESS_CLIENT_ID` and `CF_ACCESS_CLIENT_SECRET`. The Puppeteer path attaches
+it only to same-origin requests before the first navigation. Lighthouse receives
+the same pair through `collect.settings.extraHeaders`. Neither command prints the
+values.
+
+From a shell where Paperclip has injected the two variables:
+
+```bash
+source ci/browser/env.sh
+node ci/browser/capture.mjs "$PAPERCLIP_RUN_SCRATCH_DIR/staging-shots" \
+  https://staging.togetherweown.com / /events
+
+CI_BASE_URL=https://staging.togetherweown.com \
+CI_STAGING_PATHS=/,/events \
+  npx lhci autorun --config=./ci/lighthouserc.cjs
+node ci/lh-annotate.mjs
+rm -rf .lighthouseci
+```
+
+`CI_STAGING_PATHS` is required for this public staging run because the normal
+local budget matrix also includes moderator pages and requires a locally minted
+Laravel session cookie. Give it a comma-separated list of non-redirecting paths.
+
+The capture exits non-zero and writes no successful row for an HTTP 403, a
+`cf-mitigated: challenge` response, recognizable Cloudflare challenge markup, or
+a navigation that ends on a Cloudflare Access login URL. The Lighthouse report
+verdict applies the same final-document checks before accepting any budget
+result.
+
+Lighthouse embeds `settings.extraHeaders` in its JSON and HTML reports, including
+the service-token values. Treat `.lighthouseci` as secret-bearing for staging:
+do not upload it, attach it, commit it, or retain it after reading the verdict.
+Delete it immediately after the run:
+
+```bash
+rm -rf .lighthouseci
+```
+
+This does not affect the local CI budget job, where those variables are absent.
+The Puppeteer `report.json` and screenshots do not contain the header values.
+
+The regression tests use fake values. The config half needs only Node; the
+browser half is offline except for launching the installed Chrome:
+
+```bash
+node ci/browser/cloudflare-access-config-selftest.mjs
+node ci/browser/cloudflare-access-selftest.mjs
+```
+
 ## The selftest, and why it is not optional
 
 ```bash

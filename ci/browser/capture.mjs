@@ -17,7 +17,10 @@
  */
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import cloudflareAccess from './cloudflare-access.cjs';
 import { launch, VIEWPORTS, observeCls } from './launch.mjs';
+
+const { assertValidPageResponse, configureAccessForPage, navigationOptions } = cloudflareAccess;
 
 const OUT = process.argv[2];
 const BASE = process.argv[3];
@@ -44,7 +47,9 @@ for (const path of PATHS) {
     const t0 = Date.now();
     let resp;
     try {
-      resp = await page.goto(url, { waitUntil: 'networkidle0', timeout: 60000 });
+      await configureAccessForPage(page, url);
+      resp = await page.goto(url, { ...navigationOptions(), timeout: 60000 });
+      await assertValidPageResponse(page, resp);
     } catch (err) {
       console.error(`  FAILED ${path} @ ${vp.name}: ${err.message}`);
       failures++;
@@ -87,7 +92,14 @@ for (const path of PATHS) {
       };
     });
 
-    report.push({ path, viewport: vp.name, status: resp.status(), loadMs, ...metrics });
+    report.push({
+      path,
+      viewport: vp.name,
+      status: resp.status(),
+      finalUrl: page.url(),
+      loadMs,
+      ...metrics,
+    });
     console.log(
       `  ${slug}: status=${resp.status()} cls=${metrics.cls} ` +
         `fcp=${metrics.paints['first-contentful-paint']}ms ` +

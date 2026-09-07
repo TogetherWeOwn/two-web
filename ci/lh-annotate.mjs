@@ -26,13 +26,57 @@ if (!existsSync(DIR)) {
 // lhci writes assertion-results.json next to the reports when any assertion runs.
 const resultsFile = readdirSync(DIR).find((f) => f === 'assertion-results.json');
 
-if (!resultsFile) {
-  console.log('No assertion-results.json — nothing to annotate.');
-  process.exit(0);
+const results = resultsFile
+  ? JSON.parse(readFileSync(`${DIR}/${resultsFile}`, 'utf8'))
+  : [];
+const breached = results.filter((r) => !r.passed);
+
+const reportFiles = readdirSync(DIR).filter((f) => /^lhr-.*\.json$/.test(f));
+const accessFailures = [];
+for (const file of reportFiles) {
+  let lhr;
+  try {
+    lhr = JSON.parse(readFileSync(`${DIR}/${file}`, 'utf8'));
+  } catch {
+    continue;
+  }
+
+  const requestedUrl = lhr.requestedUrl;
+  const finalUrl = lhr.finalDisplayedUrl ?? lhr.finalUrl ?? requestedUrl;
+  const status = lhr.audits?.['http-status-code']?.details?.items?.[0]?.statusCode;
+  const runtimeError = lhr.runtimeError?.message;
+  let loginUrl = false;
+  try {
+    const parsed = new URL(finalUrl);
+    loginUrl =
+      (parsed.protocol === 'https:' && /^[^.]+\.cloudflareaccess\.com$/.test(parsed.hostname)) ||
+      parsed.pathname.toLowerCase().startsWith('/cdn-cgi/access/login');
+  } catch {
+    loginUrl = true;
+  }
+
+  let reason = null;
+  if (runtimeError) reason = `runtime error: ${runtimeError}`;
+  else if (typeof status === 'number' && status >= 400) reason = `main document returned HTTP ${status}`;
+  else if (loginUrl) reason = 'navigation ended on a Cloudflare Access login URL';
+  else if (requestedUrl && finalUrl && new URL(requestedUrl).origin !== new URL(finalUrl).origin) {
+    reason = `navigation left the requested origin for ${new URL(finalUrl).origin}`;
+  }
+
+  if (reason) accessFailures.push({ requestedUrl, finalUrl, reason });
 }
 
-const results = JSON.parse(readFileSync(`${DIR}/${resultsFile}`, 'utf8'));
-const breached = results.filter((r) => !r.passed);
+for (const failure of accessFailures) {
+  console.error(
+    `::error::Lighthouse did not measure the requested page ${failure.requestedUrl || '(unknown URL)'} — ` +
+      `${failure.reason}; final URL: ${failure.finalUrl || '(none)'}.`,
+  );
+}
+
+if (!resultsFile && reportFiles.length === 0) {
+  console.log('No assertion-results.json and no Lighthouse reports — nothing to annotate.');
+  process.exit(0);
+}
 
 // `level` decides the verdict, and it has to, because ci/lighthouserc.cjs writes
 // two kinds of budget and means the difference. `largest-contentful-paint`,
@@ -51,7 +95,7 @@ const breached = results.filter((r) => !r.passed);
 const failures = breached.filter((r) => r.level === 'error');
 const warnings = breached.filter((r) => r.level !== 'error');
 
-if (breached.length === 0) {
+if (breached.length === 0 && accessFailures.length === 0) {
   console.log('Every performance assertion passed.');
   process.exit(0);
 }
@@ -103,7 +147,7 @@ const median = (xs) => {
 const byUrl = new Map();
 const lcpElement = new Map();
 const longTasks = new Map();
-for (const file of readdirSync(DIR).filter((f) => /^lhr-.*\.json$/.test(f))) {
+for (const file of reportFiles) {
   let lhr;
   try {
     lhr = JSON.parse(readFileSync(`${DIR}/${file}`, 'utf8'));
@@ -164,7 +208,7 @@ for (const [url, audits] of byUrl) {
   if (chain) console.error(`::error::CONTEXT, NOT A FAILURE — slowest resources on ${url}: ${chain}`);
 }
 
-if (failures.length === 0) {
+if (failures.length === 0 && accessFailures.length === 0) {
   console.error(
     `\n${warnings.length} early-warning threshold(s) exceeded, 0 budgets breached. Not a failure.`
   );
@@ -172,7 +216,8 @@ if (failures.length === 0) {
 }
 
 console.error(
-  `\n${failures.length} performance assertion(s) breached` +
+  `\n${failures.length} performance assertion(s) breached, ` +
+    `${accessFailures.length} invalid page measurement(s)` +
     (warnings.length ? `, plus ${warnings.length} early-warning threshold(s) exceeded.` : '.')
 );
 process.exit(1);
