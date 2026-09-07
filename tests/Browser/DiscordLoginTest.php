@@ -32,7 +32,7 @@ test('a member signs in through Discord and lands on their profile', function ()
             ->waitForLocation('/profile')
             ->assertPathIs('/profile')
             ->assertSee('Your profile')
-            ->assertSee('Wren')
+            ->assertSee('WREN')
             ->assertMissing('[data-testid="admin-link"]');
     });
 
