@@ -27,7 +27,7 @@ const BASE_URL = process.env.CI_BASE_URL || 'http://127.0.0.1:8000';
 const SESSION_COOKIE = process.env.CI_SESSION_COOKIE || '';
 
 /** @type {{ path: string, name: string, auth?: boolean }[]} */
-const pages = [
+const allPages = [
   { path: '/', name: 'Homepage — the top of the join funnel' },
   // Public on purpose: the empty state is a pitch to join, so a signed-out visitor
   // arriving from a Discord link has to reach it.
@@ -60,6 +60,8 @@ const pages = [
  *
  * Call it from anything that is about to actually load a page.
  */
+const pages = allPages;
+
 function assertMeasurable() {
   const authPages = pages.filter((page) => page.auth);
 

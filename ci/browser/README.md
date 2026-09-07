@@ -51,6 +51,42 @@ node ci/browser/record.mjs  /tmp/frames http://127.0.0.1:8000/
 node ci/browser/gif.mjs     /tmp/frames /tmp/walkthrough.gif 300 110
 ```
 
+## Cloudflare Access staging QA
+
+`capture.mjs` reads the service token from `CF_ACCESS_CLIENT_ID` and
+`CF_ACCESS_CLIENT_SECRET` and attaches it only to same-origin requests before the
+first navigation. It never prints either value.
+
+From a shell where Paperclip has injected the two variables:
+
+```bash
+source ci/browser/env.sh
+node ci/browser/capture.mjs "$PAPERCLIP_RUN_SCRATCH_DIR/staging-shots" \
+  https://staging.togetherweown.com / /events
+```
+
+The command exits non-zero and writes no successful row for an HTTP 403, a
+`cf-mitigated: challenge` response, recognizable Cloudflare challenge markup, or
+a navigation that ends on a Cloudflare Access login URL. `report.json` records
+the final URL but never the request headers.
+
+Do **not** pass the Access pair through Lighthouse `settings.extraHeaders`.
+Lighthouse serializes those settings into its reports, which makes the secret an
+artifact. Authenticated staging Lighthouse is therefore intentionally not part
+of this command. Use the capture path above for deterministic staging browser QA
+and keep Lighthouse on the local production-shaped budget harness, where no
+Cloudflare credential is required. That split is safer than producing a report
+that contains a reusable service secret.
+
+The regression tests use fake values. The config half proves Lighthouse remains
+secret-free; the browser half is offline except for launching the installed
+Chrome:
+
+```bash
+node ci/browser/cloudflare-access-config-selftest.mjs
+node ci/browser/cloudflare-access-selftest.mjs
+```
+
 ## The selftest, and why it is not optional
 
 ```bash
