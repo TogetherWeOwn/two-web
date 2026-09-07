@@ -1,0 +1,74 @@
+{
+    "version": 1,
+    "journeys": [
+        {
+            "id": "join-funnel",
+            "name": "Homepage to tracked Discord join",
+            "tests": [
+                {
+                    "file": "tests/Browser/DiscordJoinTest.php",
+                    "name": "a visitor is offered the way into Discord",
+                    "complete": true
+                }
+            ]
+        },
+        {
+            "id": "discord-oauth",
+            "name": "Discord OAuth to profile",
+            "tests": [
+                {
+                    "file": "tests/Browser/DiscordLoginTest.php",
+                    "name": "a member lands on their profile and is not offered the admin panel",
+                    "complete": false,
+                    "gap": "The browser session is injected with loginAs(); the journey does not click the login link or complete OAuth through the stubbed provider."
+                }
+            ]
+        },
+        {
+            "id": "profile-view-edit",
+            "name": "View and edit profile",
+            "tests": [
+                {
+                    "file": "tests/Browser/DiscordLoginTest.php",
+                    "name": "a member lands on their profile and is not offered the admin panel",
+                    "complete": false,
+                    "gap": "The browser proves the profile renders but does not edit and persist profile data."
+                }
+            ]
+        },
+        {
+            "id": "event-rsvp-discord",
+            "name": "RSVP round-trip to Discord",
+            "tests": [
+                {
+                    "file": "tests/Browser/EventsRsvpTest.php",
+                    "name": "a member RSVPs, sees it confirmed, and still has it after a reload",
+                    "complete": false,
+                    "gap": "The browser stops at the local syncing state; it does not prove the bot received the event or that the member-visible state advances to synced."
+                }
+            ]
+        },
+        {
+            "id": "logout",
+            "name": "Log out",
+            "tests": [
+                {
+                    "file": "tests/Browser/DiscordLoginTest.php",
+                    "name": "a member can sign out again",
+                    "complete": true
+                }
+            ]
+        },
+        {
+            "id": "bot-unreachable",
+            "name": "Bot unreachable degraded path",
+            "tests": [
+                {
+                    "file": "tests/Browser/DegradedPathTest.php",
+                    "name": "the site keeps its join path when the bot is unreachable",
+                    "complete": true
+                }
+            ]
+        }
+    ]
+}
