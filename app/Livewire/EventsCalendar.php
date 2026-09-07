@@ -27,7 +27,7 @@ use Livewire\Component;
  * that asks its own question would disagree with the list beside it on the day an
  * event is published between the two queries.
  */
-#[Layout('components.layouts.app', ['deferLivewire' => true])]
+#[Layout('components.layouts.app', ['deferLivewire' => true, 'title' => 'Events — Together We Own'])]
 class EventsCalendar extends Component
 {
     /** `list` or `calendar`. The list is first because it is what works at 360px. */

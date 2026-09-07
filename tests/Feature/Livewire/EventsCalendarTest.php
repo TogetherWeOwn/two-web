@@ -51,6 +51,12 @@ it('is reachable by a guest, because the empty state is a pitch to join', functi
         ->assertSeeLivewire(EventsCalendar::class);
 });
 
+it('has a descriptive document title', function () {
+    $this->get(route('events.index'))
+        ->assertOk()
+        ->assertSee('<title>Events — Together We Own</title>', escape: false);
+});
+
 it('lists an upcoming published event', function () {
     $event = upcomingEvent();
 
