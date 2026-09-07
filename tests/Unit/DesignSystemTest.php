@@ -138,3 +138,10 @@ it('preloads the headline font and chooses the page color scheme before paint', 
     expect($layout)->toContain("\$ledgerScheme ? '' : 'dark '");
     expect($layout)->toContain("\$ledgerScheme ? 'bg-ledger-paper text-ledger-ink '");
 });
+
+it('keeps the homepage inside the layout main landmark', function () {
+    $home = file_get_contents(resource_path('views/home.blade.php'));
+
+    expect($home)->toContain('<div id="lobby"');
+    expect($home)->not->toContain('<main');
+});

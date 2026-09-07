@@ -32,7 +32,7 @@
             </nav>
         </header>
 
-        <main id="lobby" class="mx-auto max-w-7xl px-5 pb-12 pt-12 md:px-8 md:pt-16 lg:px-12">
+        <div id="lobby" class="mx-auto max-w-7xl px-5 pb-12 pt-12 md:px-8 md:pt-16 lg:px-12">
             @include('partials.auth-error')
 
             <section aria-labelledby="hero-heading" class="grid gap-10 border-b-2 border-ledger-ink pb-14 lg:grid-cols-12 lg:items-center lg:gap-14">
@@ -186,6 +186,6 @@
                     <a href="{{ route('login') }}" data-testid="discord-login" class="font-semibold underline underline-offset-4 hover:text-brand">Log in with Discord</a>
                 @endauth
             </footer>
-        </main>
+        </div>
     </div>
 </x-layouts.app>
