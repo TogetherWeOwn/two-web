@@ -1,0 +1,57 @@
+{
+    "period": {
+        "start": "2026-09-01",
+        "end": "2026-09-07"
+    },
+    "pulls": [
+        {
+            "number": 259,
+            "url": "https://github.com/TogetherWeOwn/two-web/pull/259",
+            "headSha": "8ce57b1383023bcfa2546885d9db3fd6cc10ef24",
+            "checkRuns": [
+                {
+                    "name": "static",
+                    "status": "completed",
+                    "conclusion": "success",
+                    "startedAt": "2026-09-07T05:28:27Z",
+                    "completedAt": "2026-09-07T05:29:19Z"
+                },
+                {
+                    "name": "pest",
+                    "status": "completed",
+                    "conclusion": "success",
+                    "startedAt": "2026-09-07T05:28:26Z",
+                    "completedAt": "2026-09-07T05:29:34Z"
+                },
+                {
+                    "name": "dusk",
+                    "status": "completed",
+                    "conclusion": "success",
+                    "startedAt": "2026-09-07T05:28:25Z",
+                    "completedAt": "2026-09-07T05:29:21Z"
+                },
+                {
+                    "name": "budgets",
+                    "status": "completed",
+                    "conclusion": "success",
+                    "startedAt": "2026-09-07T05:28:26Z",
+                    "completedAt": "2026-09-07T05:32:34Z"
+                },
+                {
+                    "name": "tests",
+                    "status": "completed",
+                    "conclusion": "success",
+                    "startedAt": "2026-09-07T05:33:12Z",
+                    "completedAt": "2026-09-07T05:33:15Z"
+                },
+                {
+                    "name": "gitleaks",
+                    "status": "completed",
+                    "conclusion": "success",
+                    "startedAt": "2026-09-07T05:28:26Z",
+                    "completedAt": "2026-09-07T05:28:35Z"
+                }
+            ]
+        }
+    ]
+}

@@ -84,6 +84,17 @@ jobs:
       - name: Protection check self-test
         run: ./ci/verify-protection-selftest.sh
 
+      # The weekly QA report is generated from check-run records, but its coverage
+      # half is a repository contract: exactly six named journeys, each mapped to a
+      # real Dusk test, and every partial journey called incomplete rather than
+      # laundered through a feature test. This also pins the PR #259 4m50 baseline
+      # and the same-commit definition of a flake without needing the GitHub API.
+      # The weekly collector itself is ci/collect-suite-health.mjs; it uses `gh`
+      # only when QA runs the report, while this step keeps its deterministic half
+      # green on every pull request.
+      - name: Dusk suite-health self-test
+        run: node ci/suite-health-selftest.mjs
+
       # And the checks that stop the acceptance run before it wastes forty minutes
       # answering the wrong question — an unauthenticated gh, a workspace clone for
       # an origin, a dirty tree, an unreadable Actions API, or another `--run`
