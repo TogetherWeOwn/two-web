@@ -95,6 +95,12 @@ jobs:
       - name: Dusk suite-health self-test
         run: node ci/suite-health-selftest.mjs
 
+      # The Dusk app, OAuth provider, bot stub and queue worker are separate
+      # processes. This is the mutation control on their receipt gate: bypassing
+      # OAuth or skipping the bot call must make the required browser job red.
+      - name: Dusk receipt gate self-test
+        run: ./ci/dusk-receipts-selftest.sh
+
       # And the checks that stop the acceptance run before it wastes forty minutes
       # answering the wrong question — an unauthenticated gh, a workspace clone for
       # an origin, a dirty tree, an unreadable Actions API, or another `--run`
@@ -316,6 +322,17 @@ jobs:
           cp .env.example .env
           sed -i 's#^APP_URL=.*#APP_URL=http://127.0.0.1:8000#' .env
           sed -i 's#^APP_ENV=.*#APP_ENV=local#' .env
+          sed -i 's#^QUEUE_CONNECTION=.*#QUEUE_CONNECTION=database#' .env
+          sed -i 's#^DISCORD_CLIENT_ID=.*#DISCORD_CLIENT_ID=dusk-client#' .env
+          sed -i 's#^DISCORD_CLIENT_SECRET=.*#DISCORD_CLIENT_SECRET=dusk-secret#' .env
+          sed -i 's#^BOT_ENDPOINT_URL=.*#BOT_ENDPOINT_URL=http://127.0.0.1:8765#' .env
+          sed -i 's#^BOT_KEY_ID=.*#BOT_KEY_ID=dusk-web#' .env
+          sed -i 's#^BOT_SHARED_SECRET=.*#BOT_SHARED_SECRET=dusk-shared-secret-at-least-32-characters#' .env
+          printf '%s\n' \
+            'DUSK_TEST_SEAMS=1' \
+            'DUSK_DISCORD_PROVIDER_URL=http://127.0.0.1:8765' \
+            'DISCORD_API_BASE=http://127.0.0.1:8765/api/v10' \
+            'DUSK_BOT_RECEIPT=storage/logs/dusk-bot-receipt.json' >> .env
           php artisan key:generate
           php artisan config:clear
 
@@ -326,24 +343,42 @@ jobs:
       - name: Install matching ChromeDriver
         run: php artisan dusk:chrome-driver --detect
 
-      # Output goes to a file, not the step's stdout. A backgrounded process holding
+      # Output goes to files, not the step's stdout. A backgrounded process holding
       # the step's pipe open makes the step hang until the job times out, and the
-      # log is worth having in the failure artifact anyway.
-      - name: Start the application server
+      # logs are worth having in the failure artifact anyway.
+      - name: Start Dusk services
         run: |
+          rm -f storage/logs/dusk-bot-receipt.json storage/logs/dusk-stub-calls.jsonl
+          node ci/dusk-stub.mjs > storage/logs/dusk-stub.log 2>&1 &
+          echo $! > storage/logs/dusk-stub.pid
+          CACHE_STORE=file php artisan queue:work --queue=default --sleep=1 --tries=1 --timeout=30 > storage/logs/queue.log 2>&1 &
+          echo $! > storage/logs/queue.pid
           php artisan serve --host=127.0.0.1 --port=8000 --no-reload > storage/logs/serve.log 2>&1 &
+          echo $! > storage/logs/serve.pid
           for i in $(seq 1 30); do
-            if curl -fsS http://127.0.0.1:8000/up > /dev/null; then
-              echo "server up after ${i}s"; exit 0
+            if curl -fsS http://127.0.0.1:8765/up > /dev/null && curl -fsS http://127.0.0.1:8000/up > /dev/null; then
+              echo "Dusk services up after ${i}s"; exit 0
             fi
             sleep 1
           done
-          echo "::error::the application never answered /up — Dusk would have failed as a browser timeout"
-          cat storage/logs/serve.log
+          echo "::error::the Dusk application or deterministic stub never answered"
+          cat storage/logs/serve.log storage/logs/queue.log storage/logs/dusk-stub.log
           exit 1
 
       - name: Dusk
         run: php artisan dusk --colors=always
+
+      - name: Verify the external calls were observed
+        run: php ci/dusk-receipts-check.php
+
+      - name: Stop Dusk services
+        if: always()
+        run: |
+          for file in storage/logs/serve.pid storage/logs/queue.pid storage/logs/dusk-stub.pid; do
+            if [ -s "$file" ]; then
+              kill "$(cat "$file")" 2>/dev/null || true
+            fi
+          done
 
       # Dusk writes a screenshot, the page source and the browser console for every
       # failure. Without these a red Dusk job is unactionable and the team learns to

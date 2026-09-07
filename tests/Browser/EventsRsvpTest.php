@@ -22,11 +22,9 @@ use Laravel\Dusk\Browser;
  * a phone in the Discord in-app browser more than anywhere else, so the narrow
  * viewport is the primary journey and is asserted first.
  *
- * What this deliberately does not do is drive Discord. The RSVP write-back is a
- * queued job against a third party; putting it inside a required check would mean
- * Discord having a slow afternoon stops the fleet merging (docs/flake-policy.md).
- * The syncing state is asserted from *our* side — the row is committed and says so
- * — which is exactly the honesty rule this feature is built around.
+ * Discord itself is not a merge dependency. The real database queue worker sends
+ * the production-signed event.upsert payload to ci/dusk-stub.mjs, which records it
+ * for the journey to inspect before the browser reloads the synced state.
  */
 
 /** A published event, three days out, with room in it. */
@@ -41,11 +39,16 @@ function browsableEvent(array $overrides = []): Event
     ], $overrides));
 }
 
-test('a member RSVPs, sees it confirmed, and still has it after a reload', function () {
+test('a member RSVPs, the bot receives it, and the page advances to synced', function () {
     $member = User::factory()->create();
-    browsableEvent();
+    $event = browsableEvent();
+    $receipt = base_path('storage/logs/dusk-bot-receipt.json');
 
-    $this->browse(function (Browser $browser) use ($member) {
+    if (is_file($receipt)) {
+        unlink($receipt);
+    }
+
+    $this->browse(function (Browser $browser) use ($member, $event, $receipt) {
         $browser->loginAs($member)
             // 360px: the width the brief names. Asserted on the journey itself
             // rather than in a separate "does it reflow" test, so a layout that
@@ -74,10 +77,23 @@ test('a member RSVPs, sees it confirmed, and still has it after a reload', funct
             ->assertVisible('[data-testid="rsvp-syncing"]')
             ->assertMissing('[data-testid="rsvp-failed"]')
 
-            // The real proof it was written rather than only painted.
+            // The worker is a third process. Wait for its durable receipt rather
+            // than sleeping, then prove the exact event reached the bot boundary.
+            ->waitUsing(20, 100, fn () => is_file($receipt), 'The bot stub received no event.upsert call.')
             ->refresh()
-            ->waitFor('[data-testid="rsvp-confirmed"]')
-            ->assertSeeIn('[data-testid="rsvp-confirmed"]', "You're in");
+            ->waitFor('[data-testid="rsvp-synced"]')
+            ->assertSeeIn('[data-testid="rsvp-synced"]', 'Synced to Discord.')
+            ->assertMissing('[data-testid="rsvp-syncing"]');
+
+        $received = json_decode((string) file_get_contents($receipt), true, flags: JSON_THROW_ON_ERROR);
+
+        expect($received['body'])->toMatchArray([
+            'action' => 'event.upsert',
+            'event_key' => $event->event_key,
+            'name' => 'Friday night Helldivers',
+            'location' => 'Voice: General',
+        ])->and($received['body'])->not->toHaveKey('channel_key')
+            ->and($received['headers']['idempotencyKey'])->not->toBeNull();
     });
 });
 
