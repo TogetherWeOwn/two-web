@@ -143,6 +143,14 @@ jobs:
       - name: Budget verdict self-test
         run: ./ci/lh-annotate-selftest.sh
 
+      # Cloudflare Access browser QA must send its service-token pair before the
+      # first navigation and reject a 403, challenge page or redirected login as
+      # evidence. The fixture uses fake values and a local server; the real secret
+      # is never needed in a pull-request run. This config half also proves the
+      # service secret never enters Lighthouse settings, which serialize to reports.
+      - name: Cloudflare Access config self-test
+        run: node ci/browser/cloudflare-access-config-selftest.mjs
+
       # The DKIM key parser (TOG-1154). "The record is published" is not "our
       # mail authenticates": the Google console defaults to a 1024-bit key, and
       # `v=DKIM1; p=` is the RFC 6376 revoked form — both look like success to
@@ -502,6 +510,15 @@ jobs:
       # commit. Fold these into package.json devDependencies when convenient.
       - name: Install budget tooling
         run: npm i --no-save --no-package-lock @lhci/cli@0.14.0 puppeteer@23.11.1 @axe-core/puppeteer@4.10.2 axe-core@4.10.2
+
+      # This is the real-browser half of the Cloudflare Access regression guard.
+      # The static job already tests config composition without Chrome; here a local
+      # fixture proves both headers arrive on the first document request and that a
+      # 403, challenge response, or redirected login cannot become accepted evidence.
+      - name: Cloudflare Access browser self-test
+        run: |
+          CHROME_BIN="$(node -e "import('puppeteer').then(p => console.log(p.default.executablePath()))")"
+          CHROME_BIN="$CHROME_BIN" node ci/browser/cloudflare-access-selftest.mjs
 
       # The moderator panel is behind Discord auth, so measuring it needs a real
       # session (TOG-54). Without this both tools would follow the redirect and
