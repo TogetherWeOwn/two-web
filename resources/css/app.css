@@ -3,6 +3,23 @@
 /* The design system. Vendored from the two-design repo — see README. */
 @import './two.css';
 
+/* TOG-1333's reversible Lobby Ledger layer. The existing dark system remains
+   untouched for every other page, so changing direction means deleting this
+   small layer and the homepage view rather than forking the vendored tokens. */
+@theme {
+    --color-ledger-paper: #f1eadb;
+    --color-ledger-ink: #17141a;
+    --color-ledger-muted: #625b55;
+    --color-ledger-rule: #79716a;
+    --color-ledger-artifact: #c9c0b2;
+}
+
+@utility u-ledger-display {
+    font-variation-settings: 'wdth' 75, 'wght' 800;
+    letter-spacing: -0.045em;
+    text-wrap: balance;
+}
+
 @source '../**/*.blade.php';
 
 /* Blade views inside vendor/ and the compiled-view cache are gitignored, so

@@ -214,7 +214,7 @@ it('renders the page with no number at all when the counts are unavailable', fun
     $response = $this->get('/')->assertOk();
 
     // The things that must survive a dark collector.
-    $response->assertSee('Since 1998.')
+    $response->assertSee('The lobby is open.')
         ->assertSee('data-testid="discord-join"', escape: false)
         ->assertDontSee('members')
         ->assertDontSee('as of');

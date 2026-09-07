@@ -26,8 +26,9 @@
  *    title/body check and reported as CHALLENGED, never silently as UNSTYLED.
  *    `--file` exists for the same reason: it takes CF out of the loop entirely.
  * 2. **A "styled" check on background alone is too weak.** A CTA can have a
- *    background and still be a 16px-tall tap target. This asserts background
- *    AND radius AND the 44px minimum from WCAG 2.5.5.
+ *    background and still be a 16px-tall tap target. This asserts background,
+ *    deliberate spacing/shape, and the 44px minimum from WCAG 2.5.5. A square
+ *    editorial button is valid; rounded corners are not an accessibility rule.
  *
  * Usage:
  *   node ci/browser/cta-breakpoints.mjs                          # the live apex
@@ -131,7 +132,10 @@ const url = file ? 'file://' + resolve(file) : urlArg;
 const shotDir = arg('--shots');
 // The CTA, named the way the page names it, with a generic fallback so this
 // keeps working after the WordPress page is replaced by the Laravel one.
-const SELECTOR = arg('--selector', '.cs-discord, a[href*="discord"], a[href*="/join"]');
+const customSelector = arg('--selector');
+const SELECTORS = customSelector
+  ? [customSelector]
+  : ['[data-testid="discord-join"]', '.cs-discord', 'a[href*="discord"]', 'a[href*="/join"]'];
 
 // The widths that matter: a small phone, a common phone, a tablet, and both
 // sides of the 1279px boundary. 1278/1279 is the pair that localises the cutoff
@@ -187,9 +191,14 @@ for (const [label, w, h, dpr] of WIDTHS) {
     continue;
   }
 
-  const m = await page.evaluate((sel) => {
+  const m = await page.evaluate((selectors) => {
     const challenged = /security verification|Just a moment|Verifying/i.test(document.body.innerText || '');
-    const el = document.querySelector(sel);
+    const matches = selectors.flatMap((sel) => [...document.querySelectorAll(sel)]);
+    const el = matches.find((candidate) => {
+      const r = candidate.getBoundingClientRect();
+      const cs = getComputedStyle(candidate);
+      return r.width > 0 && r.height > 0 && cs.visibility !== 'hidden' && cs.display !== 'none';
+    }) || matches[0];
     const out = {
       challenged,
       present: !!el,
@@ -201,6 +210,7 @@ for (const [label, w, h, dpr] of WIDTHS) {
     const r = el.getBoundingClientRect();
     const hero = el.closest('section') || document.querySelector('.cs-hero');
     return Object.assign(out, {
+      selector: selectors.find((sel) => el.matches(sel)),
       text: el.textContent.trim().replace(/\s+/g, ' ').slice(0, 40),
       backgroundColor: cs.backgroundColor,
       borderRadius: cs.borderRadius,
@@ -210,26 +220,28 @@ for (const [label, w, h, dpr] of WIDTHS) {
       height: Math.round(r.height),
       heroBg: hero ? getComputedStyle(hero).backgroundColor : null,
     });
-  }, SELECTOR);
+  }, SELECTORS);
 
   if (shotDir) {
     await page.screenshot({ path: `${shotDir}/page-${label}.png` });
-    const el = await page.$(SELECTOR);
-    if (el) await el.screenshot({ path: `${shotDir}/cta-${label}.png` });
+    const el = m.selector ? await page.$(m.selector) : null;
+    if (el && m.width > 0 && m.height > 0) {
+      await el.screenshot({ path: `${shotDir}/cta-${label}.png` });
+    }
   }
   await page.close();
 
   // Three separate questions, reported separately. An interstitial invalidates
   // the measurement; a missing CTA is a different defect from an unstyled one.
   const hasBg = m.backgroundColor && m.backgroundColor !== 'rgba(0, 0, 0, 0)';
-  const hasRadius = parseFloat(m.borderRadius) > 0;
+  const hasShape = m.padding !== '0px' && m.width > 0;
   const tapOk = m.height >= TAP_MIN;
   const verdict = m.challenged ? 'CHALLENGED'
     : !m.present ? 'CTA-ABSENT'
-    : hasBg && hasRadius && tapOk ? 'OK'
+    : hasBg && hasShape && tapOk ? 'OK'
     : 'UNSTYLED';
 
-  rows.push({ label, w, status, verdict, hasBg, hasRadius, tapOk, ...m });
+  rows.push({ label, w, status, verdict, hasBg, hasShape, tapOk, ...m });
   console.log(
     `${label.padEnd(5)} | HTTP ${String(status).padEnd(3)} | layout ${String(m.layoutWidth).padEnd(4)} | ` +
     `${String(m.backgroundColor ?? '-').padEnd(17)} | r ${String(m.borderRadius ?? '-').padEnd(5)} | ` +

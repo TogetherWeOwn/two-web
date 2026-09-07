@@ -141,7 +141,9 @@ jobs:
       # (TOG-54). Pins both directions: a warning cannot block, and an
       # error-level breach cannot stop blocking. No Chrome, no lhci, no network.
       - name: Budget verdict self-test
-        run: ./ci/lh-annotate-selftest.sh
+        run: |
+          ./ci/lh-annotate-selftest.sh
+          ./ci/lh-failure-guard-selftest.sh
 
       # Cloudflare Access browser QA must send its service-token pair before the
       # first navigation and reject a 403, challenge page or redirected login as
@@ -554,15 +556,13 @@ jobs:
       - name: Report the performance budget
         run: node ci/lh-annotate.mjs
 
-      # A belt-and-braces guard on the step above: if lhci fell over for a reason
-      # that produced no assertion results at all — a crashed Chrome, a server that
-      # went away mid-run — the annotate step has nothing to fail on, and the job
-      # must still go red rather than sail past a budget that was never measured.
-      - name: Fail if Lighthouse itself failed
+      # A belt-and-braces guard on the step above: lhci exits non-zero for
+      # warn-level assertions too, so its outcome alone is not the verdict. The
+      # annotation step owns error-vs-warning; this only fails when Lighthouse
+      # produced no assertion results and therefore measured nothing.
+      - name: Fail if Lighthouse itself failed before producing results
         if: steps.lighthouse.outcome == 'failure'
-        run: |
-          echo "::error::the Lighthouse step failed — see the annotations above for the breached audit, or the budget-reports artifact if there are none."
-          exit 1
+        run: ./ci/lh-failure-guard.sh
 
       - name: Accessibility — WCAG 2.2 AA
         run: node ci/a11y.mjs
