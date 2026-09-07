@@ -8,6 +8,7 @@ use App\Models\Rsvp;
 use App\Models\User;
 use App\Services\EventService;
 use App\Support\EventInput;
+use App\Support\RsvpRateLimit;
 use Illuminate\Support\Facades\Queue;
 
 beforeEach(function () {
@@ -156,6 +157,41 @@ it('withdraws an RSVP', function () {
         ->assertNoContent();
 
     expect(Rsvp::query()->count())->toBe(0);
+});
+
+it('shares one member-safe limit across HTTP RSVP writes and recovers when it expires', function () {
+    $event = Event::factory()->create(['status' => EventStatus::Published, 'capacity' => null]);
+    $anotherEvent = Event::factory()->create(['status' => EventStatus::Published, 'capacity' => null]);
+    $otherMember = User::factory()->create(['is_moderator' => false]);
+
+    $this->freezeTime();
+
+    for ($attempt = 0; $attempt < RsvpRateLimit::MAX_ATTEMPTS; $attempt++) {
+        $route = $attempt % 2 === 0 ? $event : $anotherEvent;
+        $status = $attempt % 2 === 0 ? RsvpStatus::Going : RsvpStatus::Maybe;
+
+        $this->actingAs($this->member)
+            ->putJson(route('events.rsvp.update', $route), ['status' => $status->value])
+            ->assertSuccessful();
+    }
+
+    $limited = $this->actingAs($this->member)
+        ->deleteJson(route('events.rsvp.destroy', $event))
+        ->assertStatus(429)
+        ->assertHeader('Retry-After', RsvpRateLimit::DECAY_SECONDS);
+
+    expect((int) $limited->headers->get('Retry-After'))->toBeGreaterThan(0);
+
+    // A busy household or community-space IP must not make members share a bucket.
+    $this->actingAs($otherMember)
+        ->putJson(route('events.rsvp.update', $event), ['status' => RsvpStatus::Going->value])
+        ->assertSuccessful();
+
+    $this->travel(RsvpRateLimit::DECAY_SECONDS + 1)->seconds();
+
+    $this->actingAs($this->member)
+        ->deleteJson(route('events.rsvp.destroy', $event))
+        ->assertNoContent();
 });
 
 it('queues the Discord write-back rather than calling the bot in the request', function () {
