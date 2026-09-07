@@ -7,6 +7,7 @@ use App\Http\Resources\RsvpResource;
 use App\Models\Event;
 use App\Models\User;
 use App\Services\EventService;
+use App\Support\RsvpRateLimit;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Http\Response;
@@ -27,7 +28,10 @@ class RsvpController
 
     public function update(StoreRsvpRequest $request, Event $event): JsonResponse
     {
-        $rsvp = $this->events->rsvp($event, $request->actor(), $request->status());
+        $user = $request->actor();
+        RsvpRateLimit::hit($user);
+
+        $rsvp = $this->events->rsvp($event, $user, $request->status());
 
         return (new RsvpResource($rsvp))->response();
     }
@@ -39,6 +43,7 @@ class RsvpController
         // No policy call: a member can only ever reach their own row here, because
         // the only row this can delete is the one keyed on the caller.
         if ($user instanceof User) {
+            RsvpRateLimit::hit($user);
             $this->events->withdrawRsvp($event, $user);
         }
 
