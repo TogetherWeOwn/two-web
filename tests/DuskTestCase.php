@@ -38,6 +38,12 @@ abstract class DuskTestCase extends BaseTestCase
             ]);
         })->all());
 
+        $chromeBinary = $_ENV['CHROME_BIN'] ?? getenv('CHROME_BIN') ?: null;
+
+        if (is_string($chromeBinary) && $chromeBinary !== '') {
+            $options->setBinary($chromeBinary);
+        }
+
         return RemoteWebDriver::create(
             $_ENV['DUSK_DRIVER_URL'] ?? env('DUSK_DRIVER_URL') ?? 'http://localhost:9515',
             DesiredCapabilities::chrome()->setCapability(

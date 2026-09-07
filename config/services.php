@@ -1,6 +1,7 @@
 <?php
 
 return [
+    'dusk_test_seams' => (bool) env('DUSK_TEST_SEAMS', false),
 
     /*
     |--------------------------------------------------------------------------
@@ -99,6 +100,7 @@ return [
 
         'api_base' => env('DISCORD_API_BASE', 'https://discord.com/api/v10'),
         'timeout' => (int) env('DISCORD_TIMEOUT_SECONDS', 5),
+        'test_provider_url' => env('DUSK_DISCORD_PROVIDER_URL'),
     ],
 
     /*

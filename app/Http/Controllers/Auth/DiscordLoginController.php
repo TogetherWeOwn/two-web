@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\Auth;
 
 use App\Models\User;
+use App\Support\Testing\DiscordProvider as TestingDiscordProvider;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Carbon;
@@ -13,6 +14,7 @@ use Laravel\Socialite\Facades\Socialite;
 use Laravel\Socialite\Two\AbstractProvider;
 use Laravel\Socialite\Two\User as DiscordUser;
 use RuntimeException;
+use SocialiteProviders\Manager\Config as SocialiteConfig;
 use Throwable;
 
 /**
@@ -117,6 +119,25 @@ class DiscordLoginController
      */
     private function discord(): AbstractProvider
     {
+        // Dusk's application server is a separate process and cannot see the
+        // Socialite facade fake installed by PHPUnit. In local test runs only,
+        // point the real provider flow at the deterministic loopback stub.
+        if (app()->environment(['local', 'testing']) && config('services.dusk_test_seams')) {
+            $provider = new TestingDiscordProvider(
+                request(),
+                (string) config('services.discord.client_id'),
+                (string) config('services.discord.client_secret'),
+                url('/auth/discord/callback'),
+            );
+            $provider->setConfig(new SocialiteConfig(
+                (string) config('services.discord.client_id'),
+                (string) config('services.discord.client_secret'),
+                '/auth/discord/callback',
+            ));
+
+            return $provider;
+        }
+
         $driver = Socialite::driver('discord');
 
         if (! $driver instanceof AbstractProvider) {

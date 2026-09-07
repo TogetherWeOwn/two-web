@@ -175,6 +175,8 @@ it('drops the syncing note once the write-back has landed', function () {
     Livewire::actingAs($this->member)
         ->test(RsvpButton::class, ['event' => $this->event])
         ->assertSee("You're in", false)
+        ->assertSeeHtml('data-testid="rsvp-synced"')
+        ->assertSee('Synced to Discord.')
         ->assertDontSeeHtml('data-testid="rsvp-syncing"');
 });
 
