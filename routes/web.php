@@ -5,6 +5,7 @@ use App\Http\Controllers\EventController;
 use App\Http\Controllers\EventStatusController;
 use App\Http\Controllers\HomeController;
 use App\Http\Controllers\JoinController;
+use App\Http\Controllers\ProfileController;
 use App\Http\Controllers\RsvpController;
 use App\Livewire\EventsCalendar;
 use Illuminate\Support\Facades\Route;
@@ -71,9 +72,12 @@ Route::get('/auth/discord/callback', [DiscordLoginController::class, 'callback']
 Route::post('/logout', [DiscordLoginController::class, 'logout'])->name('logout');
 
 Route::middleware('auth')->group(function () {
-    // Placeholder. The real profile is TWO-29 (backend) and TWO-30 (UI); this
-    // exists so signing in has somewhere to land. Delete it when they ship.
-    Route::view('/profile', 'profile')->name('profile');
+    // The singular URL remains the post-login destination. Canonical member
+    // profile URLs carry the user id so any signed-in member can share one with
+    // another member without exposing the directory to logged-out visitors.
+    Route::get('/profile', [ProfileController::class, 'mine'])->name('profile');
+    Route::get('/members/{user}', [ProfileController::class, 'show'])->name('profiles.show');
+    Route::patch('/members/{user}', [ProfileController::class, 'update'])->name('profiles.update');
 
     // Events. The wildcard binds on `event_key`, not the autoincrement id — see
     // Event::getRouteKeyName(). That is the same string the bot keys its Discord
