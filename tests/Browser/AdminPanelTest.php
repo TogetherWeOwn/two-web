@@ -102,3 +102,98 @@ test('a moderator publishes featured content and a signed-out visitor sees it', 
             ->assertSee('Doors open at seven.');
     });
 });
+
+test('the current sidebar item shows a keyboard focus indicator distinct from its selected state', function () {
+    // TOG-1655. Filament's only focus treatment for a sidebar item is a
+    // background change (`focus-visible:bg-white/5` in the forced-dark panel),
+    // and the active item already carries that exact background — so the
+    // focused and resting states were the same pixels and WCAG 2.4.7 failed on
+    // precisely the item a keyboard user lands on after navigating.
+    //
+    // The fix is a ring on the active item. This journey proves the computed
+    // style actually changes when the link takes keyboard focus, by focus and
+    // measurement rather than by asserting a class name — the audit on TOG-1387
+    // found the defect exactly because the class was present and the pixels
+    // were not.
+    //
+    // Needs no ext-intl: the dashboard renders no populated table or form, so
+    // nothing here calls Number::format.
+    $moderator = User::factory()->moderator()->create();
+
+    // Reads the computed focus-relevant properties of the item that is both
+    // focused and current, so focused-vs-blurred is one comparable object.
+    // Written as an executeScript *body* (`return …;`), not a bare arrow
+    // function: chromedriver wraps the string in `function () { … }` and only
+    // returns what the body returns — a bare `() => …` evaluates to a function
+    // object and comes back as null.
+    $computed = <<<'JS'
+        const link = document.querySelector('.fi-sidebar-item.fi-active > .fi-sidebar-item-btn');
+        if (!link) return null;
+        const cs = getComputedStyle(link);
+        return {
+            matched: document.activeElement === link,
+            outline: cs.outlineStyle + ' ' + cs.outlineWidth,
+            shadow: cs.boxShadow,
+            background: cs.backgroundColor,
+        };
+        JS;
+
+    $this->browse(function (Browser $browser) use ($moderator, $computed) {
+        $browser->loginAs($moderator)
+            ->visit('/admin')
+            ->waitForText('TWO Moderation');
+
+        // Keyboard focus, not a click: :focus-visible only matches focus from
+        // the keyboard, so Tab is the input that could ever reproduce the audit
+        // finding. The active item sits behind the skip link, the brand link,
+        // the global search input and the user-menu trigger in tab order
+        // (measured), so Tab is sent until the link itself reports focus — a
+        // fixed count would break the next time the topbar gains or loses a
+        // control, and asserting on a not-yet-focused link would compare blur
+        // against blur and pass vacuously.
+        for ($tabs = 0; $tabs < 12; $tabs++) {
+            $browser->keys('', '{TAB}');
+
+            if ((bool) ($browser->script($computed)[0]['matched'] ?? false)) {
+                break;
+            }
+        }
+
+        $focused = $browser->script($computed)[0] ?? null;
+        expect($focused)->not->toBeNull()
+            ->and($focused['matched'])->toBeTrue();
+
+        // Blur and wait for the ring to drain before reading the resting
+        // "selected" state. The ring animates (Filament's duration-75
+        // transition), so an immediate read can still see the tail of the
+        // fading shadow and the test would compare a half-focused ring
+        // against a full one instead of focused against selected.
+        $browser->script('document.activeElement && document.activeElement.blur();');
+        $browser->waitUsing(5, 100, function () use ($browser, $computed) {
+            $blurred = $browser->script($computed)[0] ?? null;
+
+            return $blurred !== null
+                && $blurred['matched'] === false
+                && $blurred['shadow'] === 'none';
+        });
+        $blurred = $browser->script($computed)[0] ?? null;
+        expect($blurred)->not->toBeNull();
+
+        // The regression: focused must differ from selected-but-unfocused on at
+        // least one visible property, or the indicator is not there. (outline,
+        // shadow and background cover every way this panel signals focus.)
+        expect($focused)->not->toEqual($blurred);
+
+        // And the fix specifically: a visible focus surface — the ring renders
+        // as a box-shadow, so a focused current item with `shadow: none` means
+        // the treatment is absent even if the objects differ. (Checking the
+        // ring rather than an outline pins the mechanism this panel actually
+        // uses; a background-only delta would pass the comparison above and
+        // still be an indicator that fails 2.4.7 on a low-contrast display.)
+        expect($focused['shadow'])->not->toBe('none')
+            ->and($focused['shadow'])->not->toBe('')
+            // The resting state has no ring: selected-but-unfocused must stay
+            // clean, or the ring would stop meaning "focused".
+            ->and($blurred['shadow'])->toBe('none');
+    });
+});
