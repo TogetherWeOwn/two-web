@@ -199,6 +199,37 @@
 @import '../../../../vendor/filament/filament/resources/css/components/logo.css' layer(components);
 @import '../../../../vendor/filament/filament/resources/css/components/page.css' layer(components);
 @import '../../../../vendor/filament/filament/resources/css/components/sidebar.css' layer(components);
+
+/* TOG-1655 — the active sidebar item's focus indicator.
+ *
+ * Vendor's only focus treatment for a sidebar item is a background change:
+ * `.fi-sidebar-item-has-url > .fi-sidebar-item-btn` applies
+ * `focus-visible:bg-gray-100 dark:focus-visible:bg-white/5`. That works for
+ * every item except the current one, because `.fi-active > .fi-sidebar-item-btn`
+ * already carries `bg-gray-100 dark:bg-white/5` — the focused and resting
+ * states are the same pixels, so WCAG 2.4.7 fails on exactly the item a
+ * keyboard user is most likely to be on (the page they just navigated to).
+ *
+ * The fix gives the active item the ring the rest of this panel already uses
+ * for keyboard focus (`focus-visible:ring-2`, as on buttons, icon buttons,
+ * toggles and pagination), in the primary colour its label and icon already
+ * carry. A ring cannot collide with the resting background the way the vendor's
+ * background change does, so focused-vs-selected is distinguishable by
+ * construction, not by a lucky colour choice.
+ *
+ * Scoped to `.fi-active` so the inactive items keep vendor behaviour — their
+ * background change is visible against transparency and a second indicator
+ * would be noise. `dark:` values only, matching vendor's non-dark halves with
+ * the panel's `->darkMode(isForced: true)`; the light-mode selectors are kept
+ * so the rule is correct if that is ever relaxed. */
+.fi-sidebar-item.fi-active > .fi-sidebar-item-btn:focus-visible {
+    @apply ring-2 ring-primary-600 ring-offset-2 ring-offset-gray-950;
+}
+
+.dark .fi-sidebar-item.fi-active > .fi-sidebar-item-btn:focus-visible {
+    @apply ring-primary-500 ring-offset-gray-900;
+}
+
 @import '../../../../vendor/filament/filament/resources/css/components/topbar.css' layer(components);
 @import '../../../../vendor/filament/filament/resources/css/components/user-menu.css' layer(components);
 @import '../../../../vendor/filament/filament/resources/css/widgets/account-widget.css' layer(components);
