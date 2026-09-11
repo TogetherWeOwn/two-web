@@ -126,17 +126,18 @@ it('exempts the admin panel theme only while its font tokens are still the vendo
 });
 
 it('preloads the headline font and chooses the page color scheme before paint', function () {
-    // Archivo remains the dark system's headline face and still needs the
-    // preload. The Lobby Ledger homepage is the one deliberate light scheme;
-    // the layout decides that before CSS parses so neither scheme flashes the
-    // other's native controls or scrollbar colour.
+    // Archivo remains the headline face and still needs the preload. The two
+    // homepage presentations are deliberate light schemes; the layout decides
+    // that before CSS parses so neither scheme flashes dark native controls.
     $layout = file_get_contents(resource_path('views/components/layouts/app.blade.php'));
 
     expect($layout)->toContain('rel="preload"', 'href="/fonts/archivo-latin.woff2"');
+    expect($layout)->toContain("['ledger', 'hallmark', 'taste']");
     expect($layout)->toContain('name="color-scheme"');
-    expect($layout)->toContain("\$ledgerScheme ? 'light' : 'dark'");
-    expect($layout)->toContain("\$ledgerScheme ? '' : 'dark '");
-    expect($layout)->toContain("\$ledgerScheme ? 'bg-ledger-paper text-ledger-ink '");
+    expect($layout)->toContain("\$lightScheme ? 'light' : 'dark'");
+    expect($layout)->toContain("\$lightScheme ? '' : 'dark '");
+    expect($layout)->toContain("'ledger' => 'bg-ledger-paper text-ledger-ink '");
+    expect($layout)->toContain("'taste' => 'bg-taste-paper text-taste-ink '");
 });
 
 it('keeps the homepage inside the layout main landmark', function () {
