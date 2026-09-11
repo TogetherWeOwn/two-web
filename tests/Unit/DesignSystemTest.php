@@ -132,7 +132,7 @@ it('preloads the headline font and chooses the page color scheme before paint', 
     $layout = file_get_contents(resource_path('views/components/layouts/app.blade.php'));
 
     expect($layout)->toContain('rel="preload"', 'href="/fonts/archivo-latin.woff2"');
-    expect($layout)->toContain("['ledger', 'taste']");
+    expect($layout)->toContain("['ledger', 'hallmark', 'taste']");
     expect($layout)->toContain('name="color-scheme"');
     expect($layout)->toContain("\$lightScheme ? 'light' : 'dark'");
     expect($layout)->toContain("\$lightScheme ? '' : 'dark '");
