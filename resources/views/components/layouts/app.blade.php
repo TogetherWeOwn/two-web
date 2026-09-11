@@ -32,11 +32,7 @@
     <link rel="preload" href="/fonts/archivo-latin.woff2" as="font" type="font/woff2" crossorigin>
     @vite($viteAssets)
 </head>
-<<<<<<< HEAD
 <body class="{{ $bodyScheme }}h-full">
-=======
-<body class="{{ $bodyScheme }}h-full">
->>>>>>> 09e1e72 (Add Taste homepage design lab concept)
     <a href="#main" class="sr-only focus:not-sr-only">Skip to content</a>
     <main id="main">
         {{ $slot }}
