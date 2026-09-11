@@ -3,7 +3,7 @@
     consumes the production homepage's content, counts, ranks and featured rows.
     The visual thesis is a community map: entry is a path, not a sales funnel.
 --}}
-<x-layouts.app title="Together We Own — Hallmark concept" scheme="hallmark" robots="noindex, nofollow" :styles="['resources/css/hallmark.css']">
+<x-layouts.app title="Together We Own — Hallmark concept" scheme="hallmark" robots="noindex, nofollow">
     <div class="hallmark-page">
         <header class="hallmark-shell">
             <nav class="hallmark-nav" aria-label="Hallmark concept">

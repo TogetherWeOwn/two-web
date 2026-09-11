@@ -11,11 +11,6 @@
         'taste' => 'bg-taste-paper text-taste-ink ',
         default => '',
     };
-    $viteAssets = [
-        'resources/css/app.css',
-        ...($styles ?? []),
-        'resources/js/app.js',
-    ];
 @endphp
 <!DOCTYPE html>
 <html lang="en" class="{{ $lightScheme ? '' : 'dark ' }}h-full">
@@ -30,7 +25,7 @@
     {{-- Archivo is self-hosted and the headline uses its width axis. Without
          this the hero reflows on first paint and the join button moves. --}}
     <link rel="preload" href="/fonts/archivo-latin.woff2" as="font" type="font/woff2" crossorigin>
-    @vite($viteAssets)
+    @vite(['resources/css/app.css', 'resources/css/hallmark.css', 'resources/js/app.js'])
 </head>
 <body class="{{ $bodyScheme }}h-full">
     <a href="#main" class="sr-only focus:not-sr-only">Skip to content</a>
