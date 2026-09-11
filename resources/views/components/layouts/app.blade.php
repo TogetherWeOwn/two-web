@@ -4,7 +4,13 @@
     components the Frontend Engineer builds. Do not put styling opinions here.
 --}}
 @php
-    $lightScheme = in_array($scheme ?? null, ['ledger', 'hallmark'], strict: true);
+    $schemeName = $scheme ?? null;
+    $lightScheme = in_array($schemeName, ['ledger', 'hallmark', 'taste'], strict: true);
+    $bodyScheme = match ($schemeName) {
+        'ledger' => 'bg-ledger-paper text-ledger-ink ',
+        'taste' => 'bg-taste-paper text-taste-ink ',
+        default => '',
+    };
     $viteAssets = [
         'resources/css/app.css',
         ...($styles ?? []),
@@ -26,7 +32,11 @@
     <link rel="preload" href="/fonts/archivo-latin.woff2" as="font" type="font/woff2" crossorigin>
     @vite($viteAssets)
 </head>
-<body class="{{ ($scheme ?? null) === 'ledger' ? 'bg-ledger-paper text-ledger-ink ' : '' }}h-full">
+<<<<<<< HEAD
+<body class="{{ $bodyScheme }}h-full">
+=======
+<body class="{{ $bodyScheme }}h-full">
+>>>>>>> 09e1e72 (Add Taste homepage design lab concept)
     <a href="#main" class="sr-only focus:not-sr-only">Skip to content</a>
     <main id="main">
         {{ $slot }}

@@ -19,10 +19,10 @@ use Illuminate\Support\Facades\Route;
 // profile" or "log in with Discord".
 Route::get('/', HomeController::class)->name('home');
 
-// Additive staging design concepts live under an unmistakably non-production
-// path. They consume the production homepage's data contract but cannot replace
-// the join funnel's canonical `/` route by accident.
+// Non-production visual experiments. These routes share the homepage's real
+// counts, featured content and join flow, but never replace the production page.
 Route::get('/design-lab/hallmark', HallmarkController::class)->name('design-lab.hallmark');
+Route::get('/design-lab/taste', [HomeController::class, 'taste'])->name('design-lab.taste');
 
 // Public pages only. Keep this explicit: auth callbacks, signed-in profiles and
 // event-detail URLs do not belong in the index, while the event collection does.
