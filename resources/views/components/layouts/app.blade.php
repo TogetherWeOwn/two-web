@@ -4,21 +4,29 @@
     components the Frontend Engineer builds. Do not put styling opinions here.
 --}}
 @php
-    $ledgerScheme = ($scheme ?? null) === 'ledger';
+    $lightScheme = in_array($scheme ?? null, ['ledger', 'hallmark'], strict: true);
+    $viteAssets = [
+        'resources/css/app.css',
+        ...($styles ?? []),
+        'resources/js/app.js',
+    ];
 @endphp
 <!DOCTYPE html>
-<html lang="en" class="{{ $ledgerScheme ? '' : 'dark ' }}h-full">
+<html lang="en" class="{{ $lightScheme ? '' : 'dark ' }}h-full">
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <meta name="color-scheme" content="{{ $ledgerScheme ? 'light' : 'dark' }}">
+    <meta name="color-scheme" content="{{ $lightScheme ? 'light' : 'dark' }}">
+    @if ($robots ?? false)
+        <meta name="robots" content="{{ $robots }}">
+    @endif
     <title>{{ $title ?? config('app.name') }}</title>
     {{-- Archivo is self-hosted and the headline uses its width axis. Without
          this the hero reflows on first paint and the join button moves. --}}
     <link rel="preload" href="/fonts/archivo-latin.woff2" as="font" type="font/woff2" crossorigin>
-    @vite(['resources/css/app.css', 'resources/js/app.js'])
+    @vite($viteAssets)
 </head>
-<body class="{{ $ledgerScheme ? 'bg-ledger-paper text-ledger-ink ' : '' }}h-full">
+<body class="{{ ($scheme ?? null) === 'ledger' ? 'bg-ledger-paper text-ledger-ink ' : '' }}h-full">
     <a href="#main" class="sr-only focus:not-sr-only">Skip to content</a>
     <main id="main">
         {{ $slot }}
