@@ -11,9 +11,6 @@
     --color-accent-ink: oklch(97% 0.018 105);
     --color-focus: oklch(35% 0.16 292);
 
-    --font-display: 'Archivo', sans-serif;
-    --font-body: 'Archivo', sans-serif;
-
     --space-3xs: 0.125rem;
     --space-2xs: 0.25rem;
     --space-xs: 0.5rem;

@@ -15,7 +15,6 @@ body {
     min-height: 100%;
     background: var(--color-paper);
     color: var(--color-ink);
-    font-family: var(--font-body);
     font-size: var(--text-base);
     line-height: 1.65;
     -webkit-font-smoothing: antialiased;
@@ -53,7 +52,6 @@ body {
 
 .hallmark-wordmark {
     color: var(--color-ink);
-    font-family: var(--font-display);
     font-size: var(--text-md);
     font-variation-settings: 'wdth' 112, 'wght' 800;
     letter-spacing: -0.035em;
@@ -126,7 +124,6 @@ body {
     max-width: 11ch;
     margin: 0;
     color: var(--color-ink);
-    font-family: var(--font-display);
     font-size: var(--text-display);
     font-style: normal;
     font-variation-settings: 'wdth' 78, 'wght' 850;
@@ -156,7 +153,6 @@ body {
 }
 
 .hallmark-live__number {
-    font-family: var(--font-display);
     font-size: var(--text-2xl);
     font-variant-numeric: tabular-nums;
     font-variation-settings: 'wdth' 75, 'wght' 820;
@@ -185,7 +181,6 @@ body {
 .hallmark-featured h2,
 .hallmark-close__line {
     margin: 0;
-    font-family: var(--font-display);
     font-style: normal;
     font-variation-settings: 'wdth' 86, 'wght' 760;
     letter-spacing: -0.045em;
@@ -267,7 +262,6 @@ body {
 
 .hallmark-map__node h3 {
     margin: 0;
-    font-family: var(--font-display);
     font-size: var(--text-md);
     font-style: normal;
     font-variation-settings: 'wdth' 95, 'wght' 760;
@@ -378,7 +372,6 @@ body {
 .hallmark-invitation__copy {
     max-width: 25ch;
     margin: 0;
-    font-family: var(--font-display);
     font-size: clamp(var(--text-xl), 6vw, var(--text-3xl));
     font-style: normal;
     font-variation-settings: 'wdth' 80, 'wght' 820;
