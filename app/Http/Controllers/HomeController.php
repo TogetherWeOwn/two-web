@@ -28,7 +28,18 @@ final class HomeController
 {
     public function __invoke(CountsSource $counts): View
     {
-        return view('home', [
+        return $this->render('home', $counts);
+    }
+
+    public function taste(CountsSource $counts): View
+    {
+        return $this->render('design-lab.taste', $counts);
+    }
+
+    /** @param view-string $view */
+    private function render(string $view, CountsSource $counts): View
+    {
+        return view($view, [
             'content' => HomePageContent::lobbyLedger(),
             'counts' => $counts->liveCounts(),
             'ranks' => $counts->ranks(),

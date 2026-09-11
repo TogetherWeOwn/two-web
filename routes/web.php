@@ -2,6 +2,7 @@
 
 use App\Http\Controllers\Auth\DiscordLoginController;
 use App\Http\Controllers\Auth\StagingQaLoginController;
+use App\Http\Controllers\DesignLab\HallmarkController;
 use App\Http\Controllers\EventController;
 use App\Http\Controllers\EventStatusController;
 use App\Http\Controllers\HomeController;
@@ -17,6 +18,11 @@ use Illuminate\Support\Facades\Route;
 // is an ordinary page, and it needs the session to know whether to offer "your
 // profile" or "log in with Discord".
 Route::get('/', HomeController::class)->name('home');
+
+// Non-production visual experiments. These routes share the homepage's real
+// counts, featured content and join flow, but never replace the production page.
+Route::get('/design-lab/hallmark', HallmarkController::class)->name('design-lab.hallmark');
+Route::get('/design-lab/taste', [HomeController::class, 'taste'])->name('design-lab.taste');
 
 // Public pages only. Keep this explicit: auth callbacks, signed-in profiles and
 // event-detail URLs do not belong in the index, while the event collection does.

@@ -1,0 +1,14 @@
+{
+  "date": "2026-09-11",
+  "framework": "Laravel 12 + Blade + Tailwind CSS 4 + Vite 7",
+  "font_stack": "Self-hosted Archivo variable font",
+  "palette": "Vendored TWO tokens plus an isolated Lobby Ledger light scheme",
+  "motion": "Motion-cut; no motion library installed",
+  "spacing": "Tailwind 4px scale",
+  "preserved": [
+    "self-hosted font loading",
+    "production homepage data contract",
+    "join and login routes",
+    "global design-system stylesheet"
+  ]
+}
