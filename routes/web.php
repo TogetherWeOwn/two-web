@@ -18,6 +18,10 @@ use Illuminate\Support\Facades\Route;
 // profile" or "log in with Discord".
 Route::get('/', HomeController::class)->name('home');
 
+// Non-production visual experiments. These routes share the homepage's real
+// counts, featured content and join flow, but never replace the production page.
+Route::get('/design-lab/taste', [HomeController::class, 'taste'])->name('design-lab.taste');
+
 // Public pages only. Keep this explicit: auth callbacks, signed-in profiles and
 // event-detail URLs do not belong in the index, while the event collection does.
 Route::get('/sitemap_index.xml', function () {
