@@ -628,6 +628,7 @@ jobs:
   tests:
     name: tests
     runs-on: ubuntu-24.04
+    timeout-minutes: 5
     if: always()
     needs: [static, pest, dusk, budgets]
     steps:
