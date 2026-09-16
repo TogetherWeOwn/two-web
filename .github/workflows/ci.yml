@@ -332,6 +332,11 @@ jobs:
       - run: npm ci --include=dev
       - run: npm run build
 
+      # Five runner processes share one host network namespace. Derive stable
+      # per-runner ports so parallel Dusk/budgets jobs never bind the same socket.
+      - name: Select runner-local ports
+        run: ./ci/runner-ports.sh >> "$GITHUB_ENV"
+
       # The private runner is deliberately lean. Install a browser per job instead
       # of making an unversioned host package part of the runner contract. Ubuntu's
       # chromium-browser package is a snap transitional package, and snap is not a
@@ -351,19 +356,19 @@ jobs:
           DB_PORT: ${{ job.services.postgres.ports[5432] }}
         run: |
           cp .env.example .env
-          sed -i 's#^APP_URL=.*#APP_URL=http://127.0.0.1:8000#' .env
+          sed -i "s#^APP_URL=.*#APP_URL=http://127.0.0.1:${CI_APP_PORT}#" .env
           sed -i 's#^APP_ENV=.*#APP_ENV=local#' .env
           sed -i "s#^DB_PORT=.*#DB_PORT=${DB_PORT}#" .env
           sed -i 's#^QUEUE_CONNECTION=.*#QUEUE_CONNECTION=database#' .env
           sed -i 's#^DISCORD_CLIENT_ID=.*#DISCORD_CLIENT_ID=dusk-client#' .env
           sed -i 's#^DISCORD_CLIENT_SECRET=.*#DISCORD_CLIENT_SECRET=dusk-secret#' .env
-          sed -i 's#^BOT_ENDPOINT_URL=.*#BOT_ENDPOINT_URL=http://127.0.0.1:8765#' .env
+          sed -i "s#^BOT_ENDPOINT_URL=.*#BOT_ENDPOINT_URL=http://127.0.0.1:${CI_STUB_PORT}#" .env
           sed -i 's#^BOT_KEY_ID=.*#BOT_KEY_ID=dusk-web#' .env
           sed -i 's#^BOT_SHARED_SECRET=.*#BOT_SHARED_SECRET=dusk-shared-secret-at-least-32-characters#' .env
           printf '%s\n' \
             'DUSK_TEST_SEAMS=1' \
-            'DUSK_DISCORD_PROVIDER_URL=http://127.0.0.1:8765' \
-            'DISCORD_API_BASE=http://127.0.0.1:8765/api/v10' \
+            "DUSK_DISCORD_PROVIDER_URL=http://127.0.0.1:${CI_STUB_PORT}" \
+            "DISCORD_API_BASE=http://127.0.0.1:${CI_STUB_PORT}/api/v10" \
             'DUSK_BOT_RECEIPT=storage/logs/dusk-bot-receipt.json' >> .env
           php artisan key:generate
           php artisan config:clear
@@ -381,14 +386,14 @@ jobs:
       - name: Start Dusk services
         run: |
           rm -f storage/logs/dusk-bot-receipt.json storage/logs/dusk-stub-calls.jsonl
-          node ci/dusk-stub.mjs > storage/logs/dusk-stub.log 2>&1 &
+          DUSK_STUB_PORT="$CI_STUB_PORT" node ci/dusk-stub.mjs > storage/logs/dusk-stub.log 2>&1 &
           echo $! > storage/logs/dusk-stub.pid
           CACHE_STORE=file php artisan queue:work --queue=default --sleep=1 --tries=1 --timeout=30 > storage/logs/queue.log 2>&1 &
           echo $! > storage/logs/queue.pid
-          php artisan serve --host=127.0.0.1 --port=8000 --no-reload > storage/logs/serve.log 2>&1 &
+          php artisan serve --host=127.0.0.1 --port="$CI_APP_PORT" --no-reload > storage/logs/serve.log 2>&1 &
           echo $! > storage/logs/serve.pid
           for i in $(seq 1 30); do
-            if curl -fsS http://127.0.0.1:8765/up > /dev/null && curl -fsS http://127.0.0.1:8000/up > /dev/null; then
+            if curl -fsS "http://127.0.0.1:${CI_STUB_PORT}/up" > /dev/null && curl -fsS "http://127.0.0.1:${CI_APP_PORT}/up" > /dev/null; then
               echo "Dusk services up after ${i}s"; exit 0
             fi
             sleep 1
@@ -485,6 +490,11 @@ jobs:
       - run: npm ci --include=dev
       - run: npm run build
 
+      # Five runner processes share one host network namespace. Derive stable
+      # per-runner ports so parallel Dusk/budgets jobs never bind the same socket.
+      - name: Select runner-local ports
+        run: ./ci/runner-ports.sh >> "$GITHUB_ENV"
+
       - name: Prepare a production-shaped app
         env:
           DB_PORT: ${{ job.services.postgres.ports[5432] }}
@@ -492,7 +502,7 @@ jobs:
           cp .env.example .env
           sed -i 's#^APP_ENV=.*#APP_ENV=production#' .env
           sed -i 's#^APP_DEBUG=.*#APP_DEBUG=false#' .env
-          sed -i 's#^APP_URL=.*#APP_URL=http://127.0.0.1:8000#' .env
+          sed -i "s#^APP_URL=.*#APP_URL=${CI_BASE_URL}#" .env
           sed -i "s#^DB_PORT=.*#DB_PORT=${DB_PORT}#" .env
           php artisan key:generate
           php artisan migrate --force --no-interaction
@@ -503,17 +513,18 @@ jobs:
       # Backgrounded output goes to a file for the same reason as the Dusk job: a
       # process holding the step's pipe open hangs the step.
       #
-      # The app listens on 8001 and ci/compressing-proxy.mjs fronts it on 8000, so
-      # everything measured below arrives gzipped the way every real host serves
+      # The app listens on this runner's upstream port and ci/compressing-proxy.mjs
+      # fronts it on the matching proxy port, so everything measured below arrives
+      # gzipped the way every real host serves
       # it. `artisan serve` compresses nothing, and measuring an uncompressed
       # 603KB Filament stylesheet was reporting LCP 6.76s on /admin where the
       # compressed truth is 2.74s. See the header of that file.
       - name: Start the application server
         run: |
-          php artisan serve --host=127.0.0.1 --port=8001 --no-reload > storage/logs/serve.log 2>&1 &
+          php artisan serve --host=127.0.0.1 --port="$PROXY_UPSTREAM_PORT" --no-reload > storage/logs/serve.log 2>&1 &
           node ci/compressing-proxy.mjs > storage/logs/proxy.log 2>&1 &
           for i in $(seq 1 30); do
-            if curl -fsS http://127.0.0.1:8000/up > /dev/null; then
+            if curl -fsS "${CI_BASE_URL}/up" > /dev/null; then
               echo "server up after ${i}s"; exit 0
             fi
             sleep 1
@@ -527,7 +538,7 @@ jobs:
       # like a slow site, and the budget failure would be blamed on the page.
       - name: Verify the budget harness compresses
         run: |
-          encoding="$(curl -sS -o /dev/null -D - -H 'Accept-Encoding: gzip' http://127.0.0.1:8000/ | tr -d '\r' | awk 'tolower($1) == "content-encoding:" { print tolower($2) }')"
+          encoding="$(curl -sS -o /dev/null -D - -H 'Accept-Encoding: gzip' "${CI_BASE_URL}/" | tr -d '\r' | awk 'tolower($1) == "content-encoding:" { print tolower($2) }')"
           if [ "$encoding" != "gzip" ]; then
             echo "::error::the budgets harness is not compressing (content-encoding: '${encoding:-none}') — the numbers below would not be what production serves"
             cat storage/logs/proxy.log
@@ -618,7 +629,7 @@ jobs:
           CHROME_BIN="$(node -e "import('puppeteer').then(p => console.log(p.default.executablePath()))")"
           echo "measuring with $CHROME_BIN"
           CHROME_BIN="$CHROME_BIN" node ci/browser/cta-breakpoints.mjs \
-            --url http://127.0.0.1:8000/ --navigate --shots ci/cta-shots
+            --url "${CI_BASE_URL}/" --navigate --shots ci/cta-shots
 
       # include-hidden-files, because `.lighthouseci` starts with a dot and
       # upload-artifact skips anything under a dot-folder by default. Without it
