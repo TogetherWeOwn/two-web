@@ -35,6 +35,13 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
+      # Where did this job actually run? `runs-on:` asks; only the job can
+      # answer. Fails on a GitHub-hosted runner (which bills) and publishes its
+      # runner_name as an annotation. First, so a misrouted job burns seconds
+      # rather than a full suite. See ci/attest-runner.sh (TOG-2847).
+      - name: Attest the runner
+        run: ./ci/attest-runner.sh
+
       # `--lint` reads the performance budgets by loading ci/lighthouserc.cjs the
       # way lhci loads it, so this job needs node now. ubuntu-24.04 ships one, but
       # every other job here pins the version and this should not be the exception
@@ -43,6 +50,15 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: ${{ env.NODE_VERSION }}
+
+      # And the attestation itself, which is the one check in this repository that
+      # cannot be proved by the run it is part of: on a correctly-routed job it
+      # passes, and so does a version that returns 0 unconditionally. This drives
+      # it through a synthetic hosted runner, a spoofed name and an unaudited host
+      # and pins the exit code and reason for each, then asserts every job in every
+      # workflow still carries the step. Under a second, no network.
+      - name: Runner attestation self-test
+        run: ./ci/attest-runner-selftest.sh
 
       # The gate checks its own wiring, first, before anything slow. A pull request
       # that edits this file to something that reports green while it has stopped
@@ -232,6 +248,11 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
+      # See the note in `static`. Every job attests; a job that does not could be
+      # moved onto a billable runner with nothing going red (TOG-2847).
+      - name: Attest the runner
+        run: ./ci/attest-runner.sh
+
       - uses: shivammathur/setup-php@v2
         with:
           php-version: ${{ env.PHP_VERSION }}
@@ -305,6 +326,11 @@ jobs:
 
     steps:
       - uses: actions/checkout@v5
+
+      # See the note in `static`. Every job attests; a job that does not could be
+      # moved onto a billable runner with nothing going red (TOG-2847).
+      - name: Attest the runner
+        run: ./ci/attest-runner.sh
 
       - uses: shivammathur/setup-php@v2
         with:
@@ -463,6 +489,11 @@ jobs:
 
     steps:
       - uses: actions/checkout@v5
+
+      # See the note in `static`. Every job attests; a job that does not could be
+      # moved onto a billable runner with nothing going red (TOG-2847).
+      - name: Attest the runner
+        run: ./ci/attest-runner.sh
 
       - uses: shivammathur/setup-php@v2
         with:
@@ -670,6 +701,14 @@ jobs:
     if: always()
     needs: [static, pest, dusk, budgets]
     steps:
+      # This job had no checkout: it only reads `needs` results. It needs one now
+      # so it can attest its own runner — the aggregate bills like any other job,
+      # and being cheap is not the same as being free (TOG-2847).
+      - uses: actions/checkout@v5
+
+      - name: Attest the runner
+        run: ./ci/attest-runner.sh
+
       - name: Gate
         run: |
           echo "static:  ${{ needs.static.result }}"
