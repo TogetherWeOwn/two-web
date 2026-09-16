@@ -23,6 +23,48 @@ a minute so you are not waiting on Dusk to be told about an unused import.
 
 Locally, `composer check` runs the first two.
 
+### Everything runs on our own runners
+
+Every job in every workflow is `runs-on: [self-hosted, two-selfhosted]` — five
+runners on the Coolify VPS, registered as `coolify-vps-1` … `coolify-vps-5`
+(TOG-2847). There are no GitHub-hosted jobs in this repository and no
+`ubuntu-latest` fallback: Actions spend is not available to us, so a job that lands
+on a hosted runner does not cost a little extra, it fails before its first step.
+
+Three consequences you will actually run into:
+
+**The runners are persistent.** Same host, same checkout path, same ports, run after
+run. A process a job leaks outlives the job and breaks *the next* run on that
+runner — so anything you start, stop, with `if: always()`. `budgets` learned this
+the expensive way: it leaked `artisan serve`, and the next run's readiness probe was
+answered by the stale process, which was still holding the previous run's `APP_KEY`.
+The job then failed at the `/admin` session mint, several steps and one very
+misleading error message away from the actual cause. `ci/reclaim-ports.sh` now
+clears the block first and the job tears down after itself; do both for anything new
+that binds a port.
+
+**They share one network namespace.** Five runners, one host, so fixed host ports
+collide between parallel jobs. `ci/runner-ports.sh` derives a stable ten-port block
+per runner — use it rather than hardcoding a port. For service containers, map with
+no host port (`ports: ["5432"]`) and read `${{ job.services.postgres.ports[5432] }}`.
+
+**Every job attests where it ran.** `ci/attest-runner.sh` runs as the first step of
+all nine jobs and fails on a hosted runner — `runs-on:` is only a request, and a
+label typo silently reroutes rather than erroring. It also emits the runner name as
+a `::notice`, which lands in the check-run *annotations* API. That is deliberate: it
+makes the per-job runner readable with `checks=read`, without the `actions:read`
+scope this repo's token broker does not issue.
+
+```
+GET /repos/TogetherWeOwn/two-web/check-runs/{id}/annotations
+notice  runner  job=budgets runner_name=coolify-vps-2 environment=self-hosted
+```
+
+The runners are lean: php8.3, composer, node 22, go, the psql/mysql/redis clients,
+jq, shellcheck, git, curl, rootless docker. Anything else, install it in the job —
+`dusk` installs Chrome that way. `gha-runner` has passwordless sudo, so
+`sudo apt-get install -y <pkg>` works.
+
 ### Job names are a contract
 
 Branch protection matches a required check against the **job id**, not the workflow
@@ -654,7 +696,8 @@ than disabling the pattern.
 `--lint` also goes red if `.gitleaks.toml` is missing, if it cannot be parsed as
 TOML, or if `python3` is not on `PATH` — a config that cannot be read is not being
 enforced, same rule as the budgets. `tomllib` has been in the standard library since
-3.11 and `ubuntu-24.04` ships 3.12, so this needs no install step in `static`.
+3.11 and the runners are Ubuntu 24.04 (3.12), so this needs no install step in
+`static`.
 
 Until this case existed, `gitleaks` was the one required check with no live proof it
 fails — a check nobody had watched work, guarding the one kind of breakage a revert
