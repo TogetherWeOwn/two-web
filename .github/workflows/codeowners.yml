@@ -46,10 +46,14 @@ permissions:
 
 jobs:
   owners-resolve:
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, two-selfhosted]
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@v5
+
+      # Every job attests where it ran. See ci/attest-runner.sh (TOG-2847).
+      - name: Attest the runner
+        run: ./ci/attest-runner.sh
 
       # The checker's own ability to fail, re-proved before it is trusted.
       # Offline, no credential: every case is a saved response. A check nobody

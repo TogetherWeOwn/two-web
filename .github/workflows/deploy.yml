@@ -73,7 +73,7 @@ jobs:
     if: >-
       github.event_name == 'workflow_dispatch' ||
       github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success'
-    runs-on: ubuntu-24.04
+    runs-on: [self-hosted, two-selfhosted]
     timeout-minutes: 15
     # Decorative on GitHub Free + private: environments are ignored, so this grants no
     # protection and claims none. It is here so the deployment shows up in the UI the
@@ -82,6 +82,10 @@ jobs:
       name: staging
     steps:
       - uses: actions/checkout@v4
+
+      # Every job attests where it ran. See ci/attest-runner.sh (TOG-2847).
+      - name: Attest the runner
+        run: ./ci/attest-runner.sh
 
       # Fails the job when there is no target. Also carries the production-hook
       # tripwire, which is a warning and not a failure. This step is the entire

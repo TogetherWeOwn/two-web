@@ -30,10 +30,17 @@ jobs:
   # ---------------------------------------------------------------------------
   static:
     name: static
-    runs-on: ubuntu-24.04
+    runs-on: [self-hosted, two-selfhosted]
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v5
+
+      # Where did this job actually run? `runs-on:` asks; only the job can
+      # answer. Fails on a GitHub-hosted runner (which bills) and publishes its
+      # runner_name as an annotation. First, so a misrouted job burns seconds
+      # rather than a full suite. See ci/attest-runner.sh (TOG-2847).
+      - name: Attest the runner
+        run: ./ci/attest-runner.sh
 
       # `--lint` reads the performance budgets by loading ci/lighthouserc.cjs the
       # way lhci loads it, so this job needs node now. ubuntu-24.04 ships one, but
@@ -43,6 +50,15 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: ${{ env.NODE_VERSION }}
+
+      # And the attestation itself, which is the one check in this repository that
+      # cannot be proved by the run it is part of: on a correctly-routed job it
+      # passes, and so does a version that returns 0 unconditionally. This drives
+      # it through a synthetic hosted runner, a spoofed name and an unaudited host
+      # and pins the exit code and reason for each, then asserts every job in every
+      # workflow still carries the step. Under a second, no network.
+      - name: Runner attestation self-test
+        run: ./ci/attest-runner-selftest.sh
 
       # The gate checks its own wiring, first, before anything slow. A pull request
       # that edits this file to something that reports green while it has stopped
@@ -209,7 +225,7 @@ jobs:
   # ---------------------------------------------------------------------------
   pest:
     name: pest
-    runs-on: ubuntu-24.04
+    runs-on: [self-hosted, two-selfhosted]
     timeout-minutes: 15
 
     services:
@@ -219,8 +235,10 @@ jobs:
           POSTGRES_USER: two_web
           POSTGRES_PASSWORD: two_web
           POSTGRES_DB: two_web_test
+        # Let Docker choose a free host port. Five runners share one host, so a
+        # fixed 5432 binding makes parallel jobs race before their first step.
         ports:
-          - 5432:5432
+          - 5432
         options: >-
           --health-cmd "pg_isready -U two_web -d two_web_test"
           --health-interval 5s
@@ -229,6 +247,11 @@ jobs:
 
     steps:
       - uses: actions/checkout@v5
+
+      # See the note in `static`. Every job attests; a job that does not could be
+      # moved onto a billable runner with nothing going red (TOG-2847).
+      - name: Attest the runner
+        run: ./ci/attest-runner.sh
 
       - uses: shivammathur/setup-php@v2
         with:
@@ -247,8 +270,11 @@ jobs:
       - run: composer install --no-interaction --prefer-dist --no-progress
 
       - name: Prepare .env
+        env:
+          DB_PORT: ${{ job.services.postgres.ports[5432] }}
         run: |
           cp .env.example .env
+          sed -i "s#^DB_PORT=.*#DB_PORT=${DB_PORT}#" .env
           php artisan key:generate
 
       # Migrations are run explicitly rather than left to RefreshDatabase so a broken
@@ -262,7 +288,7 @@ jobs:
         env:
           DB_CONNECTION: pgsql
           DB_HOST: 127.0.0.1
-          DB_PORT: 5432
+          DB_PORT: ${{ job.services.postgres.ports[5432] }}
           DB_DATABASE: two_web_test
           DB_USERNAME: two_web
           DB_PASSWORD: two_web
@@ -278,7 +304,7 @@ jobs:
   # ---------------------------------------------------------------------------
   dusk:
     name: dusk
-    runs-on: ubuntu-24.04
+    runs-on: [self-hosted, two-selfhosted]
     timeout-minutes: 20
 
     services:
@@ -288,8 +314,10 @@ jobs:
           POSTGRES_USER: two_web
           POSTGRES_PASSWORD: two_web
           POSTGRES_DB: two_web
+        # Let Docker choose a free host port. Five runners share one host, so a
+        # fixed 5432 binding makes parallel jobs race before their first step.
         ports:
-          - 5432:5432
+          - 5432
         options: >-
           --health-cmd "pg_isready -U two_web -d two_web"
           --health-interval 5s
@@ -298,6 +326,11 @@ jobs:
 
     steps:
       - uses: actions/checkout@v5
+
+      # See the note in `static`. Every job attests; a job that does not could be
+      # moved onto a billable runner with nothing going red (TOG-2847).
+      - name: Attest the runner
+        run: ./ci/attest-runner.sh
 
       - uses: shivammathur/setup-php@v2
         with:
@@ -325,23 +358,43 @@ jobs:
       - run: npm ci --include=dev
       - run: npm run build
 
+      # Five runner processes share one host network namespace. Derive stable
+      # per-runner ports so parallel Dusk/budgets jobs never bind the same socket.
+      - name: Select runner-local ports
+        run: ./ci/runner-ports.sh >> "$GITHUB_ENV"
+
+      # The private runner is deliberately lean. Install a browser per job instead
+      # of making an unversioned host package part of the runner contract. Ubuntu's
+      # chromium-browser package is a snap transitional package, and snap is not a
+      # reliable dependency inside an Actions job, so use Google's apt package.
+      - name: Install Chrome
+        run: |
+          curl -fsSLo "$RUNNER_TEMP/google-chrome.deb" \
+            https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb
+          sudo apt-get update
+          sudo apt-get install -y "$RUNNER_TEMP/google-chrome.deb"
+          echo "CHROME_BIN=$(command -v google-chrome-stable)" >> "$GITHUB_ENV"
+
       # APP_URL must match the server Dusk talks to or every assertion on a redirect
       # fails with a hostname mismatch that reads like a test bug.
       - name: Prepare .env
+        env:
+          DB_PORT: ${{ job.services.postgres.ports[5432] }}
         run: |
           cp .env.example .env
-          sed -i 's#^APP_URL=.*#APP_URL=http://127.0.0.1:8000#' .env
+          sed -i "s#^APP_URL=.*#APP_URL=http://127.0.0.1:${CI_APP_PORT}#" .env
           sed -i 's#^APP_ENV=.*#APP_ENV=local#' .env
+          sed -i "s#^DB_PORT=.*#DB_PORT=${DB_PORT}#" .env
           sed -i 's#^QUEUE_CONNECTION=.*#QUEUE_CONNECTION=database#' .env
           sed -i 's#^DISCORD_CLIENT_ID=.*#DISCORD_CLIENT_ID=dusk-client#' .env
           sed -i 's#^DISCORD_CLIENT_SECRET=.*#DISCORD_CLIENT_SECRET=dusk-secret#' .env
-          sed -i 's#^BOT_ENDPOINT_URL=.*#BOT_ENDPOINT_URL=http://127.0.0.1:8765#' .env
+          sed -i "s#^BOT_ENDPOINT_URL=.*#BOT_ENDPOINT_URL=http://127.0.0.1:${CI_STUB_PORT}#" .env
           sed -i 's#^BOT_KEY_ID=.*#BOT_KEY_ID=dusk-web#' .env
           sed -i 's#^BOT_SHARED_SECRET=.*#BOT_SHARED_SECRET=dusk-shared-secret-at-least-32-characters#' .env
           printf '%s\n' \
             'DUSK_TEST_SEAMS=1' \
-            'DUSK_DISCORD_PROVIDER_URL=http://127.0.0.1:8765' \
-            'DISCORD_API_BASE=http://127.0.0.1:8765/api/v10' \
+            "DUSK_DISCORD_PROVIDER_URL=http://127.0.0.1:${CI_STUB_PORT}" \
+            "DISCORD_API_BASE=http://127.0.0.1:${CI_STUB_PORT}/api/v10" \
             'DUSK_BOT_RECEIPT=storage/logs/dusk-bot-receipt.json' >> .env
           php artisan key:generate
           php artisan config:clear
@@ -359,14 +412,14 @@ jobs:
       - name: Start Dusk services
         run: |
           rm -f storage/logs/dusk-bot-receipt.json storage/logs/dusk-stub-calls.jsonl
-          node ci/dusk-stub.mjs > storage/logs/dusk-stub.log 2>&1 &
+          DUSK_STUB_PORT="$CI_STUB_PORT" node ci/dusk-stub.mjs > storage/logs/dusk-stub.log 2>&1 &
           echo $! > storage/logs/dusk-stub.pid
           CACHE_STORE=file php artisan queue:work --queue=default --sleep=1 --tries=1 --timeout=30 > storage/logs/queue.log 2>&1 &
           echo $! > storage/logs/queue.pid
-          php artisan serve --host=127.0.0.1 --port=8000 --no-reload > storage/logs/serve.log 2>&1 &
+          php artisan serve --host=127.0.0.1 --port="$CI_APP_PORT" --no-reload > storage/logs/serve.log 2>&1 &
           echo $! > storage/logs/serve.pid
           for i in $(seq 1 30); do
-            if curl -fsS http://127.0.0.1:8765/up > /dev/null && curl -fsS http://127.0.0.1:8000/up > /dev/null; then
+            if curl -fsS "http://127.0.0.1:${CI_STUB_PORT}/up" > /dev/null && curl -fsS "http://127.0.0.1:${CI_APP_PORT}/up" > /dev/null; then
               echo "Dusk services up after ${i}s"; exit 0
             fi
             sleep 1
@@ -414,7 +467,7 @@ jobs:
   # ---------------------------------------------------------------------------
   budgets:
     name: budgets
-    runs-on: ubuntu-24.04
+    runs-on: [self-hosted, two-selfhosted]
     timeout-minutes: 20
 
     services:
@@ -424,8 +477,10 @@ jobs:
           POSTGRES_USER: two_web
           POSTGRES_PASSWORD: two_web
           POSTGRES_DB: two_web
+        # Let Docker choose a free host port. Five runners share one host, so a
+        # fixed 5432 binding makes parallel jobs race before their first step.
         ports:
-          - 5432:5432
+          - 5432
         options: >-
           --health-cmd "pg_isready -U two_web -d two_web"
           --health-interval 5s
@@ -434,6 +489,11 @@ jobs:
 
     steps:
       - uses: actions/checkout@v5
+
+      # See the note in `static`. Every job attests; a job that does not could be
+      # moved onto a billable runner with nothing going red (TOG-2847).
+      - name: Attest the runner
+        run: ./ci/attest-runner.sh
 
       - uses: shivammathur/setup-php@v2
         with:
@@ -461,12 +521,20 @@ jobs:
       - run: npm ci --include=dev
       - run: npm run build
 
+      # Five runner processes share one host network namespace. Derive stable
+      # per-runner ports so parallel Dusk/budgets jobs never bind the same socket.
+      - name: Select runner-local ports
+        run: ./ci/runner-ports.sh >> "$GITHUB_ENV"
+
       - name: Prepare a production-shaped app
+        env:
+          DB_PORT: ${{ job.services.postgres.ports[5432] }}
         run: |
           cp .env.example .env
           sed -i 's#^APP_ENV=.*#APP_ENV=production#' .env
           sed -i 's#^APP_DEBUG=.*#APP_DEBUG=false#' .env
-          sed -i 's#^APP_URL=.*#APP_URL=http://127.0.0.1:8000#' .env
+          sed -i "s#^APP_URL=.*#APP_URL=${CI_BASE_URL}#" .env
+          sed -i "s#^DB_PORT=.*#DB_PORT=${DB_PORT}#" .env
           php artisan key:generate
           php artisan migrate --force --no-interaction
           php artisan config:cache
@@ -476,17 +544,18 @@ jobs:
       # Backgrounded output goes to a file for the same reason as the Dusk job: a
       # process holding the step's pipe open hangs the step.
       #
-      # The app listens on 8001 and ci/compressing-proxy.mjs fronts it on 8000, so
-      # everything measured below arrives gzipped the way every real host serves
+      # The app listens on this runner's upstream port and ci/compressing-proxy.mjs
+      # fronts it on the matching proxy port, so everything measured below arrives
+      # gzipped the way every real host serves
       # it. `artisan serve` compresses nothing, and measuring an uncompressed
       # 603KB Filament stylesheet was reporting LCP 6.76s on /admin where the
       # compressed truth is 2.74s. See the header of that file.
       - name: Start the application server
         run: |
-          php artisan serve --host=127.0.0.1 --port=8001 --no-reload > storage/logs/serve.log 2>&1 &
+          php artisan serve --host=127.0.0.1 --port="$PROXY_UPSTREAM_PORT" --no-reload > storage/logs/serve.log 2>&1 &
           node ci/compressing-proxy.mjs > storage/logs/proxy.log 2>&1 &
           for i in $(seq 1 30); do
-            if curl -fsS http://127.0.0.1:8000/up > /dev/null; then
+            if curl -fsS "${CI_BASE_URL}/up" > /dev/null; then
               echo "server up after ${i}s"; exit 0
             fi
             sleep 1
@@ -500,7 +569,7 @@ jobs:
       # like a slow site, and the budget failure would be blamed on the page.
       - name: Verify the budget harness compresses
         run: |
-          encoding="$(curl -sS -o /dev/null -D - -H 'Accept-Encoding: gzip' http://127.0.0.1:8000/ | tr -d '\r' | awk 'tolower($1) == "content-encoding:" { print tolower($2) }')"
+          encoding="$(curl -sS -o /dev/null -D - -H 'Accept-Encoding: gzip' "${CI_BASE_URL}/" | tr -d '\r' | awk 'tolower($1) == "content-encoding:" { print tolower($2) }')"
           if [ "$encoding" != "gzip" ]; then
             echo "::error::the budgets harness is not compressing (content-encoding: '${encoding:-none}') — the numbers below would not be what production serves"
             cat storage/logs/proxy.log
@@ -591,7 +660,7 @@ jobs:
           CHROME_BIN="$(node -e "import('puppeteer').then(p => console.log(p.default.executablePath()))")"
           echo "measuring with $CHROME_BIN"
           CHROME_BIN="$CHROME_BIN" node ci/browser/cta-breakpoints.mjs \
-            --url http://127.0.0.1:8000/ --navigate --shots ci/cta-shots
+            --url "${CI_BASE_URL}/" --navigate --shots ci/cta-shots
 
       # include-hidden-files, because `.lighthouseci` starts with a dot and
       # upload-artifact skips anything under a dot-folder by default. Without it
@@ -627,11 +696,19 @@ jobs:
   # ---------------------------------------------------------------------------
   tests:
     name: tests
-    runs-on: ubuntu-24.04
+    runs-on: [self-hosted, two-selfhosted]
     timeout-minutes: 5
     if: always()
     needs: [static, pest, dusk, budgets]
     steps:
+      # This job had no checkout: it only reads `needs` results. It needs one now
+      # so it can attest its own runner — the aggregate bills like any other job,
+      # and being cheap is not the same as being free (TOG-2847).
+      - uses: actions/checkout@v5
+
+      - name: Attest the runner
+        run: ./ci/attest-runner.sh
+
       - name: Gate
         run: |
           echo "static:  ${{ needs.static.result }}"
