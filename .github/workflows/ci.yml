@@ -60,6 +60,16 @@ jobs:
       - name: Runner attestation self-test
         run: ./ci/attest-runner-selftest.sh
 
+      # The runners are persistent, which makes a leaked server a *cross-run*
+      # failure: the first post-merge `main` run after the migration failed on a
+      # tree that was green on the pull request, because `budgets` had left an
+      # `artisan serve` bound to a port it gets handed again on that same runner
+      # (TOG-2847). This pins the reclaim-and-teardown that fixes it, including
+      # that the budgets job still calls both halves. Binds two high ports on
+      # the runner for a moment; no network.
+      - name: Port reclaim self-test
+        run: ./ci/reclaim-ports-selftest.sh
+
       # The gate checks its own wiring, first, before anything slow. A pull request
       # that edits this file to something that reports green while it has stopped
       # gating is rejected by the pipeline it is disarming. Half a second, no
@@ -552,9 +562,26 @@ jobs:
       # compressed truth is 2.74s. See the header of that file.
       - name: Start the application server
         run: |
+          # The runners are persistent and these ports are stable per runner, so
+          # a server an earlier run leaked is still bound and would answer the
+          # readiness probe below while the real server silently failed to bind.
+          # See ci/reclaim-ports.sh (TOG-2847).
+          ./ci/reclaim-ports.sh "$PROXY_UPSTREAM_PORT" "$PROXY_LISTEN_PORT"
+
           php artisan serve --host=127.0.0.1 --port="$PROXY_UPSTREAM_PORT" --no-reload > storage/logs/serve.log 2>&1 &
+          echo $! > storage/logs/serve.pid
           node ci/compressing-proxy.mjs > storage/logs/proxy.log 2>&1 &
+          echo $! > storage/logs/proxy.pid
+
+          # Probe a process we actually started. `curl` alone cannot tell our
+          # server from a stranger's on the same port, which is the whole defect
+          # this step just cleaned up after.
           for i in $(seq 1 30); do
+            if ! kill -0 "$(cat storage/logs/serve.pid)" 2>/dev/null; then
+              echo "::error::the application server exited during startup — it could not bind ${PROXY_UPSTREAM_PORT}"
+              cat storage/logs/serve.log storage/logs/proxy.log
+              exit 1
+            fi
             if curl -fsS "${CI_BASE_URL}/up" > /dev/null; then
               echo "server up after ${i}s"; exit 0
             fi
@@ -661,6 +688,21 @@ jobs:
           echo "measuring with $CHROME_BIN"
           CHROME_BIN="$CHROME_BIN" node ci/browser/cta-breakpoints.mjs \
             --url "${CI_BASE_URL}/" --navigate --shots ci/cta-shots
+
+      # The runners are persistent, so a process this job leaks outlives it and
+      # breaks the *next* run on this host rather than this one — which is how
+      # the first post-merge `main` run failed while the identical tree was
+      # green on the pull request (TOG-2847). `dusk` has always stopped its
+      # services; this job never did, because on a throwaway VM it did not have
+      # to. `if: always()` so a red budget still cleans up after itself.
+      - name: Stop the application server
+        if: always()
+        run: |
+          for file in storage/logs/serve.pid storage/logs/proxy.pid; do
+            if [ -s "$file" ]; then
+              kill "$(cat "$file")" 2>/dev/null || true
+            fi
+          done
 
       # include-hidden-files, because `.lighthouseci` starts with a dot and
       # upload-artifact skips anything under a dot-folder by default. Without it
