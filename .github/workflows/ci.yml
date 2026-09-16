@@ -30,7 +30,7 @@ jobs:
   # ---------------------------------------------------------------------------
   static:
     name: static
-    runs-on: ubuntu-24.04
+    runs-on: [self-hosted, two-selfhosted]
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v5
@@ -209,7 +209,7 @@ jobs:
   # ---------------------------------------------------------------------------
   pest:
     name: pest
-    runs-on: ubuntu-24.04
+    runs-on: [self-hosted, two-selfhosted]
     timeout-minutes: 15
 
     services:
@@ -219,8 +219,10 @@ jobs:
           POSTGRES_USER: two_web
           POSTGRES_PASSWORD: two_web
           POSTGRES_DB: two_web_test
+        # Let Docker choose a free host port. Five runners share one host, so a
+        # fixed 5432 binding makes parallel jobs race before their first step.
         ports:
-          - 5432:5432
+          - 5432
         options: >-
           --health-cmd "pg_isready -U two_web -d two_web_test"
           --health-interval 5s
@@ -247,8 +249,11 @@ jobs:
       - run: composer install --no-interaction --prefer-dist --no-progress
 
       - name: Prepare .env
+        env:
+          DB_PORT: ${{ job.services.postgres.ports[5432] }}
         run: |
           cp .env.example .env
+          sed -i "s#^DB_PORT=.*#DB_PORT=${DB_PORT}#" .env
           php artisan key:generate
 
       # Migrations are run explicitly rather than left to RefreshDatabase so a broken
@@ -262,7 +267,7 @@ jobs:
         env:
           DB_CONNECTION: pgsql
           DB_HOST: 127.0.0.1
-          DB_PORT: 5432
+          DB_PORT: ${{ job.services.postgres.ports[5432] }}
           DB_DATABASE: two_web_test
           DB_USERNAME: two_web
           DB_PASSWORD: two_web
@@ -278,7 +283,7 @@ jobs:
   # ---------------------------------------------------------------------------
   dusk:
     name: dusk
-    runs-on: ubuntu-24.04
+    runs-on: [self-hosted, two-selfhosted]
     timeout-minutes: 20
 
     services:
@@ -288,8 +293,10 @@ jobs:
           POSTGRES_USER: two_web
           POSTGRES_PASSWORD: two_web
           POSTGRES_DB: two_web
+        # Let Docker choose a free host port. Five runners share one host, so a
+        # fixed 5432 binding makes parallel jobs race before their first step.
         ports:
-          - 5432:5432
+          - 5432
         options: >-
           --health-cmd "pg_isready -U two_web -d two_web"
           --health-interval 5s
@@ -325,13 +332,28 @@ jobs:
       - run: npm ci --include=dev
       - run: npm run build
 
+      # The private runner is deliberately lean. Install a browser per job instead
+      # of making an unversioned host package part of the runner contract. Ubuntu's
+      # chromium-browser package is a snap transitional package, and snap is not a
+      # reliable dependency inside an Actions job, so use Google's apt package.
+      - name: Install Chrome
+        run: |
+          curl -fsSLo "$RUNNER_TEMP/google-chrome.deb" \
+            https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb
+          sudo apt-get update
+          sudo apt-get install -y "$RUNNER_TEMP/google-chrome.deb"
+          echo "CHROME_BIN=$(command -v google-chrome-stable)" >> "$GITHUB_ENV"
+
       # APP_URL must match the server Dusk talks to or every assertion on a redirect
       # fails with a hostname mismatch that reads like a test bug.
       - name: Prepare .env
+        env:
+          DB_PORT: ${{ job.services.postgres.ports[5432] }}
         run: |
           cp .env.example .env
           sed -i 's#^APP_URL=.*#APP_URL=http://127.0.0.1:8000#' .env
           sed -i 's#^APP_ENV=.*#APP_ENV=local#' .env
+          sed -i "s#^DB_PORT=.*#DB_PORT=${DB_PORT}#" .env
           sed -i 's#^QUEUE_CONNECTION=.*#QUEUE_CONNECTION=database#' .env
           sed -i 's#^DISCORD_CLIENT_ID=.*#DISCORD_CLIENT_ID=dusk-client#' .env
           sed -i 's#^DISCORD_CLIENT_SECRET=.*#DISCORD_CLIENT_SECRET=dusk-secret#' .env
@@ -414,7 +436,7 @@ jobs:
   # ---------------------------------------------------------------------------
   budgets:
     name: budgets
-    runs-on: ubuntu-24.04
+    runs-on: [self-hosted, two-selfhosted]
     timeout-minutes: 20
 
     services:
@@ -424,8 +446,10 @@ jobs:
           POSTGRES_USER: two_web
           POSTGRES_PASSWORD: two_web
           POSTGRES_DB: two_web
+        # Let Docker choose a free host port. Five runners share one host, so a
+        # fixed 5432 binding makes parallel jobs race before their first step.
         ports:
-          - 5432:5432
+          - 5432
         options: >-
           --health-cmd "pg_isready -U two_web -d two_web"
           --health-interval 5s
@@ -462,11 +486,14 @@ jobs:
       - run: npm run build
 
       - name: Prepare a production-shaped app
+        env:
+          DB_PORT: ${{ job.services.postgres.ports[5432] }}
         run: |
           cp .env.example .env
           sed -i 's#^APP_ENV=.*#APP_ENV=production#' .env
           sed -i 's#^APP_DEBUG=.*#APP_DEBUG=false#' .env
           sed -i 's#^APP_URL=.*#APP_URL=http://127.0.0.1:8000#' .env
+          sed -i "s#^DB_PORT=.*#DB_PORT=${DB_PORT}#" .env
           php artisan key:generate
           php artisan migrate --force --no-interaction
           php artisan config:cache
@@ -627,7 +654,7 @@ jobs:
   # ---------------------------------------------------------------------------
   tests:
     name: tests
-    runs-on: ubuntu-24.04
+    runs-on: [self-hosted, two-selfhosted]
     timeout-minutes: 5
     if: always()
     needs: [static, pest, dusk, budgets]
