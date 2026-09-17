@@ -20,6 +20,12 @@
 // Exit status is 1 if anything FAILs, 0 otherwise. UNKNOWN never fails the run:
 // see "What this cannot check" at the bottom, which is the honest part.
 //
+// Because UNKNOWN does not fail the run, it is only ever correct for "the
+// measurement did not happen" — never for "the measurement happened and I did
+// not recognise the answer". A check that returns UNKNOWN on an unanticipated
+// response has silently become optional. See classifyAtomicHost, where that
+// distinction is enforced by a self-test rather than left to reviewers.
+//
 // ---------------------------------------------------------------------------
 // Why every request shells out to curl instead of using fetch()
 //
@@ -290,12 +296,29 @@ function checkInvite() {
 // the same wrong sentence. The verdict was right and stays right; only the
 // explanation was wrong (TOG-3178).
 //
-// So: three states and an explicit unknown, keyed on status *and* body.
+// So: three states, keyed on status *and* body, plus an unknown that is reserved
+// for a broken *measurement* and never used for a response we simply did not
+// anticipate.
 //
 //   3xx to the same place the control goes   PASS     hostname unbound
 //   403 + the domain-connection error page   FAIL     bound, nothing serving
 //   2xx carrying install markup              FAIL     install reachable off-CDN
-//   anything else                            UNKNOWN  report what was seen
+//   anything else measurable                 FAIL     not retired, and unclassified
+//   probe or control broken                  UNKNOWN  cannot measure at all
+//
+// The last two lines are the correction that came out of review of the first cut
+// of this change, and they matter more than they look. `main()` exits
+// `failures.length > 0 ? 1 : 0` and UNKNOWN is excluded from that count, so an
+// UNKNOWN on a retirement gate is a *pass* as far as the build is concerned. The
+// first cut classified a 500, a challenge page, a bare 403 and a 3xx pointing
+// somewhere else as UNKNOWN — which means an unanticipated response would have
+// let the gate go quiet, the exact defect shape this file exists to fix.
+//
+// The dividing line is "could I measure it", not "did I recognise it". If both
+// probes answered and the control still redirects, then the measurement worked
+// and the honest verdict is FAIL: the host is not demonstrably retired. What
+// changes between the FAIL arms is only the sentence — none of them claims a
+// reachable install except the one that measured install markup.
 //
 // PASS is reachable only by matching the live control, so no amount of the site
 // being merely broken turns this green. `--selftest` exercises every arm,
@@ -344,6 +367,11 @@ function redirectShape(target) {
 // thing that ever exercises that arm. Without it the check is a rubber stamp
 // for FAIL and nobody would notice it had stopped being able to say anything
 // else.
+//
+// Returns UNKNOWN only from the two guards below — a failed probe and a control
+// that has stopped discriminating. Past them, every return is PASS or FAIL, and
+// `--selftest` asserts that directly rather than leaving it to be read off the
+// control flow.
 export function classifyAtomicHost(site, control) {
   if (control.error || site.error) {
     return { status: UNKNOWN, detail: `could not probe: ${control.error || site.error}` };
@@ -375,13 +403,14 @@ export function classifyAtomicHost(site, control) {
       };
     }
     // A bound site redirecting to its own new home is also a 3xx. "It moved" is
-    // not "it is gone".
+    // not "it is gone", so this is FAIL — not retired — and the sentence says
+    // only what was measured.
     return {
-      status: UNKNOWN,
+      status: FAIL,
       detail:
         `${ATOMIC_HOST} redirects to ${site.redirect ?? 'somewhere it did not name'} (${seen}), ` +
         `not to the control's ${controlShape ?? 'unreadable target'} — a 3xx elsewhere is not ` +
-        `proof the hostname is unbound`,
+        `proof the hostname is unbound, so it is not retired`,
     };
   }
 
@@ -405,12 +434,17 @@ export function classifyAtomicHost(site, control) {
     };
   }
 
+  // Measured, and not any of the states above. The measurement worked, so this
+  // is an answer and not a gap: the host is not demonstrably retired, which on a
+  // retirement gate is FAIL. It deliberately does not guess what the response
+  // was — a 500, a challenge page and a parked hostname all land here and the
+  // only honest thing to say is the status, the size and "go look".
   return {
-    status: UNKNOWN,
+    status: FAIL,
     detail:
       `${ATOMIC_HOST} answered ${seen} — not an unbound redirect, not WordPress.com's ` +
-      `domain-connection error, and carrying no install markup. Unclassified: read it before ` +
-      `acting on it, and do not read it as retired`,
+      `domain-connection error, and carrying no install markup. Unclassified, and therefore ` +
+      `not retired: read it before acting on it`,
   };
 }
 
@@ -614,12 +648,28 @@ function selftest() {
 
   const classify = (site) => classifyAtomicHost({ headers: '', body: '', redirect: null, remoteIp: '192.0.78.20', ...site }, liveControl);
 
-  // Nothing but a control match may pass. Swept rather than argued: every
-  // status the host could plausibly answer with, carrying no body, must come
-  // back FAIL or UNKNOWN.
-  const sweepPasses = [200, 204, 301, 302, 307, 403, 404, 410, 429, 500, 502, 503]
-    .map((status) => classify({ status }))
-    .filter((verdict) => verdict.status === PASS).length;
+  // The sweep. Every status the host could plausibly answer with, crossed with
+  // bodies that do and do not carry the markers, all with the probe and the
+  // control working. Two things are read off it, and the second is the one
+  // review added: not only must nothing but a control match PASS, nothing in it
+  // may come back UNKNOWN either — because UNKNOWN does not fail the run, so an
+  // UNKNOWN here is a retirement gate that went quiet on a response it merely
+  // did not anticipate. Swept rather than argued: a later arm added without a
+  // verdict trips this without anyone having to think of the case.
+  const SWEEP_STATUSES = [200, 204, 301, 302, 307, 308, 401, 403, 404, 410, 429, 451, 500, 502, 503];
+  const SWEEP_BODIES = [
+    '',
+    'Forbidden',
+    'Checking your browser before accessing',
+    '<html><body>parked</body></html>',
+    '<link href="/wp-content/themes/x/style.css">',
+    'Error: Active domain connection for this domain not found',
+  ];
+  const sweep = SWEEP_STATUSES.flatMap((status) =>
+    SWEEP_BODIES.map((body) => classify({ status, body })),
+  );
+  const sweepPasses = sweep.filter((verdict) => verdict.status === PASS).length;
+  const sweepUnknowns = sweep.filter((verdict) => verdict.status === UNKNOWN).length;
 
   const cases = [
     // --- the fixture is the real thing, not a stub -------------------------
@@ -640,20 +690,28 @@ function selftest() {
     // --- the PASS arm, which the live host has never produced -------------
     ['an unbound host matching the control passes', unbound.status, PASS],
     ['the PASS says why it passed', unbound.detail.includes('the same place the control goes'), true],
-    ['a 3xx anywhere else is not proof of unbinding', classify({ status: 302, redirect: 'https://togetherweown.com/' }).status, UNKNOWN],
-    ['a 3xx naming no target is not proof of unbinding', classify({ status: 301, redirect: null }).status, UNKNOWN],
+    ['a 3xx anywhere else is not proof of unbinding', classify({ status: 302, redirect: 'https://togetherweown.com/' }).status, FAIL],
+    ['a 3xx naming no target is not proof of unbinding', classify({ status: 301, redirect: null }).status, FAIL],
     ['nothing but a control match can pass', sweepPasses, 0],
 
     // --- the 2xx arm, the one case the old wording was true for -----------
     ['a served install off-CDN is the reachable case', classify({ status: 200, body: '<link href="https://togetherweown.wpcomstaging.com/wp-content/themes/x/style.css">' }).status, FAIL],
     ['and it is the only verdict that says so', classify({ status: 200, body: '<script src="/wp-includes/js/jquery.js"></script>' }).detail.includes('the install is reachable off-CDN'), true],
-    ['a 2xx carrying no install markup is unclassified, not retired', classify({ status: 200, body: '<html><body>parked</body></html>' }).status, UNKNOWN],
+    ['a 2xx carrying no install markup is not retired either', classify({ status: 200, body: '<html><body>parked</body></html>' }).status, FAIL],
 
-    // --- everything else is UNKNOWN, and UNKNOWN is not retired -----------
-    ['a 403 with install markup is not laundered as "nothing serving"', classify({ status: 403, body: '<img src="/wp-content/uploads/logo.png">' }).status, UNKNOWN],
-    ['a 500 is unclassified', classify({ status: 500, body: 'upstream error' }).status, UNKNOWN],
-    ['a WAF challenge is unclassified', classify({ status: 503, body: 'Checking your browser' }).status, UNKNOWN],
-    ['a bare 403 with no domain-connection marker is unclassified', classify({ status: 403, body: 'Forbidden' }).status, UNKNOWN],
+    // --- an unanticipated answer FAILs; UNKNOWN would let the gate go quiet --
+    //
+    // UNKNOWN is excluded from main()'s exit code, so each of these returning
+    // UNKNOWN — which is what the first cut of this change did — makes the
+    // retirement gate non-failing on exactly the responses nobody predicted.
+    ['a 403 with install markup is not laundered as "nothing serving"', classify({ status: 403, body: '<img src="/wp-content/uploads/logo.png">' }).status, FAIL],
+    ['a 500 is not retired', classify({ status: 500, body: 'upstream error' }).status, FAIL],
+    ['a WAF challenge is not retired', classify({ status: 503, body: 'Checking your browser' }).status, FAIL],
+    ['a bare 403 with no domain-connection marker is not retired', classify({ status: 403, body: 'Forbidden' }).status, FAIL],
+    ['an unclassified answer says so instead of guessing', classify({ status: 500, body: 'upstream error' }).detail.includes('Unclassified, and therefore not retired'), true],
+    ['and it does not claim a reachable install', classify({ status: 500, body: 'upstream error' }).detail.includes('the install is reachable off-CDN'), false],
+    ['and it quotes the status it saw', classify({ status: 502, body: 'bad gateway' }).detail.includes('HTTP 502'), true],
+    ['no measurable answer is ever UNKNOWN, because UNKNOWN does not fail the run', sweepUnknowns, 0],
 
     // --- the control guard (kept from the original, load-bearing) ---------
     ['a control that stopped redirecting takes the probe out of service', classifyAtomicHost(preActionSite, { status: 200, body: 'a real site now', redirect: null, remoteIp: '192.0.78.20', headers: '' }).status, UNKNOWN],
