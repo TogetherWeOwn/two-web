@@ -127,6 +127,86 @@ case_is no-results-file 0 'nothing to annotate' NO_FILE
 # never measured is not a budget that passed.
 case_is no-directory 1 'never produced results' NO_DIR
 
+printf '\n\033[1m==> A breach reports the samples behind it (TOG-3224)\033[0m\n'
+
+# A bare median cannot be acted on: "LCP 2114 exceeds 2000" is equally consistent
+# with a byte regression and with a contended runner, and those want opposite
+# responses. lhci already records every sample as `values`; this prints them.
+#
+# 1980/2114/2200 -> mean 2098, half-range 110, so ±5.2%.
+case_is error-shows-samples 1 '1980, 2114, 2200 — spread ±5.2%' \
+'[{"auditId":"largest-contentful-paint","level":"error","url":"http://127.0.0.1:8000/events","actual":2114,"expected":2000,"passed":false,"values":[1980,2114,2200]}]'
+
+# The tripwire wording gets the same treatment, and must still not fail the build.
+case_is warn-shows-samples 0 'spread ±' \
+'[{"auditId":"first-contentful-paint","level":"warn","url":"http://127.0.0.1:8000/admin","actual":1957,"expected":1800,"passed":false,"values":[1890,1957,2010]}]'
+
+# Backwards compatibility, and it is not cosmetic: an lhci that stopped emitting
+# `values` must degrade to the old wording, not crash the gate into a green.
+case_is samples-absent 1 'median of 3 runs' \
+'[{"auditId":"largest-contentful-paint","level":"error","url":"http://127.0.0.1:8000/","actual":2450,"expected":2000,"passed":false}]'
+
+case_is samples-single 1 'median of 3 runs' \
+'[{"auditId":"largest-contentful-paint","level":"error","url":"http://127.0.0.1:8000/","actual":2450,"expected":2000,"passed":false,"values":[2450]}]'
+
+# CLS is a fraction, not milliseconds. Rounding the samples to integers would
+# print "0, 0, 0" and lose the entire number the budget is written in.
+case_is samples-cls-precision 1 '0.21, 0.24, 0.29' \
+'[{"auditId":"cumulative-layout-shift","level":"error","url":"http://127.0.0.1:8000/","actual":0.24,"expected":0.1,"passed":false,"values":[0.21,0.24,0.29]}]'
+
+# A non-numeric sample must not produce "NaN" in an annotation someone has to act on.
+case_is samples-non-numeric 1 'median of 3 runs' \
+'[{"auditId":"largest-contentful-paint","level":"error","url":"http://127.0.0.1:8000/","actual":2450,"expected":2000,"passed":false,"values":[null,"x"]}]'
+
+printf '\n\033[1m==> The host speed that produced those samples (TOG-3224)\033[0m\n'
+
+# case_with_lhr <slug> <expected exit> <expected substring> <assertion json> <lhr json>
+# Same contract as case_is, plus one lhr-*.json so the environment block is
+# readable. benchmarkIndex is per-host, so it is reported once per job.
+case_with_lhr() {
+  local slug="$1" want="$2" expected="$3" body="$4" lhr="$5"
+  local dir out status
+  n=$((n + 1))
+  dir="$WORK/$slug"
+  mkdir -p "$dir/.lighthouseci"
+  printf '%s\n' "$body" > "$dir/.lighthouseci/assertion-results.json"
+  printf '%s\n' "$lhr" > "$dir/.lighthouseci/lhr-1700000000000.json"
+
+  out="$( cd "$dir" && node "$ANNOTATE" 2>&1 )"
+  status=$?
+
+  if [ "$status" -ne "$want" ]; then
+    fail "$slug: expected exit ${want}, got ${status}"
+    printf '%s\n' "$out" | sed 's/^/        /'
+    rc=1
+    return
+  fi
+  if ! grep -qF -- "$expected" <<< "$out"; then
+    fail "$slug: exit ${status} was right, but the output never says: ${expected}"
+    printf '%s\n' "$out" | sed 's/^/        /'
+    rc=1
+    return
+  fi
+  pass "$slug"
+}
+
+LHR_SLOW='{"finalDisplayedUrl":"http://127.0.0.1:8000/events","environment":{"benchmarkIndex":903.5},"audits":{"largest-contentful-paint":{"numericValue":2114}}}'
+LHR_NO_ENV='{"finalDisplayedUrl":"http://127.0.0.1:8000/events","audits":{"largest-contentful-paint":{"numericValue":2114}}}'
+
+case_with_lhr benchmark-reported 1 'benchmarkIndex 904' \
+'[{"auditId":"largest-contentful-paint","level":"error","url":"http://127.0.0.1:8000/events","actual":2114,"expected":2000,"passed":false,"values":[1980,2114,2200]}]' \
+"$LHR_SLOW"
+
+# It is context, never the verdict. A green job still reports the host speed, and
+# reporting it must not turn a pass into a failure.
+case_with_lhr benchmark-on-a-green-job 0 'benchmarkIndex 904' '[]' "$LHR_SLOW"
+
+# An lhr with no environment block must simply omit the line rather than print
+# "benchmarkIndex NaN" or throw and take the gate down with it.
+case_with_lhr benchmark-absent 1 'largest-contentful-paint' \
+'[{"auditId":"largest-contentful-paint","level":"error","url":"http://127.0.0.1:8000/events","actual":2114,"expected":2000,"passed":false}]' \
+"$LHR_NO_ENV"
+
 printf '\n'
 if [ "$rc" -ne 0 ]; then
   fail "the budgets verdict is not what it claims to be. Fix it before trusting the gate."
