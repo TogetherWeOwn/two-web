@@ -192,6 +192,15 @@ jobs:
       - name: Cutover atomic-host classifier self-test
         run: node ci/cutover-check.mjs --selftest
 
+      # And the harness that keeps the self-test above honest: 11 plausible wrong
+      # classifiers, each of which must turn it red. Offline and 2.5s, so it runs
+      # per-PR rather than living as a command in a comment that nobody runs. It
+      # reports NOT-APPLIED (and fails) when a mutation stops matching the source,
+      # so a rename shows up as "update this mutation" instead of as a harness
+      # that silently scores 11/11 against nothing.
+      - name: Cutover atomic-host classifier mutation harness
+        run: bash ci/atomic-host-mutants.sh
+
       # The DKIM key parser (TOG-1154). "The record is published" is not "our
       # mail authenticates": the Google console defaults to a 1024-bit key, and
       # `v=DKIM1; p=` is the RFC 6376 revoked form — both look like success to

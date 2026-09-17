@@ -708,6 +708,16 @@ function selftest() {
     ['a 500 is not retired', classify({ status: 500, body: 'upstream error' }).status, FAIL],
     ['a WAF challenge is not retired', classify({ status: 503, body: 'Checking your browser' }).status, FAIL],
     ['a bare 403 with no domain-connection marker is not retired', classify({ status: 403, body: 'Forbidden' }).status, FAIL],
+
+    // Once the unclassified arm FAILs, verdict alone stops discriminating the
+    // 403 arms — a 403 taking the domain-connection branch by mistake returns
+    // FAIL either way, so only the sentence catches it. Dropping the marker
+    // requirement from that branch survived mutation until these two existed,
+    // and it is the same over-claim as the original defect pointing the other
+    // way: a 403 that *is* serving install markup would be reported as nothing
+    // serving, which is the reading that argues for deleting the site.
+    ['a 403 carrying install markup is not called "no active site serving"', classify({ status: 403, body: '<img src="/wp-content/uploads/logo.png">' }).detail.includes('no active site serving it'), false],
+    ['a bare 403 is not attributed to a domain-connection error nobody saw', classify({ status: 403, body: 'Forbidden' }).detail.includes('domain-connection error page'), false],
     ['an unclassified answer says so instead of guessing', classify({ status: 500, body: 'upstream error' }).detail.includes('Unclassified, and therefore not retired'), true],
     ['and it does not claim a reachable install', classify({ status: 500, body: 'upstream error' }).detail.includes('the install is reachable off-CDN'), false],
     ['and it quotes the status it saw', classify({ status: 502, body: 'bad gateway' }).detail.includes('HTTP 502'), true],
