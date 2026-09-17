@@ -43,9 +43,10 @@ const breached = results.filter((r) => !r.passed);
 // with a byte regression and with a contended runner, and the two want opposite
 // responses. The samples tell them apart, and we already have them.
 //
-// Measured on TOG-3224: the same fixed-weight page medians ±3.7% on an idle host
-// and ±20.1% on one under CPU contention. A breach whose own samples are spread
-// that wide is a measurement taken on a busy host, not a page that got heavier.
+// Measured on TOG-3224: the same fixed-weight page medians ±8.2% on an idle host
+// and ±20.1% on one under CPU contention (17 runs each). A breach whose own
+// samples are spread that wide is a measurement taken on a busy host, not a page
+// that got heavier.
 const spreadOf = (values) => {
   if (!Array.isArray(values) || values.length < 2) return null;
   const nums = values.filter((v) => typeof v === 'number' && Number.isFinite(v));
@@ -146,7 +147,7 @@ const longTasks = new Map();
 //
 // Measured on TOG-3224, same page and same settings: benchmarkIndex 1431-1759 on
 // an idle host and 891-1500 with six competing CPU hogs, while the LCP spread
-// went from ±3.7% to ±20.1%. `budgets` shares a host with `pest`, `dusk` and
+// went from ±8.2% to ±20.1%. `budgets` shares a host with `pest`, `dusk` and
 // two-bot's service containers, so this number is the difference between "the
 // page regressed" and "the box was busy" — and without it nobody can tell.
 const benchmarks = [];
