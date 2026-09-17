@@ -35,6 +35,7 @@
 // not.
 
 import { execFileSync } from 'node:child_process';
+import { readFileSync } from 'node:fs';
 import { checkStagingAccess } from './staging-access.mjs';
 
 const UA =
@@ -278,38 +279,146 @@ function checkInvite() {
 // hides it from togetherweown.com and leaves an unpatched WordPress running
 // that nobody is logging into. This check is what stops "DNS moved" being
 // mistaken for "install retired".
+//
+// It used to decide that on the status code alone: the predicate was `not a
+// 3xx`, and the line it printed read "the install is reachable off-CDN".
+// Measured 2026-09-17, the host answers 403 with 3.1 kB of WordPress.com's
+// *domain-connection error* page and zero install content — so the sentence
+// beside the verdict described a served WordPress that had never been shown,
+// and that sentence argues for deleting the site, which is irreversible. A 500,
+// a WAF challenge and a parked hostname all trip the same predicate and all got
+// the same wrong sentence. The verdict was right and stays right; only the
+// explanation was wrong (TOG-3178).
+//
+// So: three states and an explicit unknown, keyed on status *and* body.
+//
+//   3xx to the same place the control goes   PASS     hostname unbound
+//   403 + the domain-connection error page   FAIL     bound, nothing serving
+//   2xx carrying install markup              FAIL     install reachable off-CDN
+//   anything else                            UNKNOWN  report what was seen
+//
+// PASS is reachable only by matching the live control, so no amount of the site
+// being merely broken turns this green. `--selftest` exercises every arm,
+// including that one, against a committed capture of the live 403.
+
+// WordPress.com's "this hostname reaches us but no site is connected to it"
+// page. `x_graceful=missingdomain` is Automattic's own name for the condition,
+// in the tracking pixel the page embeds; the title is what a human reads.
+// Either is enough — they have no reason to move together.
+const DOMAIN_CONNECTION_ERROR_MARKERS = [
+  'active domain connection for this domain not found',
+  'x_graceful=missingdomain',
+];
+
+// Markup only a rendering WordPress emits. Body only, and deliberately none of
+// them a bare `wp-`: the error page above is served by WordPress.com's edge and
+// itself links wp-login.php inside a `wp-die-message` div, so a looser marker
+// would read "no site here" as "the install is up".
+const INSTALL_CONTENT_MARKERS = ['/wp-content/', '/wp-includes/', 'api.w.org', 'wp-json'];
+
+const isRedirect = (status) => status >= 300 && status < 400;
+
+const markersIn = (body, markers) => {
+  const haystack = (body ?? '').toLowerCase();
+  return markers.filter((marker) => haystack.includes(marker));
+};
+
+// Where a redirect points, ignoring the query string. WordPress.com sends an
+// unbound host to `https://wordpress.com/typo/?subdomain=<that host>`, so the
+// query differs between the control and the host under test by construction and
+// the comparison has to be on origin+path. Comparing against the *live* control
+// rather than a hardcoded URL is what keeps this true if Automattic moves that
+// page: both hosts move together.
+function redirectShape(target) {
+  if (!target) return null;
+  try {
+    const url = new URL(target);
+    return `${url.origin}${url.pathname}`;
+  } catch {
+    return null;
+  }
+}
+
+// Pure, so it can be tested without the network — which is the point. The state
+// that must PASS has never once been observed live, so `--selftest` is the only
+// thing that ever exercises that arm. Without it the check is a rubber stamp
+// for FAIL and nobody would notice it had stopped being able to say anything
+// else.
+export function classifyAtomicHost(site, control) {
+  if (control.error || site.error) {
+    return { status: UNKNOWN, detail: `could not probe: ${control.error || site.error}` };
+  }
+
+  // An unbound host gets WordPress.com's 302. Without a control that still
+  // demonstrates that, no status code off the real host means anything — so the
+  // control moving takes the probe out of service rather than changing its
+  // answer.
+  if (!isRedirect(control.status)) {
+    return {
+      status: UNKNOWN,
+      detail: `control host returned HTTP ${control.status}, expected a 3xx — probe can no longer distinguish bound from unbound`,
+    };
+  }
+
+  const body = site.body ?? '';
+  const seen =
+    `HTTP ${site.status} from ${site.remoteIp ?? 'an unknown IP'}, ` +
+    `${body.length} bytes of body, control ${control.status}`;
+
+  if (isRedirect(site.status)) {
+    const shape = redirectShape(site.redirect);
+    const controlShape = redirectShape(control.redirect);
+    if (shape !== null && shape === controlShape) {
+      return {
+        status: PASS,
+        detail: `${ATOMIC_HOST} behaves like an unbound host (${seen}) — redirects to ${shape}, the same place the control goes`,
+      };
+    }
+    // A bound site redirecting to its own new home is also a 3xx. "It moved" is
+    // not "it is gone".
+    return {
+      status: UNKNOWN,
+      detail:
+        `${ATOMIC_HOST} redirects to ${site.redirect ?? 'somewhere it did not name'} (${seen}), ` +
+        `not to the control's ${controlShape ?? 'unreadable target'} — a 3xx elsewhere is not ` +
+        `proof the hostname is unbound`,
+    };
+  }
+
+  if (site.status === 403 && markersIn(body, DOMAIN_CONNECTION_ERROR_MARKERS).length > 0) {
+    return {
+      status: FAIL,
+      detail:
+        `${ATOMIC_HOST} is bound, no active site serving it (${seen}, WordPress.com ` +
+        `domain-connection error page carrying no install content) — retirement not provable ` +
+        `from outside; console evidence required`,
+    };
+  }
+
+  const installMarkers = markersIn(body, INSTALL_CONTENT_MARKERS);
+  if (site.status >= 200 && site.status < 300 && installMarkers.length > 0) {
+    return {
+      status: FAIL,
+      detail:
+        `${ATOMIC_HOST} still answers (${seen}, serving ${installMarkers.join(' ')}) — ` +
+        `the install is reachable off-CDN`,
+    };
+  }
+
+  return {
+    status: UNKNOWN,
+    detail:
+      `${ATOMIC_HOST} answered ${seen} — not an unbound redirect, not WordPress.com's ` +
+      `domain-connection error, and carrying no install markup. Unclassified: read it before ` +
+      `acting on it, and do not read it as retired`,
+  };
+}
 
 function checkAtomicStillUp() {
   const control = request(ATOMIC_CONTROL_HOST);
   const site = request(ATOMIC_HOST);
-
-  if (control.error || site.error) {
-    record(UNKNOWN, 'atomic-host-off', `could not probe: ${control.error || site.error}`);
-    return;
-  }
-
-  // An unbound host gets WordPress.com's 302. Anything else means the hostname
-  // is bound to a real site — including the 403 it currently returns.
-  const controlIsRedirect = control.status >= 300 && control.status < 400;
-  if (!controlIsRedirect) {
-    // The control moved. We can no longer tell bound from unbound, so say so
-    // rather than report a result the control no longer supports.
-    record(
-      UNKNOWN,
-      'atomic-host-off',
-      `control host returned HTTP ${control.status}, expected a 3xx — probe can no longer distinguish bound from unbound`,
-    );
-    return;
-  }
-
-  const stillBound = !(site.status >= 300 && site.status < 400);
-  record(
-    stillBound ? FAIL : PASS,
-    'atomic-host-off',
-    stillBound
-      ? `${ATOMIC_HOST} still answers (HTTP ${site.status} from ${site.remoteIp}, control ${control.status}) — the install is reachable off-CDN`
-      : `${ATOMIC_HOST} behaves like an unbound host (HTTP ${site.status}, same as control)`,
-  );
+  const { status, detail } = classifyAtomicHost(site, control);
+  record(status, 'atomic-host-off', detail);
 }
 
 // The apex must stop serving the retired plugin's REST namespace. This is the
@@ -454,6 +563,142 @@ function checkSeo(origin) {
 }
 
 // ---------------------------------------------------------------------------
+// The check on the atomic-host check
+//
+//   node ci/cutover-check.mjs --selftest     (no network, milliseconds)
+//
+// Two things are being defended here, and only one of them is the classifier.
+//
+// 1. The PASS arm. The live host has never produced the unbound response, and
+//    by the time it does this check has one job left in its life: saying so.
+//    An arm that has never executed is an arm that may not work, so it is
+//    executed here against a synthetic capture built on the live control.
+//
+// 2. The relaxation proposed on TOG-1269 and rejected on TOG-3178 — "accept a
+//    403 serving no TWO content as retired". Run against the untouched,
+//    still-billing site it returns *retired*: it was green before anyone
+//    opened the console, which makes it not a gate. That is easy to re-propose
+//    from prose on a card and impossible to re-propose past a failing test, so
+//    the vacuity is pinned below rather than described. This is the harness
+//    TOG-3178 asked to be committed instead of trusted.
+const CAPTURE_FIXTURE = 'fixtures/atomic-host-capture-2026-09-17.json';
+
+// The rejected predicate, kept executable. If anyone adopts it, case
+// "relaxation-is-vacuous" is what tells them what it costs.
+function proposedRelaxationSaysRetired(site) {
+  return site.status === 403 && markersIn(site.body, INSTALL_CONTENT_MARKERS).length === 0;
+}
+
+function selftest() {
+  const captured = JSON.parse(
+    readFileSync(new URL(CAPTURE_FIXTURE, import.meta.url), 'utf8'),
+  );
+  const { site: preActionSite, control: liveControl } = captured;
+
+  // The live 403, untouched and still billing on the day it was captured.
+  const preAction = classifyAtomicHost(preActionSite, liveControl);
+
+  // The only shape allowed to pass: WordPress.com sends an unbound host to
+  // /typo/ with that host's own subdomain in the query, so this differs from
+  // the control in exactly the way a real unbound `togetherweown` would.
+  const unbound = classifyAtomicHost(
+    {
+      status: 302,
+      redirect: 'https://wordpress.com/typo/?subdomain=togetherweown',
+      remoteIp: '192.0.78.20',
+      headers: '',
+      body: '',
+    },
+    liveControl,
+  );
+
+  const classify = (site) => classifyAtomicHost({ headers: '', body: '', redirect: null, remoteIp: '192.0.78.20', ...site }, liveControl);
+
+  // Nothing but a control match may pass. Swept rather than argued: every
+  // status the host could plausibly answer with, carrying no body, must come
+  // back FAIL or UNKNOWN.
+  const sweepPasses = [200, 204, 301, 302, 307, 403, 404, 410, 429, 500, 502, 503]
+    .map((status) => classify({ status }))
+    .filter((verdict) => verdict.status === PASS).length;
+
+  const cases = [
+    // --- the fixture is the real thing, not a stub -------------------------
+    ['the fixture is a 403 capture', preActionSite.status, 403],
+    ['the fixture carries the real body, not a placeholder', preActionSite.body.length > 2000, true],
+    ['the fixture control is the 3xx the classifier needs', isRedirect(liveControl.status), true],
+
+    // --- defect 1: the verdict and the sentence beside it must agree -------
+    ['the untouched site is not retired', preAction.status, FAIL],
+    ['the FAIL says the hostname is bound with nothing serving', preAction.detail.includes('bound, no active site serving it'), true],
+    ['the FAIL names the only evidence that can close it', preAction.detail.includes('console evidence required'), true],
+    ['the FAIL no longer claims a reachable install', preAction.detail.includes('the install is reachable off-CDN'), false],
+
+    // --- defect 2: the rejected relaxation, pinned as vacuous -------------
+    ['relaxation-is-vacuous: TOG-1269\'s "403 serving no TWO content" calls the untouched site retired', proposedRelaxationSaysRetired(preActionSite), true],
+    ['...and the shipped classifier does not', preAction.status === PASS, false],
+
+    // --- the PASS arm, which the live host has never produced -------------
+    ['an unbound host matching the control passes', unbound.status, PASS],
+    ['the PASS says why it passed', unbound.detail.includes('the same place the control goes'), true],
+    ['a 3xx anywhere else is not proof of unbinding', classify({ status: 302, redirect: 'https://togetherweown.com/' }).status, UNKNOWN],
+    ['a 3xx naming no target is not proof of unbinding', classify({ status: 301, redirect: null }).status, UNKNOWN],
+    ['nothing but a control match can pass', sweepPasses, 0],
+
+    // --- the 2xx arm, the one case the old wording was true for -----------
+    ['a served install off-CDN is the reachable case', classify({ status: 200, body: '<link href="https://togetherweown.wpcomstaging.com/wp-content/themes/x/style.css">' }).status, FAIL],
+    ['and it is the only verdict that says so', classify({ status: 200, body: '<script src="/wp-includes/js/jquery.js"></script>' }).detail.includes('the install is reachable off-CDN'), true],
+    ['a 2xx carrying no install markup is unclassified, not retired', classify({ status: 200, body: '<html><body>parked</body></html>' }).status, UNKNOWN],
+
+    // --- everything else is UNKNOWN, and UNKNOWN is not retired -----------
+    ['a 403 with install markup is not laundered as "nothing serving"', classify({ status: 403, body: '<img src="/wp-content/uploads/logo.png">' }).status, UNKNOWN],
+    ['a 500 is unclassified', classify({ status: 500, body: 'upstream error' }).status, UNKNOWN],
+    ['a WAF challenge is unclassified', classify({ status: 503, body: 'Checking your browser' }).status, UNKNOWN],
+    ['a bare 403 with no domain-connection marker is unclassified', classify({ status: 403, body: 'Forbidden' }).status, UNKNOWN],
+
+    // --- the control guard (kept from the original, load-bearing) ---------
+    ['a control that stopped redirecting takes the probe out of service', classifyAtomicHost(preActionSite, { status: 200, body: 'a real site now', redirect: null, remoteIp: '192.0.78.20', headers: '' }).status, UNKNOWN],
+    ['and says so rather than reporting a verdict', classifyAtomicHost(preActionSite, { status: 200, body: '', redirect: null, remoteIp: null, headers: '' }).detail.includes('can no longer distinguish bound from unbound'), true],
+    ['a probe error is not a verdict', classifyAtomicHost({ error: 'curl: (6) could not resolve host' }, liveControl).status, UNKNOWN],
+    ['a control that could not be probed is not a verdict either', classifyAtomicHost(preActionSite, { error: 'curl: (28) timed out' }).status, UNKNOWN],
+  ];
+
+  let bad = 0;
+  for (const [name, actual, expected] of cases) {
+    const ok = actual === expected;
+    if (!ok) bad++;
+    console.log(`${ok ? 'ok  ' : 'FAIL'}  ${name}${ok ? '' : ` (got ${JSON.stringify(actual)}, want ${JSON.stringify(expected)})`}`);
+  }
+  console.log(`\n${cases.length - bad}/${cases.length} atomic-host self-test cases pass\n`);
+  console.log(`  live 403, classified: ${preAction.status} — ${preAction.detail}\n`);
+  process.exit(bad ? 1 : 0);
+}
+
+// How the fixture above was made, so refreshing it is a command and not an
+// afternoon with curl and a text editor. Hand-editing a capture is how a
+// fixture stops being evidence.
+//
+//   node ci/cutover-check.mjs --capture > ci/fixtures/atomic-host-capture-<date>.json
+function capture() {
+  const control = request(ATOMIC_CONTROL_HOST);
+  const site = request(ATOMIC_HOST);
+  console.log(
+    JSON.stringify(
+      {
+        note:
+          'Live capture of the Atomic hostname and its unbound control, used by ' +
+          '`node ci/cutover-check.mjs --selftest`. Regenerate with `--capture`; do not hand-edit.',
+        host: ATOMIC_HOST,
+        controlHost: ATOMIC_CONTROL_HOST,
+        site,
+        control,
+      },
+      null,
+      2,
+    ),
+  );
+}
+
+// ---------------------------------------------------------------------------
 
 function main() {
   const argv = process.argv.slice(2);
@@ -463,7 +708,11 @@ function main() {
   const app = appIndex === -1 ? null : argv[appIndex + 1];
 
   if (phase !== 'before' && phase !== 'after') {
-    console.error('usage: node ci/cutover-check.mjs --phase <before|after> [--app <origin>]');
+    console.error(
+      'usage: node ci/cutover-check.mjs --phase <before|after> [--app <origin>]\n' +
+        '       node ci/cutover-check.mjs --selftest   (offline, the atomic-host classifier)\n' +
+        '       node ci/cutover-check.mjs --capture    (refresh the selftest fixture)',
+    );
     process.exit(2);
   }
 
@@ -525,4 +774,7 @@ function main() {
   process.exit(failures.length > 0 ? 1 : 0);
 }
 
-main();
+const args = process.argv.slice(2);
+if (args.includes('--selftest')) selftest();
+else if (args.includes('--capture')) capture();
+else main();
