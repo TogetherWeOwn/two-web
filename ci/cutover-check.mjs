@@ -64,6 +64,26 @@ const INVITE_CODE = '4GwEDNRTtx';
 const ATOMIC_HOST = 'https://togetherweown.wpcomstaging.com';
 const ATOMIC_CONTROL_HOST = 'https://zzq7x4nonexistent.wpcomstaging.com';
 
+// The browser UA above is mandatory for the apex, and actively harmful here.
+// WordPress.com fingerprints the UA string on *.wpcomstaging.com and answers a
+// challenge page to some browsers, which turns the control's 302 into a 403 and
+// collapses the discriminator — both hosts then look identical and the check
+// can only report UNKNOWN.
+//
+// Measured 2026-09-17 against the control host, 3 trials each, deterministic:
+//
+//   Chrome/127 on macOS (the UA above)  -> 302   Chrome/140 on Linux -> 403
+//   curl/8.5.0                          -> 302   no UA at all        -> 302
+//   two-web-cutover-check/1.0           -> 302
+//
+// So the only thing keeping this check decisive is that the pinned browser UA
+// happens to be one WordPress.com does not challenge — and "bump the Chrome
+// version" is exactly the kind of tidy-up someone does without running this.
+// Probe with a neutral tool UA first, and keep the browser UA as a fallback in
+// case the rule ever inverts. ci/cutover-check-selftest.sh fails if neither
+// agent yields a usable control.
+const ATOMIC_PROBE_AGENTS = ['two-web-cutover-check/1.0 (+https://togetherweown.com)', UA];
+
 // A second WordPress.com property carrying the TWO name, found while verifying
 // the first (site 228533449, `unlaunched`, noindex). It is not the install this
 // issue retires and it holds no Discord credential — but it is the same brand
@@ -85,7 +105,7 @@ function record(status, name, detail) {
 // response headers/body, or `{ error }` when curl itself could not complete —
 // a DNS failure and a 500 are different findings and must not collapse into
 // one.
-function request(url, { method = 'GET', maxTime = 25 } = {}) {
+function request(url, { method = 'GET', maxTime = 25, userAgent = UA } = {}) {
   const args = [
     '--silent',
     '--show-error',
@@ -93,7 +113,7 @@ function request(url, { method = 'GET', maxTime = 25 } = {}) {
     '--output', '-',
     '--write-out', '\n__STATUS__%{http_code} %{redirect_url} %{remote_ip}',
     '--max-time', String(maxTime),
-    '--user-agent', UA,
+    '--user-agent', userAgent,
     '--header', 'Accept: text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
     '--request', method,
     url,
@@ -280,24 +300,41 @@ function checkInvite() {
 // mistaken for "install retired".
 
 function checkAtomicStillUp() {
-  const control = request(ATOMIC_CONTROL_HOST);
-  const site = request(ATOMIC_HOST);
+  // An unbound host gets WordPress.com's 302. Anything else means the hostname
+  // is bound to a real site — including the 403 it currently returns. Walk the
+  // agents until one produces a usable control; a challenged agent answers 403
+  // to every hostname and would make the two indistinguishable.
+  let control;
+  let site;
+  const attempts = [];
 
-  if (control.error || site.error) {
-    record(UNKNOWN, 'atomic-host-off', `could not probe: ${control.error || site.error}`);
-    return;
+  for (const userAgent of ATOMIC_PROBE_AGENTS) {
+    control = request(ATOMIC_CONTROL_HOST, { userAgent });
+    site = request(ATOMIC_HOST, { userAgent });
+
+    if (control.error || site.error) {
+      // Clear the control before continuing. Leaving the error object in place
+      // makes the `!control` test below pass on the last iteration, and the
+      // check then reads `site.status` off an error — reporting FAIL "still
+      // answers (HTTP undefined from undefined)" for a probe that never
+      // completed. An outage must stay UNKNOWN, as it was before the agent walk.
+      attempts.push(`${userAgent}: ${control.error || site.error}`);
+      control = undefined;
+      continue;
+    }
+    if (control.status >= 300 && control.status < 400) break;
+
+    attempts.push(`${userAgent}: control HTTP ${control.status}`);
+    control = undefined;
   }
 
-  // An unbound host gets WordPress.com's 302. Anything else means the hostname
-  // is bound to a real site — including the 403 it currently returns.
-  const controlIsRedirect = control.status >= 300 && control.status < 400;
-  if (!controlIsRedirect) {
-    // The control moved. We can no longer tell bound from unbound, so say so
-    // rather than report a result the control no longer supports.
+  if (!control) {
+    // Every agent was challenged or errored. We can no longer tell bound from
+    // unbound, so say so rather than report a result the control cannot support.
     record(
       UNKNOWN,
       'atomic-host-off',
-      `control host returned HTTP ${control.status}, expected a 3xx — probe can no longer distinguish bound from unbound`,
+      `no probe agent produced a 3xx control, so bound and unbound are indistinguishable (${attempts.join('; ')})`,
     );
     return;
   }
