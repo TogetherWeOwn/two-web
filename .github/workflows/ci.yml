@@ -70,6 +70,18 @@ jobs:
       - name: Port reclaim self-test
         run: ./ci/reclaim-ports-selftest.sh
 
+      # The other half of that same failure. `budgets` is required on `main`, so a
+      # bad mint stops every merge — and the message it printed named the symptom
+      # and discarded the cause, twice: once at TOG-2847 where the real fault was
+      # the leaked server above, and again at df1970e where the cause is still
+      # unknown because the step threw it away (TOG-3220). This drives the minting
+      # script against a stubbed artisan and pins that a crash and a silent success
+      # produce two *different* messages, that both carry what the command said,
+      # and that a good mint still masks the value it exports. Milliseconds, no
+      # network, no database.
+      - name: Session cookie mint self-test
+        run: ./ci/mint-session-cookie-selftest.sh
+
       # The gate checks its own wiring, first, before anything slow. A pull request
       # that edits this file to something that reports green while it has stopped
       # gating is rejected by the pipeline it is disarming. Half a second, no
@@ -623,16 +635,17 @@ jobs:
       # score the Discord handoff — a tiny page that passes every budget while
       # /admin goes unmeasured. ci/pages.cjs throws if this is empty, so a failure
       # to mint one is loud rather than a silent green.
+      #
+      # Loud was only ever half of it. This used to be an inline
+      # `artisan ... | tail -1` that discarded stderr, took `tail`'s exit status
+      # instead of artisan's, and gave two different causes the same message — so
+      # it named the symptom and threw away the diagnosis (TOG-3220). The logic
+      # moved into a script for the reason deploy.yml gives for ci/deploy-target.sh:
+      # so it can be executed and tested rather than merely read. Every branch is
+      # driven against a stubbed artisan in ci/mint-session-cookie-selftest.sh.
       - name: Mint a moderator session for the authenticated pages
         run: |
-          COOKIE="$(php artisan ci:session-cookie --moderator | tail -1)"
-          if [ -z "$COOKIE" ]; then
-            echo "::error::could not mint a session cookie — /admin cannot be measured"
-            exit 1
-          fi
-          # Masked so the session value never appears in a public build log.
-          echo "::add-mask::${COOKIE#*=}"
-          echo "CI_SESSION_COOKIE=$COOKIE" >> "$GITHUB_ENV"
+          ./ci/mint-session-cookie.sh
 
       # Three runs per URL, median reported. One run of LCP on a shared runner is
       # noise; see docs/flake-policy.md on why the answer was more samples and a
