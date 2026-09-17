@@ -127,7 +127,7 @@ pass "cutover after-phase runs every Access-protected staging assertion"
 # ---------------------------------------------------------------------------
 # 7. The atomic-host verdict and the sentence beside it say the same thing
 #
-# The classifier has its own offline selftest — 25 cases over a committed capture
+# The classifier has its own offline selftest — 31 cases over a committed capture
 # of the live 403, including the PASS arm the live host has never produced and the
 # relaxation rejected on TOG-1269. Run it from here too, so the cutover gate's
 # network half cannot be trusted while the pure half beneath it has gone red.
@@ -154,4 +154,22 @@ else
   pass "atomic-host-off makes no unbacked claim about a reachable install"
 fi
 
-printf '\n11/11 ok\n'
+# ---------------------------------------------------------------------------
+# 8. The Atomic retirement gate reaches a verdict rather than sitting at UNKNOWN
+#
+# atomic-host-off is the only automated evidence that the WordPress install is
+# actually retired, and TOG-1269's unblock test is "this line must PASS". It
+# decides by comparing the install's hostname against an unbound control on the
+# same wildcard, so it is only decisive while that control still answers 3xx.
+#
+# WordPress.com challenges *.wpcomstaging.com by User-Agent (measured 2026-09-17:
+# Chrome/140-on-Linux is challenged, Chrome/127-on-macOS and curl are not). A
+# challenged agent answers 403 to every hostname, the control stops
+# discriminating, and the check degrades to UNKNOWN — which reads as "not
+# checked" and gets skimmed past on cutover night. Bumping the pinned browser UA
+# is enough to cause it. Fail loudly here instead.
+grep -qE '(PASS|FAIL) +atomic-host-off' <<<"$after_out" \
+  || fail "atomic-host-off reported no verdict — the wpcomstaging control no longer discriminates bound from unbound, so the retirement gate proves nothing: $(grep -E 'atomic-host-off' <<<"$after_out" || echo '<no line emitted>')"
+pass "atomic-host-off reaches a verdict (its unbound control still discriminates)"
+
+printf '\n12/12 ok\n'
