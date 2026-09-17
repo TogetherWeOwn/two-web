@@ -36,6 +36,7 @@
 
 import { execFileSync } from 'node:child_process';
 import { checkStagingAccess } from './staging-access.mjs';
+import { classifyAtomicHost } from './atomic-host-state.mjs';
 
 const UA =
   'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 ' +
@@ -333,14 +334,13 @@ function checkAtomicStillUp() {
     return;
   }
 
-  const stillBound = !(site.status >= 300 && site.status < 400);
-  record(
-    stillBound ? FAIL : PASS,
-    'atomic-host-off',
-    stillBound
-      ? `${ATOMIC_HOST} still answers (HTTP ${site.status} from ${site.remoteIp}, control ${control.status}) — the install is reachable off-CDN`
-      : `${ATOMIC_HOST} behaves like an unbound host (HTTP ${site.status}, same as control)`,
-  );
+  // Only the unbound 3xx proves retirement, so every other state is a FAIL —
+  // but which state it is decides what to do about it, and the old wording
+  // ("the install is reachable off-CDN") asserted the one case we have never
+  // actually measured. ci/atomic-host-state.mjs classifies; the verdict here is
+  // unchanged.
+  const { retired, detail } = classifyAtomicHost({ site, control, host: ATOMIC_HOST });
+  record(retired ? PASS : FAIL, 'atomic-host-off', detail);
 }
 
 // The apex must stop serving the retired plugin's REST namespace. This is the
