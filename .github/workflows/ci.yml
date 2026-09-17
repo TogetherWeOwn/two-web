@@ -121,6 +121,16 @@ jobs:
       - name: Dusk suite-health self-test
         run: node ci/suite-health-selftest.mjs
 
+      # `atomic-host-off` in ci/cutover-check.mjs is the only automated evidence
+      # that the retired WordPress install is actually gone, and its PASS arm
+      # cannot be reached live until the day someone deletes the site — so live
+      # runs exercise the FAIL side only, and a broken PASS would surface on the
+      # one night it decides something. This drives every arm against the real
+      # pre-action capture and a synthetic unbound response. Pure function, no
+      # network, milliseconds.
+      - name: Atomic retirement gate self-test
+        run: node ci/atomic-host-state-selftest.mjs
+
       # The Dusk app, OAuth provider, bot stub and queue worker are separate
       # processes. This is the mutation control on their receipt gate: bypassing
       # OAuth or skipping the bot call must make the required browser job red.
