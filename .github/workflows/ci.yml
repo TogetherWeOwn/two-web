@@ -555,6 +555,26 @@ jobs:
           tools: composer:v2
           ini-values: opcache.enable=1, opcache.enable_cli=1, opcache.validate_timestamps=0
 
+      # setup-php's ini-values above land in the SHARED system PHP ini. On the
+      # persistent self-hosted host up to five runner processes share that one
+      # PHP install (see the port note near the top of this file), and a
+      # concurrent pest/dusk/static job's setup-php — none of which ask for
+      # opcache — rewrites that same shared cli ini and resets enable_cli to its
+      # 0 default. The guard below then reads a fresh `php -i` off the clobbered
+      # ini and hard-fails budgets for a race, not a regression: on TOG-3224 the
+      # identical main tree went red on 305bf47 and green on 33c17eb minutes
+      # apart. Re-pin the setting in a JOB-LOCAL scan dir the race cannot reach:
+      # $RUNNER_TEMP is private to this runner process, a leading ':' keeps the
+      # default conf.d (so setup-php's extensions still load), PHP scans our dir
+      # last so it wins, and the child `php -S` that `artisan serve` spawns
+      # inherits PHP_INI_SCAN_DIR from the env and reads it too.
+      - name: Pin opcache in a job-local ini scan dir (TOG-3224)
+        run: |
+          dir="$RUNNER_TEMP/php-budgets-conf.d"
+          mkdir -p "$dir"
+          printf 'opcache.enable=1\nopcache.enable_cli=1\nopcache.validate_timestamps=0\n' > "$dir/zz-opcache-budgets.ini"
+          echo "PHP_INI_SCAN_DIR=:$dir" >> "$GITHUB_ENV"
+
       - uses: actions/setup-node@v4
         with:
           node-version: ${{ env.NODE_VERSION }}
@@ -635,9 +655,13 @@ jobs:
           exit 1
 
       # Loud, permanent evidence for TOG-3310, not a one-off manual check: fails
-      # the job if opcache is ever off for this PHP (a runner image change, a
-      # setup-php default flip) instead of letting the ~200ms/request harness
-      # tax silently creep back into every gated page's TTFB budget.
+      # the job if opcache is ever off for this PHP instead of letting the
+      # ~200ms/request harness tax silently creep back into every gated page's
+      # TTFB budget. With the enable flags now pinned in a job-local scan dir
+      # (above), `php -i` inherits PHP_INI_SCAN_DIR and reads that pin, so this
+      # can no longer flap on a concurrent job's setup-php (TOG-3224). What it
+      # still catches: a runner image that drops the opcache extension entirely —
+      # then the pin has no module to enable and enable_cli stays off, red here.
       - name: Confirm opcache is active and measure /up
         run: |
           status="$(php -i | grep -E '^opcache\.(enable|enable_cli)\b')"
