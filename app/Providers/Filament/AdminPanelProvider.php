@@ -3,6 +3,7 @@
 namespace App\Providers\Filament;
 
 use App\Http\Middleware\RecordMemberDataAccess;
+use Filament\FontProviders\LocalFontProvider;
 use Filament\Http\Middleware\Authenticate;
 use Filament\Http\Middleware\AuthenticateSession;
 use Filament\Http\Middleware\DisableBladeIconComponents;
@@ -54,7 +55,7 @@ class AdminPanelProvider extends PanelProvider
             // that), so it renders in the system font stack instead: zero font
             // requests, no swap repaint, nothing left to compete with theme.css and
             // livewire.js for the budgets job's throttled bandwidth. See TOG-3332.
-            ->font('ui-sans-serif, system-ui, -apple-system, sans-serif', provider: \Filament\FontProviders\LocalFontProvider::class)
+            ->font('ui-sans-serif, system-ui, -apple-system, sans-serif', provider: LocalFontProvider::class)
             ->brandName('TWO Moderation')
             ->colors([
                 // --color-brand from resources/css/two.css. Filament wants a
