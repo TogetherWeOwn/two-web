@@ -125,7 +125,37 @@ done
 pass "cutover after-phase runs every Access-protected staging assertion"
 
 # ---------------------------------------------------------------------------
-# 7. The Atomic retirement gate reaches a verdict rather than sitting at UNKNOWN
+# 7. The atomic-host verdict and the sentence beside it say the same thing
+#
+# The classifier has its own offline selftest — 31 cases over a committed capture
+# of the live 403, including the PASS arm the live host has never produced and the
+# relaxation rejected on TOG-1269. Run it from here too, so the cutover gate's
+# network half cannot be trusted while the pure half beneath it has gone red.
+node ci/cutover-check.mjs --selftest >/dev/null 2>&1 \
+  || fail "node ci/cutover-check.mjs --selftest failed — the atomic-host classification cannot be trusted"
+pass "atomic-host classifier selftest passes"
+
+# And the same defect checked against the live world rather than the fixture.
+# `the install is reachable off-CDN` was printed for a 403 error page carrying no
+# install content for weeks (TOG-3178), because the predicate behind it was only
+# "not a 3xx". It may appear next to a 2xx and nowhere else. This stays true after
+# the site is retired, which is why it is phrased as an implication and not as an
+# expected verdict.
+atomic_line="$(grep -E 'atomic-host-off ' <<<"$after_out" | head -1)"
+[ -n "$atomic_line" ] \
+  || fail "'--phase after' emitted no atomic-host-off result — the Atomic hostname is no longer classified"
+pass "cutover after-phase classifies the Atomic hostname"
+
+if grep -q 'the install is reachable off-CDN' <<<"$atomic_line"; then
+  grep -qE 'HTTP 2[0-9][0-9] from' <<<"$atomic_line" \
+    || fail "atomic-host-off claims the install is reachable off-CDN without having measured a 2xx:${atomic_line}"
+  pass "the 'reachable off-CDN' claim is backed by a measured 2xx"
+else
+  pass "atomic-host-off makes no unbacked claim about a reachable install"
+fi
+
+# ---------------------------------------------------------------------------
+# 8. The Atomic retirement gate reaches a verdict rather than sitting at UNKNOWN
 #
 # atomic-host-off is the only automated evidence that the WordPress install is
 # actually retired, and TOG-1269's unblock test is "this line must PASS". It
@@ -142,4 +172,4 @@ grep -qE '(PASS|FAIL) +atomic-host-off' <<<"$after_out" \
   || fail "atomic-host-off reported no verdict — the wpcomstaging control no longer discriminates bound from unbound, so the retirement gate proves nothing: $(grep -E 'atomic-host-off' <<<"$after_out" || echo '<no line emitted>')"
 pass "atomic-host-off reaches a verdict (its unbound control still discriminates)"
 
-printf '\n9/9 ok\n'
+printf '\n12/12 ok\n'
