@@ -11,6 +11,21 @@
         'taste' => 'bg-taste-paper text-taste-ink ',
         default => '',
     };
+
+    // hallmark.css is the Hallmark concept's entire stylesheet and every rule in
+    // it is nested under `.hallmark-page`, which exists on exactly one route.
+    // Listing it unconditionally above put a second render-blocking stylesheet —
+    // 10.9KB raw, 2.7KB gzipped, plus its own request — in front of the paint on
+    // every public page, to style an element those pages do not have. On /events
+    // that is ~20% of the CSS the browser downloads and parses before it can
+    // render anything, spent on a `noindex` design lab (TOG-3233).
+    //
+    // Keyed off the scheme rather than a hand-passed list so a page cannot ask
+    // for the hallmark look and silently not get its stylesheet.
+    $styleBundles = array_merge(
+        ['resources/css/app.css'],
+        $schemeName === 'hallmark' ? ['resources/css/hallmark.css'] : [],
+    );
 @endphp
 <!DOCTYPE html>
 <html lang="en" class="{{ $lightScheme ? '' : 'dark ' }}h-full">
@@ -25,7 +40,7 @@
     {{-- Archivo is self-hosted and the headline uses its width axis. Without
          this the hero reflows on first paint and the join button moves. --}}
     <link rel="preload" href="/fonts/archivo-latin.woff2" as="font" type="font/woff2" crossorigin>
-    @vite(['resources/css/app.css', 'resources/css/hallmark.css', 'resources/js/app.js'])
+    @vite([...$styleBundles, 'resources/js/app.js'])
 </head>
 <body class="{{ $bodyScheme }}h-full">
     <a href="#main" class="sr-only focus:not-sr-only">Skip to content</a>
