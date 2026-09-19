@@ -7,9 +7,12 @@
  * string we send is pinned by a test rather than by a line in an environment
  * file somebody has to remember to set correctly.
  *
- * These are the *login* URIs registered on the OAuth application (added by the
- * founder, 2026-08-20). Six rows were registered in total: these three, plus
- * /join/callback on the same three origins, which belongs to the one-click join
+ * These are the *login* URIs registered on the OAuth application. The first
+ * three were added by the founder (2026-08-20); the production apex row was
+ * added by the operator (2026-09-19, TOG-3402) after production login stopped
+ * at Discord's "Invalid OAuth2 URL" screen — the apex callback had never been
+ * registered. Eight rows are registered in total: these four *login* URIs, plus
+ * /join/callback on the same four origins, which belongs to the one-click join
  * journey and not to this file. Do not delete the /join rows as strays.
  *
  * They cannot be read back from Discord — a registered URI and a bogus one are
@@ -23,6 +26,7 @@ const REGISTERED_REDIRECT_URIS = [
     'http://localhost:8000/auth/discord/callback',
     'http://127.0.0.1:8000/auth/discord/callback',
     'https://staging.togetherweown.com/auth/discord/callback',
+    'https://togetherweown.com/auth/discord/callback',
 ];
 
 /**
@@ -55,6 +59,17 @@ it('says https behind nginx, even though the request reaches PHP as plain http',
     // failure that only appears once the site is behind a real certificate.
     expect(redirectUriSentAt('http://staging.togetherweown.com/auth/discord/redirect', 'https'))
         ->toBe('https://staging.togetherweown.com/auth/discord/callback')
+        ->toBeIn(REGISTERED_REDIRECT_URIS);
+});
+
+it('says https behind nginx for the production apex too', function () {
+    // Production terminates TLS at nginx exactly as staging does. The apex
+    // callback was absent from Discord's registered list until 2026-09-19
+    // (TOG-3402), so every production member hit "Invalid OAuth2 URL". Now that
+    // the operator has registered it, pin the apex URI so the app and Discord
+    // cannot drift apart again.
+    expect(redirectUriSentAt('http://togetherweown.com/auth/discord/redirect', 'https'))
+        ->toBe('https://togetherweown.com/auth/discord/callback')
         ->toBeIn(REGISTERED_REDIRECT_URIS);
 });
 
