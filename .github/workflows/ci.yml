@@ -539,12 +539,21 @@ jobs:
       - name: Attest the runner
         run: ./ci/attest-runner.sh
 
+      # This job's PHP is only ever exec'd by `artisan serve` below, a plain
+      # `php -S` loop that re-bootstraps the whole Laravel framework on every
+      # request. The CLI SAPI ships with opcache off by default
+      # (opcache.enable_cli=0), so that bootstrap gets recompiled from source on
+      # every single Lighthouse request instead of once — a fixed ~200ms harness
+      # tax on every gated page's TTFB that no user or production host ever pays
+      # (TOG-3310). validate_timestamps=0 is safe because nothing touches the
+      # checked-out PHP files between here and the server shutting down.
       - uses: shivammathur/setup-php@v2
         with:
           php-version: ${{ env.PHP_VERSION }}
-          extensions: pdo_pgsql, intl, bcmath
+          extensions: pdo_pgsql, intl, bcmath, opcache
           coverage: none
           tools: composer:v2
+          ini-values: opcache.enable=1, opcache.enable_cli=1, opcache.validate_timestamps=0
 
       - uses: actions/setup-node@v4
         with:
@@ -624,6 +633,19 @@ jobs:
           echo "::error::the application never answered /up — budgets could not be measured"
           cat storage/logs/serve.log storage/logs/proxy.log
           exit 1
+
+      # Loud, permanent evidence for TOG-3310, not a one-off manual check: fails
+      # the job if opcache is ever off for this PHP (a runner image change, a
+      # setup-php default flip) instead of letting the ~200ms/request harness
+      # tax silently creep back into every gated page's TTFB budget.
+      - name: Confirm opcache is active and measure /up
+        run: |
+          status="$(php -i | grep -E '^opcache\.(enable|enable_cli)\b')"
+          echo "$status"
+          echo "$status" | grep -q '^opcache.enable => On' || { echo "::error::opcache.enable is not On for this job's PHP — the TOG-3310 harness tax is back"; exit 1; }
+          echo "$status" | grep -q '^opcache.enable_cli => On' || { echo "::error::opcache.enable_cli is not On — artisan serve won't opcode-cache across requests (TOG-3310)"; exit 1; }
+          up_s="$(curl -sS -o /dev/null -w '%{time_total}' "${CI_BASE_URL}/up")"
+          echo "/up responded in ${up_s}s"
 
       # Proves the front-end is actually compressing before anything is measured.
       # Without this a proxy that quietly fell back to passthrough would just look
