@@ -34,6 +34,38 @@ if (!resultsFile) {
 const results = JSON.parse(readFileSync(`${DIR}/${resultsFile}`, 'utf8'));
 const breached = results.filter((r) => !r.passed);
 
+// The per-run numbers behind an aggregate, and how far apart they were.
+//
+// lhci already records every sample on the assertion as `values` (see
+// @lhci/utils/src/assertions.js — `values: filteredValues`), and this script used
+// to print only the median. That is the difference between a red that can be
+// acted on and one that cannot: "LCP 2114 exceeds 2000" is equally consistent
+// with a byte regression and with a contended runner, and the two want opposite
+// responses. The samples tell them apart, and we already have them.
+//
+// Measured on TOG-3224: the same fixed-weight page medians ±8.2% on an idle host
+// and ±20.1% on one under CPU contention (17 runs each). A breach whose own
+// samples are spread that wide is a measurement taken on a busy host, not a page
+// that got heavier.
+const spreadOf = (values) => {
+  if (!Array.isArray(values) || values.length < 2) return null;
+  const nums = values.filter((v) => typeof v === 'number' && Number.isFinite(v));
+  if (nums.length < 2) return null;
+  const mean = nums.reduce((a, b) => a + b, 0) / nums.length;
+  if (mean === 0) return null;
+  return { nums, pct: ((Math.max(...nums) - Math.min(...nums)) / 2 / mean) * 100 };
+};
+
+// Rounded to the precision the budget is written in: ms budgets are integers,
+// CLS is a fraction and rounding it to 0 would hide the whole number.
+const fmt = (v) => (Math.abs(v) >= 10 ? String(Math.round(v)) : String(Number(v.toFixed(3))));
+
+const samplesNote = (r) => {
+  const s = spreadOf(r.values);
+  if (!s) return r.auditProperty ?? 'median of 3 runs';
+  return `median of ${s.nums.length} runs: ${s.nums.map(fmt).join(', ')} — spread ±${s.pct.toFixed(1)}%`;
+};
+
 // `level` decides the verdict, and it has to, because ci/lighthouserc.cjs writes
 // two kinds of budget and means the difference. `largest-contentful-paint`,
 // `cumulative-layout-shift` and `server-response-time` are `['error', ...]` — the
@@ -51,18 +83,19 @@ const breached = results.filter((r) => !r.passed);
 const failures = breached.filter((r) => r.level === 'error');
 const warnings = breached.filter((r) => r.level !== 'error');
 
-if (breached.length === 0) {
-  console.log('Every performance assertion passed.');
-  process.exit(0);
-}
-
+// An all-green job used to return here, before anything read the reports. That
+// cost the one reading that tells a real green from a vacuous one: the host
+// speed. A green measured on a badly contended runner is the same coin flip as a
+// red measured on one — it just landed the other way — and with no baseline from
+// passing runs there is nothing to calibrate a contended run against. So the
+// reports are scanned first now, and the verdict is decided at the bottom.
 for (const f of failures) {
   // `actual` and `expected` are the numbers the budget is written in — ms for the
   // paint timings, unitless for CLS — so they are reported raw rather than
   // reformatted into something that no longer matches ci/lighthouserc.cjs.
   console.error(
     `::error::${f.auditId} on ${f.url} — ${f.actual} exceeds the budget of ${f.expected} ` +
-      `(${f.level}, ${f.auditProperty ?? 'median of 3 runs'}). ` +
+      `(${f.level}, ${samplesNote(f)}). ` +
       'Budgets are set in ci/lighthouserc.cjs and lowering one is a CEO decision in writing.'
   );
 }
@@ -73,7 +106,7 @@ for (const f of failures) {
 for (const w of warnings) {
   console.error(
     `::error::TRIPWIRE, NOT A FAILURE — ${w.auditId} on ${w.url} — ${w.actual} exceeds ` +
-      `its early-warning threshold of ${w.expected} (${w.level}, ${w.auditProperty ?? 'median of 3 runs'}). ` +
+      `its early-warning threshold of ${w.expected} (${w.level}, ${samplesNote(w)}). ` +
       'This does not fail the build. It is the number that moves first when a page starts getting slower.'
   );
 }
@@ -103,6 +136,21 @@ const median = (xs) => {
 const byUrl = new Map();
 const lcpElement = new Map();
 const longTasks = new Map();
+
+// How fast the host actually was while it measured.
+//
+// Lighthouse runs its own CPU benchmark on every run and reports it as
+// `environment.benchmarkIndex`. Under `throttlingMethod: 'simulate'` the paint
+// timings are rebuilt by Lantern from observed main-thread task durations, so a
+// contended host inflates them — LCP is not insulated from the runner's load, it
+// is a function of it.
+//
+// Measured on TOG-3224, same page and same settings: benchmarkIndex 1431-1759 on
+// an idle host and 891-1500 with six competing CPU hogs, while the LCP spread
+// went from ±8.2% to ±20.1%. `budgets` shares a host with `pest`, `dusk` and
+// two-bot's service containers, so this number is the difference between "the
+// page regressed" and "the box was busy" — and without it nobody can tell.
+const benchmarks = [];
 for (const file of readdirSync(DIR).filter((f) => /^lhr-.*\.json$/.test(f))) {
   let lhr;
   try {
@@ -110,6 +158,11 @@ for (const file of readdirSync(DIR).filter((f) => /^lhr-.*\.json$/.test(f))) {
   } catch {
     continue; // a half-written report is not worth failing the annotate step over
   }
+  // Collected before the `url` guard: a run whose URL we cannot name still
+  // measured the host, and the host reading is per-runner, not per-page.
+  const bi = lhr.environment?.benchmarkIndex;
+  if (typeof bi === 'number' && Number.isFinite(bi)) benchmarks.push(bi);
+
   const url = lhr.finalDisplayedUrl ?? lhr.finalUrl ?? lhr.requestedUrl;
   if (!url) continue;
   if (!byUrl.has(url)) byUrl.set(url, new Map());
@@ -149,7 +202,11 @@ for (const file of readdirSync(DIR).filter((f) => /^lhr-.*\.json$/.test(f))) {
 // is written to the log and does not appear there, which would put this line back
 // in the artifact this script exists to avoid needing. The wording says plainly
 // that nothing here breached.
-for (const [url, audits] of byUrl) {
+//
+// Only when something breached. These lines exist to give a breach something to
+// be read against; emitting four of them on every green build would spend the
+// reader's attention on runs that need none.
+for (const [url, audits] of breached.length ? byUrl : []) {
   const parts = [...audits].map(([id, vals]) => `${id} ${Math.round(median(vals))}`);
   console.error(`::error::CONTEXT, NOT A FAILURE — measured on ${url} (median of ${
     audits.values().next().value?.length ?? 0
@@ -162,6 +219,23 @@ for (const [url, audits] of byUrl) {
   if (el) console.error(`::error::CONTEXT, NOT A FAILURE — LCP element on ${url}: ${el}`);
   const chain = longTasks.get(url);
   if (chain) console.error(`::error::CONTEXT, NOT A FAILURE — slowest resources on ${url}: ${chain}`);
+}
+
+// One line per job, not per URL: every run on this job shared one host.
+if (benchmarks.length) {
+  const bi = Math.round(median(benchmarks));
+  console.error(
+    `::error::CONTEXT, NOT A FAILURE — host speed while measuring: benchmarkIndex ` +
+      `${bi} (median of ${benchmarks.length} runs, range ${Math.round(Math.min(...benchmarks))}–${Math.round(
+        Math.max(...benchmarks)
+      )}). Lower means a busier runner. These timings are wall-clock on a host shared with pest, dusk ` +
+      'and two-bot, so read a breach against the spread above before hunting for bytes (TOG-3224).'
+  );
+}
+
+if (breached.length === 0) {
+  console.log('Every performance assertion passed.');
+  process.exit(0);
 }
 
 if (failures.length === 0) {
