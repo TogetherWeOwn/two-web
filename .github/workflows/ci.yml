@@ -517,10 +517,14 @@ jobs:
       - name: Attest the runner
         run: ./ci/attest-runner.sh
 
+      # opcache + ini-values are scoped to this job only (TOG-3310). `pest`/`dusk`
+      # boot Laravel once per test process via phpunit/Dusk's own bootstrap, not
+      # per HTTP request, so they do not pay the tax this fixes and are untouched.
       - uses: shivammathur/setup-php@v2
         with:
           php-version: ${{ env.PHP_VERSION }}
-          extensions: pdo_pgsql, intl, bcmath
+          extensions: pdo_pgsql, intl, bcmath, opcache
+          ini-values: opcache.enable_cli=1, opcache.enable=1, opcache.validate_timestamps=0
           coverage: none
           tools: composer:v2
 
@@ -602,6 +606,16 @@ jobs:
           echo "::error::the application never answered /up — budgets could not be measured"
           cat storage/logs/serve.log storage/logs/proxy.log
           exit 1
+
+      # Evidence for TOG-3310, not a gate: the readiness loop above already sent
+      # `/up` at least once, so this is opcache-warm by construction. Printed so a
+      # regression in the fixed per-request tax is visible in the job log without
+      # downloading the Lighthouse artifact.
+      - name: Report warm /up latency (TOG-3310)
+        run: |
+          for i in 1 2 3 4 5; do
+            curl -o /dev/null -s -w '/up warm request: %{time_total}s\n' "${CI_BASE_URL}/up"
+          done
 
       # Proves the front-end is actually compressing before anything is measured.
       # Without this a proxy that quietly fell back to passthrough would just look
