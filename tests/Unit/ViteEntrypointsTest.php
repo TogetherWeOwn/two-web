@@ -32,16 +32,37 @@ function viteDirectiveEntrypoints(): array
         $relative = str_replace(base_path().'/', '', $file->getPathname());
 
         // Both spellings the directive accepts: a bare string or an array.
-        if (! preg_match_all('/@vite\(\s*(\[[^\]]*\]|[\'"][^\'"]*[\'"])/', $contents, $matches)) {
-            continue;
+        if (preg_match_all('/@vite\(\s*(\[[^\]]*\]|[\'"][^\'"]*[\'"])/', $contents, $matches)) {
+            foreach ($matches[1] as $argument) {
+                preg_match_all('/[\'"]([^\'"]+)[\'"]/', $argument, $entries);
+
+                foreach ($entries[1] as $entry) {
+                    $found[$relative][] = $entry;
+                }
+            }
         }
 
-        foreach ($matches[1] as $argument) {
-            preg_match_all('/[\'"]([^\'"]+)[\'"]/', $argument, $entries);
+        // The directive does not have to be handed a literal. The app layout builds
+        // its stylesheet list in an @php block and splats it, and the pattern above
+        // sees `[...$styleBundles, 'resources/js/app.js']` — one entry, both CSS
+        // entrypoints invisible. That is this guard going vacuous by indirection
+        // rather than by typo, which is the harder failure to notice (TOG-3233).
+        //
+        // So also treat any `resources/<css|js>/…` literal anywhere in the file as
+        // an entrypoint claim. It over-collects by design: a path that is spelled
+        // like an entrypoint and is not one is still something vite.config.js
+        // should be able to account for.
+        preg_match_all('#[\'"](resources/(?:css|js)/[^\'"]+\.(?:css|js))[\'"]#', $contents, $literals);
 
-            foreach ($entries[1] as $entry) {
-                $found[$relative][] = $entry;
-            }
+        foreach ($literals[1] as $entry) {
+            $found[$relative][] = $entry;
+        }
+
+        // Only files that actually named something get a key: the vacuity fence in
+        // the first test asserts this array is not empty, so seeding a key for every
+        // Blade file would defeat it.
+        if (isset($found[$relative])) {
+            $found[$relative] = array_values(array_unique($found[$relative]));
         }
     }
 
