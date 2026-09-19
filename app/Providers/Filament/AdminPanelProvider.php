@@ -3,6 +3,7 @@
 namespace App\Providers\Filament;
 
 use App\Http\Middleware\RecordMemberDataAccess;
+use Filament\FontProviders\LocalFontProvider;
 use Filament\Http\Middleware\Authenticate;
 use Filament\Http\Middleware\AuthenticateSession;
 use Filament\Http\Middleware\DisableBladeIconComponents;
@@ -45,6 +46,16 @@ class AdminPanelProvider extends PanelProvider
             ->id('admin')
             ->path('admin')
             ->viteTheme('resources/css/filament/admin/theme.css')
+            // Dropping only the <link rel=preload> left the Inter Variable @font-face
+            // (and its 68KB woff2) still discovered via theme.css and fetched anyway —
+            // font-display:swap doesn't block first paint, but Lighthouse's LCP audit
+            // still counts the later swap repaint as the final candidate, so the
+            // request stayed on the critical path regardless of preload. This panel is
+            // internal moderator tooling, not the branded public site (two.css owns
+            // that), so it renders in the system font stack instead: zero font
+            // requests, no swap repaint, nothing left to compete with theme.css and
+            // livewire.js for the budgets job's throttled bandwidth. See TOG-3332.
+            ->font('ui-sans-serif, system-ui, -apple-system, sans-serif', provider: LocalFontProvider::class)
             ->brandName('TWO Moderation')
             ->colors([
                 // --color-brand from resources/css/two.css. Filament wants a
