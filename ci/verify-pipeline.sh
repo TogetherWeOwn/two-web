@@ -449,8 +449,8 @@ lint() {
     rc=1
   elif ! command -v node >/dev/null 2>&1; then
     # Red, not skipped. A budget check that cannot run is a budget that is not
-    # enforced, and it should look like one. node is on ubuntu-24.04 before
-    # `setup-node` runs, which is where `--lint` already sits in `static`.
+    # enforced, and it should look like one. The runners have node preinstalled,
+    # before `setup-node` runs, which is where `--lint` already sits in `static`.
     fail "node is not on PATH, so the budgets in ${budget_file} cannot be read as lhci reads them"
     rc=1
   else
@@ -619,9 +619,9 @@ lint() {
     rc=1
   elif ! command -v python3 >/dev/null 2>&1; then
     # Red, not skipped — same rule as check 10. A config check that cannot run is
-    # a config that is not checked, and it should look like one. python3 is on
-    # ubuntu-24.04 (3.12), and `tomllib` has been in the standard library since
-    # 3.11, so this needs no install step in the `static` job where `--lint` runs.
+    # a config that is not checked, and it should look like one. The runners are
+    # Ubuntu 24.04 and carry python3, and `tomllib` has been in the standard
+    # library since 3.11, so `static` needs no install step for this.
     fail "python3 is not on PATH, so ${gitleaks_file} cannot be read as gitleaks reads it"
     rc=1
   else
