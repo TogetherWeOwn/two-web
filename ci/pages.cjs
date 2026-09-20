@@ -46,6 +46,11 @@ const allPages = [
     name: 'Moderator panel — the featured content a moderator edits',
     auth: true,
   },
+  {
+    path: '/admin/bot-settings',
+    name: 'Moderator panel — onboarding and automod bot settings',
+    auth: true,
+  },
 ];
 
 /**

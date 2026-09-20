@@ -12,6 +12,7 @@ use App\Services\Bot\InternalActionClient;
 use App\Services\Bot\InternalActionFailure;
 use App\Services\Bot\RoleAssignment;
 use App\Services\Bot\RoleAssignResult;
+use App\Services\Bot\SettingWriteResult;
 use Illuminate\Console\Command;
 use Illuminate\Support\Str;
 use Throwable;
@@ -171,7 +172,7 @@ class BotInternalActionSmoke extends Command
     }
 
     /** Run one action through the shipped job, on a fresh job instance. */
-    private function queued(RoleAssignment|Announcement $action): RoleAssignResult|AnnouncementResult|InternalActionFailure|null
+    private function queued(RoleAssignment|Announcement $action): RoleAssignResult|AnnouncementResult|SettingWriteResult|InternalActionFailure|null
     {
         return $this->runJob(new CallInternalAction($action));
     }
@@ -186,7 +187,7 @@ class BotInternalActionSmoke extends Command
      * asserted properly. No retries here either: a check that only passes on the
      * third attempt has not passed.
      */
-    private function runJob(CallInternalAction $job): RoleAssignResult|AnnouncementResult|InternalActionFailure|null
+    private function runJob(CallInternalAction $job): RoleAssignResult|AnnouncementResult|SettingWriteResult|InternalActionFailure|null
     {
         return $this->attempt(function () use ($job) {
             $job->handle(app(InternalActionClient::class));

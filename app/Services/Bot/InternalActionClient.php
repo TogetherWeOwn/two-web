@@ -28,15 +28,16 @@ use Throwable;
  * Wire format: two-bot `docs/INTERNAL_ACTIONS.md`, v0.4. v0.4 changed neither
  * the wire format nor the allowlist, so v0.3's rules below still stand verbatim.
  *
- * ## The four live actions
+ * ## The six live actions
  *
  * One public method each, and the signature carries §3's *needs key* column
  * rather than a runtime flag:
  *
- * - `assignRole()` and `addMember()` take **no** idempotency key. Both actions
- *   are naturally idempotent at Discord.
- * - `postAnnouncement()` and `upsertEvent()` **require** one. A repeat without a
- *   key posts a second message or creates a second event.
+ * - `assignRole()`, `addMember()` and `getSetting()` take **no** idempotency key.
+ *   They are naturally idempotent.
+ * - `postAnnouncement()`, `upsertEvent()` and `setSetting()` **require** one. A
+ *   repeated settings write would create a second audit row and can revert a
+ *   concurrent save, so it belongs on the same durable path as other writes.
  *
  * `addMember()` is the deliberate synchronous exception to the queued rule. It
  * receives a live member OAuth token which must never enter a queue payload,
@@ -61,8 +62,8 @@ use Throwable;
  *
  * Three outcomes, and the type says which:
  *
- * - a result object — `RoleAssignResult`, `AnnouncementResult` or
- *   `EventUpsertResult` — it worked.
+ * - a result object — `RoleAssignResult`, `AnnouncementResult`,
+ *   `EventUpsertResult`, `SettingReadResult` or `SettingWriteResult` — it worked.
  * - `InternalActionFailure` — the bot answered no. Branch on `retryable`, never
  *   on the status: `in_progress` and `replayed` are both 409 and disagree.
  * - a thrown exception — we could not ask (`BotNotConfiguredException`, terminal)
@@ -181,6 +182,93 @@ final readonly class InternalActionClient
         }
 
         return AddMemberResult::succeeded($outcome, $this->requestId($body));
+    }
+
+    /**
+     * Read one stored bot setting.
+     *
+     * The bot deliberately does not read through to the environment. `unset`
+     * means the environment is the fallback, not that its value was disclosed.
+     *
+     * @throws BotNotConfiguredException when there is no url, secret or key id
+     * @throws BotTransportException when the bot did not answer the contract
+     */
+    public function getSetting(SettingRead $setting): SettingReadResult|InternalActionFailure
+    {
+        $answer = $this->send($setting->toPayload(), null);
+
+        if ($answer instanceof InternalActionFailure) {
+            return $answer;
+        }
+
+        [$body, $status] = $answer;
+        $result = $this->resultObject($body, $status);
+        $source = SettingSource::tryFrom(is_string($result['source'] ?? null) ? $result['source'] : '');
+
+        if (! is_string($result['key'] ?? null) || $result['key'] !== $setting->key || $source === null) {
+            throw BotTransportException::unreadable('a settings.get result with a mismatched key or unknown source', $status);
+        }
+
+        if (! array_key_exists('value', $result)) {
+            throw BotTransportException::unreadable('a settings.get result with no value field', $status);
+        }
+
+        if ($source === SettingSource::Unset && $result['value'] !== null) {
+            throw BotTransportException::unreadable('an unset settings.get result with a non-null value', $status);
+        }
+
+        if ($source === SettingSource::Store && $result['value'] === null) {
+            throw BotTransportException::unreadable('a stored settings.get result with a null value', $status);
+        }
+
+        return new SettingReadResult(
+            requestId: $this->requestId($body),
+            key: $result['key'],
+            value: $result['value'],
+            source: $source,
+        );
+    }
+
+    /**
+     * Save or remove one stored bot setting.
+     *
+     * @param  string  $idempotencyKey  One key for this logical mutation, reused
+     *                                  for every retry of it.
+     *
+     * @throws BotNotConfiguredException when there is no url, secret or key id
+     * @throws BotTransportException when the bot did not answer the contract
+     * @throws InvalidActionRequestException when the idempotency key is not a UUID
+     */
+    public function setSetting(SettingMutation $setting, string $idempotencyKey): SettingWriteResult|InternalActionFailure
+    {
+        $answer = $this->send($setting->toPayload(), $idempotencyKey);
+
+        if ($answer instanceof InternalActionFailure) {
+            return $answer;
+        }
+
+        [$body, $status, $replayed] = $answer;
+        $result = $this->resultObject($body, $status);
+        $outcome = SettingWriteOutcome::tryFrom(is_string($result['outcome'] ?? null) ? $result['outcome'] : '');
+
+        if (! is_string($result['key'] ?? null) || $result['key'] !== $setting->key || $outcome === null) {
+            throw BotTransportException::unreadable('a settings.set result with a mismatched key or unknown outcome', $status);
+        }
+
+        $expectedOutcome = $setting->value === null
+            ? SettingWriteOutcome::Unset
+            : SettingWriteOutcome::Saved;
+
+        if ($outcome !== $expectedOutcome) {
+            throw BotTransportException::unreadable('a settings.set outcome that contradicts the requested mutation', $status);
+        }
+
+        return new SettingWriteResult(
+            requestId: $this->requestId($body),
+            key: $result['key'],
+            outcome: $outcome,
+            replayed: $replayed,
+        );
     }
 
     /**

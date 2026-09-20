@@ -11,6 +11,8 @@ use App\Services\Bot\InternalActionClient;
 use App\Services\Bot\InternalActionFailure;
 use App\Services\Bot\RoleAssignment;
 use App\Services\Bot\RoleAssignResult;
+use App\Services\Bot\SettingMutation;
+use App\Services\Bot\SettingWriteResult;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Queue\Queueable;
 use Illuminate\Support\Facades\Log;
@@ -18,7 +20,7 @@ use RuntimeException;
 use Throwable;
 
 /**
- * Calls `role.assign` or `announcement.post` on the bot, durably (TOG-470).
+ * Calls `role.assign`, `announcement.post` or `settings.set` on the bot, durably.
  *
  * `docs/INTERNAL_ACTIONS.md` §5 sets the convention: **the website queues a job,
  * the job calls us.** A queue gives durable retries, which is what an
@@ -44,13 +46,14 @@ use Throwable;
  * - The **key** is generated here, so it is serialised into the queue payload.
  *   Every retry of *this job instance* — Laravel's, or a `release()` below —
  *   carries the same key, and the bot answers the second attempt from its
- *   idempotency store instead of posting a second announcement.
+ *   idempotency store instead of repeating the announcement or settings write.
  * - The **nonce** is minted inside the client, per attempt, so it is always
  *   fresh. Reusing one is a `409 replayed` that never becomes anything else.
  *
- * The corollary is the thing that looks like a bug and is not: dispatching this
- * job a second time is a *new* operation with a *new* key, and the bot will act
- * on it. Two dispatches means two announcements, by design.
+ * The corollary is the thing that looks like a bug and is not: constructing
+ * this job a second time normally creates a *new* operation with a *new* key,
+ * and the bot will act on it. The one exception is an explicit reconstruction
+ * with the prior key after an uncertain synchronous response.
  *
  * A `role.assign` gets no key at all. Its idempotency is natural (§3) and the
  * client refuses to send a key for it, so a retry simply asks again and comes
@@ -93,21 +96,38 @@ class CallInternalAction implements ShouldQueue
      * queue this is not read: `release()` and `fail()` are how a worker learns
      * what happened.
      */
-    public RoleAssignResult|AnnouncementResult|InternalActionFailure|null $lastResult = null;
+    public RoleAssignResult|AnnouncementResult|SettingWriteResult|InternalActionFailure|null $lastResult = null;
 
-    public function __construct(public readonly RoleAssignment|Announcement $action)
-    {
+    public function __construct(
+        public readonly RoleAssignment|Announcement|SettingMutation $action,
+        ?string $idempotencyKey = null,
+    ) {
         // Typed, not flagged: the value object decides whether §3 calls this
         // action *needs key*, so no caller has to remember which is which.
-        $this->idempotencyKey = $action instanceof Announcement
-            ? InternalActionClient::newIdempotencyKey()
-            : null;
+        if ($action instanceof RoleAssignment) {
+            if ($idempotencyKey !== null) {
+                throw new InvalidActionRequestException('A naturally idempotent role.assign must not carry an idempotency key.');
+            }
+
+            $this->idempotencyKey = null;
+
+            return;
+        }
+
+        // A synchronous caller can preserve the operation key after an uncertain
+        // response and reconstruct this job for a safe retry. The client validates
+        // supplied keys before any request is sent.
+        $this->idempotencyKey = $idempotencyKey ?? InternalActionClient::newIdempotencyKey();
     }
 
     /** The action name as it goes on the wire, for logs and `failed_jobs`. */
     public function actionName(): string
     {
-        return $this->action instanceof Announcement ? 'announcement.post' : 'role.assign';
+        return match (true) {
+            $this->action instanceof Announcement => 'announcement.post',
+            $this->action instanceof SettingMutation => 'settings.set',
+            default => 'role.assign',
+        };
     }
 
     public function displayName(): string
@@ -118,7 +138,7 @@ class CallInternalAction implements ShouldQueue
     public function handle(InternalActionClient $bot): void
     {
         try {
-            $answer = $this->call($bot);
+            $answer = $this->runInline($bot);
         } catch (BotTransportException $e) {
             // We could not ask. Nothing has happened at Discord, so this is a
             // wait rather than a failure — the bot-is-down path, which must
@@ -142,29 +162,45 @@ class CallInternalAction implements ShouldQueue
             return;
         }
 
+        if ($answer instanceof InternalActionFailure) {
+            $this->handleRefusal($answer);
+        }
+    }
+
+    /**
+     * Make the job's single attempt in a request that needs the typed answer.
+     *
+     * This keeps synchronous admin writes on the same idempotency-owning path as
+     * queued work. It deliberately does not retry: the caller must present the
+     * refusal or transport failure rather than hiding a second request inside the
+     * browser response.
+     */
+    public function runInline(InternalActionClient $bot): RoleAssignResult|AnnouncementResult|SettingWriteResult|InternalActionFailure
+    {
+        $answer = $this->call($bot);
         $this->lastResult = $answer;
 
         if (! $answer instanceof InternalActionFailure) {
             $this->recordSuccess($answer);
-
-            return;
         }
 
-        $this->handleRefusal($answer);
+        return $answer;
     }
 
-    private function call(InternalActionClient $bot): RoleAssignResult|AnnouncementResult|InternalActionFailure
+    private function call(InternalActionClient $bot): RoleAssignResult|AnnouncementResult|SettingWriteResult|InternalActionFailure
     {
         if ($this->action instanceof Announcement) {
-            // Non-null by construction: the constructor mints a key for exactly
-            // this branch.
             return $bot->postAnnouncement($this->action, (string) $this->idempotencyKey);
+        }
+
+        if ($this->action instanceof SettingMutation) {
+            return $bot->setSetting($this->action, (string) $this->idempotencyKey);
         }
 
         return $bot->assignRole($this->action);
     }
 
-    private function recordSuccess(RoleAssignResult|AnnouncementResult $result): void
+    private function recordSuccess(RoleAssignResult|AnnouncementResult|SettingWriteResult $result): void
     {
         $context = [
             'action' => $this->actionName(),
@@ -178,6 +214,15 @@ class CallInternalAction implements ShouldQueue
             // "posted" and "already posted" when somebody later asks why the
             // timestamps do not line up.
             $context += ['message_id' => $result->messageId, 'replayed' => $result->replayed];
+        } elseif ($result instanceof SettingWriteResult) {
+            // Values can contain moderation vocabulary or channel configuration;
+            // neither belongs in logs. The key, outcome and replay state are
+            // enough to join this line to the bot's append-only audit row.
+            $context += [
+                'setting_key' => $result->key,
+                'outcome' => $result->outcome->value,
+                'replayed' => $result->replayed,
+            ];
         } else {
             $context += ['outcome' => $result->outcome->value];
         }

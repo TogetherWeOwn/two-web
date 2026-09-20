@@ -26,6 +26,8 @@
  * changes a token would otherwise leave our copy silently behind.
  */
 
+use App\Filament\Pages\BotSettings;
+use App\Filament\Pages\Schemas\BotSettingsForm;
 use App\Filament\Resources\Events\EventResource;
 use App\Filament\Resources\Events\Pages\CreateEvent;
 use App\Filament\Resources\Events\Pages\ListEvents;
@@ -36,6 +38,7 @@ use Filament\Actions\Action;
 use Filament\Actions\DeleteAction;
 use Filament\Actions\EditAction;
 use Filament\Forms\Components\DateTimePicker;
+use Filament\Forms\Components\Field;
 use Filament\Forms\Components\Select;
 use Filament\Forms\Components\Textarea;
 use Filament\Forms\Components\TextInput;
@@ -90,6 +93,14 @@ function declaredComponentClasses(): array
         );
 
         foreach ($declared as $component) {
+            $classes[] = $component::class;
+        }
+    }
+
+    $botSettings = BotSettingsForm::configure(new Schema(Livewire::new(BotSettings::class)));
+
+    foreach ($botSettings->getFlatComponents() as $component) {
+        if ($component instanceof Field) {
             $classes[] = $component::class;
         }
     }
