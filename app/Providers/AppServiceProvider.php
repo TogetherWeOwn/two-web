@@ -5,6 +5,7 @@ namespace App\Providers;
 use App\Models\Profile;
 use App\Models\User;
 use App\Services\Bot\InternalActionClient;
+use App\Services\Paperclip\RestartCardClient;
 use App\Support\Counts\CountsReader;
 use App\Support\Counts\CountsSource;
 use App\Support\MemberDataAccess\AccessRecorder;
@@ -55,6 +56,22 @@ class AppServiceProvider extends ServiceProvider
             secret: $this->stringConfig('services.bot.secret'),
             keyId: $this->stringConfig('services.bot.key_id'),
             timeoutSeconds: (int) config('services.bot.timeout', 5),
+        ));
+
+        // The board-write seam for cold-setting restart cards (TOG-3537). Bound,
+        // not shared, for the same reason as the bot client: it reads config at
+        // resolve time and holds no state, so a singleton would only risk a stale
+        // token surviving a config change. Every value is passed in, including
+        // the missing ones — the client decides that a blank value is a
+        // PaperclipNotConfiguredException, which is what makes the filer fail
+        // closed rather than failing at container resolution.
+        $this->app->bind(RestartCardClient::class, fn (Application $app): RestartCardClient => new RestartCardClient(
+            url: $this->stringConfig('services.paperclip.url'),
+            token: $this->stringConfig('services.paperclip.token'),
+            companyId: $this->stringConfig('services.paperclip.company_id'),
+            operatorLabelId: $this->stringConfig('services.paperclip.operator_label_id'),
+            operatorAssigneeUserId: $this->stringConfig('services.paperclip.operator_assignee_user_id'),
+            timeoutSeconds: (int) config('services.paperclip.timeout', 5),
         ));
     }
 
