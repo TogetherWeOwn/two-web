@@ -133,4 +133,30 @@ return [
         'timeout' => (int) env('BOT_TIMEOUT_SECONDS', 5),
     ],
 
+    /*
+     | The Paperclip control-plane, for filing an operator restart card when a
+     | cold bot setting changes (TOG-3537). See docs/cold-setting-restart-cards.md
+     | for the decision record and App\Services\Paperclip\RestartCardClient for
+     | the mechanism.
+     |
+     | Server-only, and the token can write to the board — so it follows every
+     | rule BOT_SHARED_SECRET above does: never committed, never rendered, never
+     | sent to the browser, never logged. Any missing value makes the client fail
+     | closed (PaperclipNotConfiguredException), which is what keeps cold settings
+     | read-only until the token is provisioned (the operator card, TOG-3573).
+     */
+    'paperclip' => [
+        'url' => env('PAPERCLIP_API_URL'),
+        'token' => env('PAPERCLIP_API_TOKEN'),
+        'company_id' => env('PAPERCLIP_COMPANY_ID'),
+
+        // The API takes labelIds, not names, so this is the UUID of the `operator`
+        // label, and the owner/operator user the card is assigned to. Both are
+        // pinned by the provisioning card (TOG-3573).
+        'operator_label_id' => env('PAPERCLIP_OPERATOR_LABEL_ID'),
+        'operator_assignee_user_id' => env('PAPERCLIP_OPERATOR_ASSIGNEE_USER_ID'),
+
+        'timeout' => (int) env('PAPERCLIP_API_TIMEOUT_SECONDS', 5),
+    ],
+
 ];
