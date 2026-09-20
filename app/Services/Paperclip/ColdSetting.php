@@ -33,6 +33,7 @@ enum ColdSetting: string
      *
      * @return array{restart: string, rollback: string}|null
      */
+    // @phpstan-ignore-next-line return.unusedType (TOG-3573 adds the first pinned case; until then this arm is intentionally always null)
     public function commands(): ?array
     {
         return match ($this) {
