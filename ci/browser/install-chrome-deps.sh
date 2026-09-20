@@ -14,9 +14,10 @@
 # writable, and `dpkg-deb -x` unpacks a .deb into a plain directory. Point
 # LD_LIBRARY_PATH at that directory and Chrome starts. No root, no image change.
 #
-# On GitHub Actions this is unnecessary — `ubuntu-latest` already has the
-# libraries — and the script detects that and exits early rather than spending
-# two minutes proving it.
+# In CI this is unnecessary — the `dusk` job installs Chrome from Google's .deb,
+# so apt has already pulled the shared libraries in as dependencies — and the
+# script detects that (by `ldd`, not by an environment variable) and exits early
+# rather than spending two minutes proving it.
 #
 # Idempotent: re-running only re-unpacks. ~2 min cold, ~280MB on disk.
 #

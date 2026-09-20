@@ -299,7 +299,7 @@ expect_fail budget-duplicated 'budget `largest-contentful-paint`' \
 # saying that a grep widened to accept `["']` closes the first two and cannot
 # close the third — a spread has no key to match. Reading the effective value out
 # of the config with node covers all four at once and cannot drift from what lhci
-# loads, because it is the same require(). `node` is on ubuntu-24.04 before
+# loads, because it is the same require(). The runners carry node before
 # `setup-node` runs, so the `static` job can do this where it already stands.
 expect_fail budget-duplicated-double-quoted 'budget `largest-contentful-paint`' \
   sed -i "/'server-response-time':/a\\        \"largest-contentful-paint\": ['warn', { maxNumericValue: 99999 }]," ci/lighthouserc.cjs
