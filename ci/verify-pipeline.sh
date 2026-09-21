@@ -83,7 +83,13 @@
 set -euo pipefail
 
 BRANCH_PREFIX="ci-verify"
-BASE_BRANCH="main"
+# Every verification PR is cut from `origin/$BASE_BRANCH`, not from whatever is
+# checked out — so with the default the run always measures what is already on
+# `main`. That makes it impossible to verify a change to ci.yml or the budgets
+# *before* merging it: the only way to test the fix is to ship the fix first.
+# Point this at the pull request's head branch to test the tree that merging
+# would produce. Default unchanged.
+BASE_BRANCH="${CI_VERIFY_BASE_BRANCH:-main}"
 MODE="${1:---dry-run}"
 
 WORKFLOW="./.github/workflows/ci.yml"
