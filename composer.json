@@ -3,7 +3,7 @@
     "name": "togetherweown/two-web",
     "type": "project",
     "description": "The Together We Own community website.",
-    "license": "MIT",
+    "license": "BUSL-1.1",
     "require": {
         "php": "^8.4",
         "filament/filament": "^4.0",
