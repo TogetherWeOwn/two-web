@@ -1,0 +1,65 @@
+# Branch-lifetime hosted-CI probe for TOG-5067 — NOT a merge-gate change.
+#
+# The publication-prep programme (TOG-4025 / TOG-4818) gates on "hosted runners
+# only": the day two-web goes public, no workflow may point at the private
+# `self-hosted` runners. Every job in `ci.yml`, `secret-scan.yml`,
+# `main-guard.yml` and `codeowners.yml` is `runs-on: [self-hosted,
+# two-selfhosted]` today, so there is no existing hosted run to reuse. This
+# file proves the smallest green GitHub-hosted run for the one two-web package:
+# `composer install` + Pint `--test` + PHPStan, mirroring the known-green parts
+# of the `static` job (no database, no node, no build).
+#
+# Lifetime: this branch only. It pins `on.push` to this branch name, never runs
+# on `pull_request`, and is never merged to `main` — merging it would trip the
+# `every-job-attests` case in ci/attest-runner-selftest.sh (which requires every
+# job in every workflow to run ci/attest-runner.sh, a script that *fails* on a
+# hosted runner by design) and would invalidate the "no GitHub-hosted jobs"
+# claim in docs/ci.md, both of which describe the main tree correctly today.
+# Done = green run URL on the card + this file on the pushed branch. When the
+# open-sourcing programme is ready to migrate the real gate, lift the pattern
+# from here and delete this file.
+name: hosted-probe
+
+on:
+  push:
+    branches:
+      - TOG-5067-two-web-hosted-ci-probe-smallest-green-github-hosted-run-for-one-package-publication-prep
+
+permissions:
+  contents: read
+
+env:
+  PHP_VERSION: '8.4'
+
+jobs:
+  probe:
+    name: probe
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+
+      # The mirror image of ci/attest-runner.sh (TOG-2847). That script refuses
+      # `github-hosted` on billing grounds; this probe exists to show a job
+      # *can* run on GitHub's own runners, so ci/attest-hosted-runner.sh
+      # refuses `self-hosted` instead — a `runs-on:` typo that silently
+      # rerouted the probe onto the private runners would report green while
+      # proving nothing.
+      - name: Attest a GitHub-hosted runner
+        run: ./ci/attest-hosted-runner.sh
+
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: ${{ env.PHP_VERSION }}
+          extensions: pdo_pgsql, intl, bcmath
+          coverage: none
+          tools: composer:v2
+
+      - run: composer install --no-interaction --prefer-dist --no-progress
+
+      # --test means "tell me, do not fix". CI never rewrites the author's code.
+      - name: Pint
+        run: vendor/bin/pint --test
+
+      - name: PHPStan
+        run: vendor/bin/phpstan analyse --memory-limit=512M --no-progress --error-format=github

@@ -30,7 +30,15 @@
 # And the assertion that is about the workflows rather than about this script —
 # that a job cannot quietly stop attesting:
 #
-#   every-job-attests  every job in every workflow runs ci/attest-runner.sh
+#   every-job-attests  every job in every workflow runs ci/attest-runner.sh,
+#                      except a job that carries no `self-hosted` label and
+#                      refuses `self-hosted` instead. Such a job is a hosted-CI
+#                      probe (TOG-5067): it can never run ci/attest-runner.sh
+#                      because that script fails on a hosted runner by design.
+#                      The exception is narrow on purpose — the job must attest
+#                      the opposite direction (fail unless RUNNER_ENVIRONMENT is
+#                      `github-hosted`), so a reroute onto the private runners is
+#                      still a red step, not a silent one.
 #
 # Usage: ./ci/attest-runner-selftest.sh
 
@@ -140,8 +148,24 @@ for f in .github/workflows/*.yml; do
     # matches the comment — delete the step, leave the comment, and this check
     # reports full coverage on a job that has stopped attesting. That is not
     # hypothetical: it survived the mutation run that was supposed to kill it.
-    grep -qE '^[[:space:]]*run:[[:space:]]*\./ci/attest-runner\.sh[[:space:]]*$' <<< "$blk" \
-      || missing="${missing} $(basename "$f"):${job}"
+    if grep -qE '^[[:space:]]*run:[[:space:]]*\./ci/attest-runner\.sh[[:space:]]*$' <<< "$blk"; then
+      :
+    # The hosted-CI probe exception (see the header): a job whose `runs-on:`
+    # carries no `self-hosted` label and that attests the opposite direction —
+    # it fails unless the runner is `github-hosted` — is covered by its own
+    # guard, not by this one. All three halves are required. The label check is
+    # anchored to the `runs-on:` line (not the bare string: the probe's own
+    # guard comments name `self-hosted`, so an unanchored match would never
+    # fire), which means a probe that gained a `self-hosted` label falls back
+    # under the normal rule. The two literals live in the guard step's `run:`
+    # script rather than its comments, so deleting the step while leaving the
+    # comments still reads as missing.
+    elif ! grep -qE '^[[:space:]]*runs-on:.*self-hosted' <<< "$blk" \
+      && grep -qE '^[[:space:]]*run:[[:space:]]*\./ci/attest-hosted-runner\.sh[[:space:]]*$' <<< "$blk"; then
+      :
+    else
+      missing="${missing} $(basename "$f"):${job}"
+    fi
   done <<< "$(awk '/^jobs:/{j=1;next} j && /^  [a-zA-Z0-9_-]+:[[:space:]]*$/{gsub(/[ :]/,"");print}' "$f")"
 done
 
