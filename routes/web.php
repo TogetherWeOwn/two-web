@@ -31,12 +31,18 @@ Route::get('/sitemap_index.xml', function () {
         ['loc' => route('home'), 'changefreq' => 'weekly', 'priority' => '1.0'],
         ['loc' => route('join'), 'changefreq' => 'monthly', 'priority' => '0.9'],
         ['loc' => route('events.index'), 'changefreq' => 'daily', 'priority' => '0.8'],
+        ['loc' => route('about'), 'changefreq' => 'monthly', 'priority' => '0.7'],
     ];
 
     return response()
         ->view('sitemap', ['urls' => $urls])
         ->header('Content-Type', 'application/xml; charset=UTF-8');
 })->name('sitemap');
+
+// Static about page. Dependency-free leaf (TOG-5310): no controller, no
+// database, no Livewire — Route::view only, so it renders even when the bot's
+// database is down.
+Route::view('/about', 'about')->name('about');
 
 // One-click join needs the web session for OAuth state and for signing the new
 // member in after Discord adds them. `/discord` remains the database-free invite
