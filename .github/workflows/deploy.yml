@@ -71,9 +71,13 @@ jobs:
   staging:
     name: staging
     if: >-
-      github.event_name == 'workflow_dispatch' ||
-      github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success'
-    runs-on: [self-hosted, two-selfhosted]
+      (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main') ||
+      (github.event_name == 'workflow_run' &&
+       github.event.workflow_run.conclusion == 'success' &&
+       github.event.workflow_run.event == 'push' &&
+       github.event.workflow_run.head_branch == 'main' &&
+       github.event.workflow_run.head_repository.full_name == github.repository)
+    runs-on: ubuntu-latest
     timeout-minutes: 15
     # Decorative on GitHub Free + private: environments are ignored, so this grants no
     # protection and claims none. It is here so the deployment shows up in the UI the
@@ -81,7 +85,13 @@ jobs:
     environment:
       name: staging
     steps:
+      # Never check out a workflow_run's PR head or execute downloaded PR artifacts.
+      # The trusted main checkout contains only the deploy helper; the provider
+      # deploys its configured staging branch. No production action is enabled.
       - uses: actions/checkout@v4
+        with:
+          ref: main
+          persist-credentials: false
 
       # Every job attests where it ran. See ci/attest-runner.sh (TOG-2847).
       - name: Attest the runner

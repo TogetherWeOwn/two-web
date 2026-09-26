@@ -30,15 +30,13 @@ jobs:
   # ---------------------------------------------------------------------------
   static:
     name: static
-    runs-on: [self-hosted, two-selfhosted]
+    runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v5
 
-      # Where did this job actually run? `runs-on:` asks; only the job can
-      # answer. Fails on a GitHub-hosted runner (which bills) and publishes its
-      # runner_name as an annotation. First, so a misrouted job burns seconds
-      # rather than a full suite. See ci/attest-runner.sh (TOG-2847).
+      # Publication CI uses disposable GitHub-hosted runners. Record per-job
+      # evidence, and reject private runners before any application tests.
       - name: Attest the runner
         run: ./ci/attest-runner.sh
 
@@ -51,22 +49,18 @@ jobs:
         with:
           node-version: ${{ env.NODE_VERSION }}
 
-      # And the attestation itself, which is the one check in this repository that
-      # cannot be proved by the run it is part of: on a correctly-routed job it
-      # passes, and so does a version that returns 0 unconditionally. This drives
-      # it through a synthetic hosted runner, a spoofed name and an unaudited host
-      # and pins the exit code and reason for each, then asserts every job in every
-      # workflow still carries the step. Under a second, no network.
+      # Prove that private and unknown runner environments fail, and preserve
+      # the annotation on every job. This is offline regression evidence.
       - name: Runner attestation self-test
         run: ./ci/attest-runner-selftest.sh
 
-      # The runners are persistent, which makes a leaked server a *cross-run*
-      # failure: the first post-merge `main` run after the migration failed on a
-      # tree that was green on the pull request, because `budgets` had left an
-      # `artisan serve` bound to a port it gets handed again on that same runner
-      # (TOG-2847). This pins the reclaim-and-teardown that fixes it, including
-      # that the budgets job still calls both halves. Binds two high ports on
-      # the runner for a moment; no network.
+      # Fork main branches and PR CI completions must never trigger a deploy.
+      # Also pins hosted scheduling and the absence of custom secrets in PR CI.
+      - name: Publication isolation self-test
+        run: node ci/publication-isolation-selftest.mjs
+
+      # Preserve cleanup regression coverage from the former shared-runner
+      # harness. Disposable runners still need reliable startup and teardown.
       - name: Port reclaim self-test
         run: ./ci/reclaim-ports-selftest.sh
 
@@ -269,7 +263,7 @@ jobs:
   # ---------------------------------------------------------------------------
   pest:
     name: pest
-    runs-on: [self-hosted, two-selfhosted]
+    runs-on: ubuntu-latest
     timeout-minutes: 15
 
     services:
@@ -279,8 +273,7 @@ jobs:
           POSTGRES_USER: two_web
           POSTGRES_PASSWORD: two_web
           POSTGRES_DB: two_web_test
-        # Let Docker choose a free host port. Five runners share one host, so a
-        # fixed 5432 binding makes parallel jobs race before their first step.
+        # Let Docker choose a free host port; read the allocated mapping below.
         ports:
           - 5432
         options: >-
@@ -292,8 +285,7 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
-      # See the note in `static`. Every job attests; a job that does not could be
-      # moved onto a billable runner with nothing going red (TOG-2847).
+      # Keep per-job evidence of GitHub-hosted execution, including PR jobs.
       - name: Attest the runner
         run: ./ci/attest-runner.sh
 
@@ -315,7 +307,7 @@ jobs:
 
       - name: Prepare .env
         env:
-          DB_PORT: ${{ job.services.postgres.ports[5432] }}
+          DB_PORT: ${{ job.services.postgres.ports['5432'] }}
         run: |
           cp .env.example .env
           sed -i "s#^DB_PORT=.*#DB_PORT=${DB_PORT}#" .env
@@ -332,7 +324,7 @@ jobs:
         env:
           DB_CONNECTION: pgsql
           DB_HOST: 127.0.0.1
-          DB_PORT: ${{ job.services.postgres.ports[5432] }}
+          DB_PORT: ${{ job.services.postgres.ports['5432'] }}
           DB_DATABASE: two_web_test
           DB_USERNAME: two_web
           DB_PASSWORD: two_web
@@ -348,7 +340,7 @@ jobs:
   # ---------------------------------------------------------------------------
   dusk:
     name: dusk
-    runs-on: [self-hosted, two-selfhosted]
+    runs-on: ubuntu-latest
     timeout-minutes: 20
 
     services:
@@ -358,8 +350,7 @@ jobs:
           POSTGRES_USER: two_web
           POSTGRES_PASSWORD: two_web
           POSTGRES_DB: two_web
-        # Let Docker choose a free host port. Five runners share one host, so a
-        # fixed 5432 binding makes parallel jobs race before their first step.
+        # Let Docker choose a free host port; read the allocated mapping below.
         ports:
           - 5432
         options: >-
@@ -371,8 +362,7 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
-      # See the note in `static`. Every job attests; a job that does not could be
-      # moved onto a billable runner with nothing going red (TOG-2847).
+      # Keep per-job evidence of GitHub-hosted execution, including PR jobs.
       - name: Attest the runner
         run: ./ci/attest-runner.sh
 
@@ -402,15 +392,11 @@ jobs:
       - run: npm ci --include=dev
       - run: npm run build
 
-      # Five runner processes share one host network namespace. Derive stable
-      # per-runner ports so parallel Dusk/budgets jobs never bind the same socket.
+      # Reuse the harness port allocation on this job's disposable runner.
       - name: Select runner-local ports
         run: ./ci/runner-ports.sh >> "$GITHUB_ENV"
 
-      # The private runner is deliberately lean. Install a browser per job instead
-      # of making an unversioned host package part of the runner contract. Ubuntu's
-      # chromium-browser package is a snap transitional package, and snap is not a
-      # reliable dependency inside an Actions job, so use Google's apt package.
+      # Install Chrome explicitly rather than depend on the hosted image version.
       - name: Install Chrome
         run: |
           curl -fsSLo "$RUNNER_TEMP/google-chrome.deb" \
@@ -423,7 +409,7 @@ jobs:
       # fails with a hostname mismatch that reads like a test bug.
       - name: Prepare .env
         env:
-          DB_PORT: ${{ job.services.postgres.ports[5432] }}
+          DB_PORT: ${{ job.services.postgres.ports['5432'] }}
         run: |
           cp .env.example .env
           sed -i "s#^APP_URL=.*#APP_URL=http://127.0.0.1:${CI_APP_PORT}#" .env
@@ -503,35 +489,17 @@ jobs:
           retention-days: 14
           if-no-files-found: ignore
 
-      # Every test now screenshots on pass or fail (tests/DuskTestCase.php
-      # tearDown, TOG-782), so evidence exists regardless of outcome — hence
-      # always() rather than failure() like the GH Actions upload above. This
-      # goes to the Paperclip board as a second, parallel destination (the
-      # owner asked for evidence he can watch from the board, not by clicking
-      # into a GH Actions run); the GH Actions artifact upload above is
-      # unrelated and untouched.
-      #
-      # continue-on-error rather than gating on the secret's presence: until
-      # PAPERCLIP_BOARD_API_KEY is minted (a one-time human action — see PR
-      # description) this step goes visibly red, which is a more honest
-      # signal than silently skipping.
-      - name: Upload Dusk evidence to Paperclip
+      # Preserve pass/fail screenshots without a board or organization credential.
+      # PR code (including same-repository PRs) must not receive the board token.
+      # Reviewers can register these Actions artifacts on the board separately.
+      - name: Upload Dusk screenshots
         if: always()
-        continue-on-error: true
-        env:
-          PAPERCLIP_API_URL: ${{ vars.PAPERCLIP_API_URL }}
-          PAPERCLIP_API_KEY: ${{ secrets.PAPERCLIP_BOARD_API_KEY }}
-          PAPERCLIP_COMPANY_ID: ${{ vars.PAPERCLIP_COMPANY_ID }}
-          PAPERCLIP_TASK_ID: ${{ vars.PAPERCLIP_E2E_EVIDENCE_ISSUE_ID }}
-          PAPERCLIP_RUN_ID: gh-actions-${{ github.run_id }}-${{ github.job }}
-        run: |
-          shopt -s nullglob
-          for f in tests/Browser/screenshots/*.png; do
-            name="$(basename "$f" .png)"
-            ./.github/scripts/paperclip-upload-artifact.sh "$f" \
-              --title "two-web/${{ github.run_id }}/dusk/${name}" \
-              --summary "Dusk evidence, run ${{ github.run_id }}, job dusk"
-          done
+        uses: actions/upload-artifact@v4
+        with:
+          name: dusk-screenshots
+          path: tests/Browser/screenshots
+          retention-days: 14
+          if-no-files-found: ignore
 
   # ---------------------------------------------------------------------------
   # Budgets. Performance and accessibility are enforced as failures, not warnings.
@@ -541,7 +509,7 @@ jobs:
   # ---------------------------------------------------------------------------
   budgets:
     name: budgets
-    runs-on: [self-hosted, two-selfhosted]
+    runs-on: ubuntu-latest
     timeout-minutes: 20
 
     services:
@@ -551,8 +519,7 @@ jobs:
           POSTGRES_USER: two_web
           POSTGRES_PASSWORD: two_web
           POSTGRES_DB: two_web
-        # Let Docker choose a free host port. Five runners share one host, so a
-        # fixed 5432 binding makes parallel jobs race before their first step.
+        # Let Docker choose a free host port; read the allocated mapping below.
         ports:
           - 5432
         options: >-
@@ -564,8 +531,7 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
-      # See the note in `static`. Every job attests; a job that does not could be
-      # moved onto a billable runner with nothing going red (TOG-2847).
+      # Keep per-job evidence of GitHub-hosted execution, including PR jobs.
       - name: Attest the runner
         run: ./ci/attest-runner.sh
 
@@ -585,19 +551,8 @@ jobs:
           tools: composer:v2
           ini-values: opcache.enable=1, opcache.enable_cli=1, opcache.validate_timestamps=0
 
-      # setup-php's ini-values above land in the SHARED system PHP ini. On the
-      # persistent self-hosted host up to five runner processes share that one
-      # PHP install (see the port note near the top of this file), and a
-      # concurrent pest/dusk/static job's setup-php — none of which ask for
-      # opcache — rewrites that same shared cli ini and resets enable_cli to its
-      # 0 default. The guard below then reads a fresh `php -i` off the clobbered
-      # ini and hard-fails budgets for a race, not a regression: on TOG-3224 the
-      # identical main tree went red on 305bf47 and green on 33c17eb minutes
-      # apart. Re-pin the setting in a JOB-LOCAL scan dir the race cannot reach:
-      # $RUNNER_TEMP is private to this runner process, a leading ':' keeps the
-      # default conf.d (so setup-php's extensions still load), PHP scans our dir
-      # last so it wins, and the child `php -S` that `artisan serve` spawns
-      # inherits PHP_INI_SCAN_DIR from the env and reads it too.
+      # Keep the harness PHP settings job-local and inherited by artisan serve.
+      # Originally added for a shared-runner race; also deterministic on hosted CI.
       - name: Pin opcache in a job-local ini scan dir (TOG-3224)
         run: |
           dir="$RUNNER_TEMP/php-budgets-conf.d"
@@ -624,14 +579,13 @@ jobs:
       - run: npm ci --include=dev
       - run: npm run build
 
-      # Five runner processes share one host network namespace. Derive stable
-      # per-runner ports so parallel Dusk/budgets jobs never bind the same socket.
+      # Reuse the harness port allocation on this job's disposable runner.
       - name: Select runner-local ports
         run: ./ci/runner-ports.sh >> "$GITHUB_ENV"
 
       - name: Prepare a production-shaped app
         env:
-          DB_PORT: ${{ job.services.postgres.ports[5432] }}
+          DB_PORT: ${{ job.services.postgres.ports['5432'] }}
         run: |
           cp .env.example .env
           sed -i 's#^APP_ENV=.*#APP_ENV=production#' .env
@@ -655,10 +609,8 @@ jobs:
       # compressed truth is 2.74s. See the header of that file.
       - name: Start the application server
         run: |
-          # The runners are persistent and these ports are stable per runner, so
-          # a server an earlier run leaked is still bound and would answer the
-          # readiness probe below while the real server silently failed to bind.
-          # See ci/reclaim-ports.sh (TOG-2847).
+          # Reject stale local listeners before probing the service we start.
+          # Keep the existing reclaim guard, even on a disposable hosted runner.
           ./ci/reclaim-ports.sh "$PROXY_UPSTREAM_PORT" "$PROXY_LISTEN_PORT"
 
           php artisan serve --host=127.0.0.1 --port="$PROXY_UPSTREAM_PORT" --no-reload > storage/logs/serve.log 2>&1 &
@@ -800,12 +752,7 @@ jobs:
           CHROME_BIN="$CHROME_BIN" node ci/browser/cta-breakpoints.mjs \
             --url "${CI_BASE_URL}/" --navigate --shots ci/cta-shots
 
-      # The runners are persistent, so a process this job leaks outlives it and
-      # breaks the *next* run on this host rather than this one — which is how
-      # the first post-merge `main` run failed while the identical tree was
-      # green on the pull request (TOG-2847). `dusk` has always stopped its
-      # services; this job never did, because on a throwaway VM it did not have
-      # to. `if: always()` so a red budget still cleans up after itself.
+      # Stop services even when a budget fails; keep the existing teardown guard.
       - name: Stop the application server
         if: always()
         run: |
@@ -849,14 +796,12 @@ jobs:
   # ---------------------------------------------------------------------------
   tests:
     name: tests
-    runs-on: [self-hosted, two-selfhosted]
+    runs-on: ubuntu-latest
     timeout-minutes: 5
     if: always()
     needs: [static, pest, dusk, budgets]
     steps:
-      # This job had no checkout: it only reads `needs` results. It needs one now
-      # so it can attest its own runner — the aggregate bills like any other job,
-      # and being cheap is not the same as being free (TOG-2847).
+      # Checkout only for the shared runner evidence step; the gate reads needs.
       - uses: actions/checkout@v5
 
       - name: Attest the runner
