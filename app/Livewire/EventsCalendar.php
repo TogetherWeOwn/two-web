@@ -5,6 +5,7 @@ namespace App\Livewire;
 use App\Enums\EventStatus;
 use App\Enums\RsvpStatus;
 use App\Models\Event;
+use App\Support\Events\DiscordEventsSource;
 use Carbon\CarbonImmutable;
 use Carbon\Exceptions\InvalidFormatException;
 use Illuminate\Database\Eloquent\Builder;
@@ -97,14 +98,30 @@ class EventsCalendar extends Component
      * `withCount` rather than a count per card: twelve cards must not be twelve
      * queries, and the going count is on every one of them.
      *
+     * Plus the guild's Discord-native events (TOG-5168): the page read only
+     * its own table while the recurring Sunday Squad lived in the bot's
+     * database, so production showed the never-scheduled empty state with a
+     * live event sitting in Discord. The Discord rows are display-only
+     * transients merged here, in start order with the local rows — never
+     * persisted, never published, never handed to the write-back.
+     *
      * @return Collection<int, Event>
      */
     private function upcoming(): Collection
     {
-        return $this->visible()
+        $local = $this->visible()
             ->where('ends_at', '>=', now())
             ->orderBy('starts_at')
             ->get();
+
+        $discord = collect(app(DiscordEventsSource::class)->upcoming())
+            // The view already filters to scheduled/active within 90 days, but
+            // the boundary is the bot's clock, not ours — re-check the end
+            // against now so a just-started event cannot linger here forever
+            // if the collector goes dark.
+            ->filter(fn (Event $event): bool => $event->ends_at >= now());
+
+        return $local->concat($discord)->sortBy(fn (Event $event): int => $event->starts_at->getTimestamp())->values();
     }
 
     /** @return Collection<int, Event> Most recent first — "the last one was…". */
