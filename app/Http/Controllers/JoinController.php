@@ -5,7 +5,9 @@ namespace App\Http\Controllers;
 use App\Models\User;
 use App\Services\Bot\Exceptions\BotException;
 use App\Services\Bot\InternalActionClient;
+use App\Support\Counts\CountsSource;
 use App\Support\DiscordWidget;
+use App\Support\Events\UpcomingEventCount;
 use Illuminate\Contracts\View\View;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
@@ -24,7 +26,7 @@ final class JoinController
 
     public function __construct(private readonly InternalActionClient $bot) {}
 
-    public function show(): View
+    public function show(CountsSource $counts, UpcomingEventCount $upcoming): View
     {
         // TOG-6928: the widget iframe is a live look, never the conversion
         // path. It renders beside the one-click button and the static invite,
@@ -32,9 +34,16 @@ final class JoinController
         // copy is always in the HTML either way.
         $guildId = config('services.discord.guild_id');
 
+        // TOG-7320: social proof on the join page. Both reads are non-throwing
+        // by contract — the member count degrades through CountsSource when the
+        // bot's database is down, and the events count degrades to null through
+        // our own events table — so a database hiccup omits a line, never the
+        // page. The view asks "is there a number", never "why is there not".
         return view('join', [
             'inviteUrl' => $this->inviteUrl(),
             'widgetUrl' => DiscordWidget::url(is_string($guildId) ? $guildId : null),
+            'counts' => $counts->liveCounts(),
+            'upcomingEventCount' => $upcoming->count(),
         ]);
     }
 
