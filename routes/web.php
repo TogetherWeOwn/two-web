@@ -1,5 +1,6 @@
 <?php
 
+use App\Enums\EventStatus;
 use App\Http\Controllers\Auth\DiscordLoginController;
 use App\Http\Controllers\Auth\StagingQaLoginController;
 use App\Http\Controllers\DesignLab\HallmarkController;
@@ -13,6 +14,7 @@ use App\Http\Controllers\ProfileController;
 use App\Http\Controllers\RsvpController;
 use App\Livewire\EventsCalendar;
 use App\Livewire\PastEvents;
+use App\Models\Event;
 use Illuminate\Support\Facades\Route;
 
 // The landing page reads the bot's counts and the featured rows moderators
@@ -27,8 +29,9 @@ Route::get('/', HomeController::class)->name('home');
 Route::get('/design-lab/hallmark', HallmarkController::class)->name('design-lab.hallmark');
 Route::get('/design-lab/taste', [HomeController::class, 'taste'])->name('design-lab.taste');
 
-// Public pages only. Keep this explicit: auth callbacks, signed-in profiles and
-// event-detail URLs do not belong in the index, while the event collection does.
+// Public pages only. Keep this explicit: auth callbacks and signed-in profiles
+// do not belong in the index, while the event collection and every published
+// event page do — a shared `/e/{key}` link is how most guests first arrive.
 Route::get('/sitemap_index.xml', function () {
     $urls = [
         ['loc' => route('home'), 'changefreq' => 'weekly', 'priority' => '1.0'],
@@ -38,10 +41,36 @@ Route::get('/sitemap_index.xml', function () {
         ['loc' => route('rules'), 'changefreq' => 'monthly', 'priority' => '0.7'],
     ];
 
+    // Published only: drafts are moderator-only (see EventPolicy::view), so
+    // advertising one would hand guests a URL that 403s for them.
+    $events = Event::query()
+        ->where('status', EventStatus::Published)
+        ->orderBy('starts_at')
+        ->get(['event_key', 'updated_at']);
+
+    foreach ($events as $event) {
+        $urls[] = [
+            'loc' => route('events.page', $event),
+            'changefreq' => 'weekly',
+            'priority' => '0.6',
+            'lastmod' => $event->updated_at?->toAtomString(),
+        ];
+    }
+
     return response()
         ->view('sitemap', ['urls' => $urls])
         ->header('Content-Type', 'application/xml; charset=UTF-8');
 })->name('sitemap');
+
+// robots.txt is a route, not a file in public/. A static file would hardcode the
+// sitemap host (TOG-6774: it pointed at the production apex on every
+// environment), and the hostname rule in tests/Unit/NoHardcodedHostnamesTest.php
+// does not scan public/ — so serve it from APP_URL via route() instead.
+Route::get('/robots.txt', function () {
+    $body = "User-agent: *\nDisallow:\nSitemap: ".route('sitemap')."\n";
+
+    return response($body)->header('Content-Type', 'text/plain; charset=UTF-8');
+})->name('robots');
 
 // Static house rules. Dependency-free leaf (TOG-5147): no controller, no
 // database, no Livewire — Route::view only, so it renders even when the bot's
