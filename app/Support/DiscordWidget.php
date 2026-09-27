@@ -20,9 +20,10 @@ final class DiscordWidget
     {
         $guildId = trim((string) $guildId);
 
-        // Snowflakes are digits only. Anything else is a misconfigured value
-        // that must never reach an iframe src.
-        if ($guildId === '' || ! ctype_digit($guildId)) {
+        // Snowflakes are 17-20 digits. Anything else is a misconfigured value
+        // that must never reach an iframe src — a short/long digit run would
+        // build a URL Discord 404s instead of rendering no iframe at all.
+        if (! preg_match('/\A[0-9]{17,20}\z/', $guildId)) {
             return null;
         }
 

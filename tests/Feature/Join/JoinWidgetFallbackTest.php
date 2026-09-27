@@ -10,7 +10,11 @@
 // complete page, never as a hole where an iframe used to be.
 
 it('renders the widget beside an always-present fallback', function () {
-    config()->set('services.discord.guild_id', '326474832151838730');
+    // A counting-pattern fake snowflake, the same shape DiscordLoginTest uses
+    // for GUILD: guild ids are public (any member can read them; they ship in
+    // the widget and the invite), and this keeps a literal production id out
+    // of the file so gitleaks' discord-client-id rule stays quiet.
+    config()->set('services.discord.guild_id', '900000000000000001');
     config()->set('services.discord.invite_url', 'https://discord.gg/testinvite');
 
     $html = (string) $this->get(route('join'))->assertOk()->getContent();
@@ -18,7 +22,7 @@ it('renders the widget beside an always-present fallback', function () {
     // The live look, with the performance and privacy attributes that keep it
     // out of the first-paint path and off Discord's referrer logs.
     expect($html)->toContain('data-testid="join-widget"')
-        ->toContain('https://discord.com/widget?id=326474832151838730&amp;theme=dark')
+        ->toContain('https://discord.com/widget?id=900000000000000001&amp;theme=dark')
         ->toContain('loading="lazy"')
         ->toContain('referrerpolicy="no-referrer"');
 
