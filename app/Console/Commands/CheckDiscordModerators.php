@@ -48,19 +48,28 @@ class CheckDiscordModerators extends Command
     protected $description = 'Check DISCORD_MODERATOR_ROLE_IDS as the running app resolved it (TOG-427)';
 
     /**
-     * `SySOp` in the TWO guild — one holder, administrator class, signed off on
-     * TOG-106 as the entire website staff list.
+     * The signed-off moderator ID, from `services.discord.sysop_role_id`.
      *
-     * Matched by ID and never by name, and this is the case that proves why:
-     * SySOp is `KEEP (renamed Owner)` in Wave 6 of the approved server-redesign.
-     * The rename preserves the snowflake, so a name match would break on a
-     * cosmetic rename while an ID match rides straight through it.
+     * `SySOp` in the TWO guild — one holder, administrator class, signed off on
+     * TOG-106 as the entire website staff list. Matched by ID and never by
+     * name, and this is the case that proves why: SySOp is `KEEP (renamed
+     * Owner)` in Wave 6 of the approved server-redesign. The rename preserves
+     * the snowflake, so a name match would break on a cosmetic rename while an
+     * ID match rides straight through it.
+     *
+     * Read from config, not from a class constant, so a reviewed box can point
+     * at a different server without a code change. The value itself is unchanged
+     * from the constant this replaced, byte for byte.
      */
-    private const SYSOP = '508654771276873729';
+    private function sysopId(): string
+    {
+        return (string) config('services.discord.sysop_role_id');
+    }
 
     /**
-     * The five other roles that carry ban or kick, each with the holder count
-     * recorded by the 2026-08-19 audit.
+     * The five other roles that carry ban or kick, from
+     * `services.discord.retired_moderator_role_ids` with the holder count
+     * recorded by the 2026-08-19 audit beside each ID.
      *
      * These are here because they are the *plausible* wrong answer. "Discord
      * already trusts this role to ban or kick" is a reasonable-sounding way to
@@ -76,14 +85,24 @@ class CheckDiscordModerators extends Command
      * role-consolidation (two-bot/scripts/role-consolidation.ts:81-84). A deleted
      * snowflake matches nobody, forever, without erroring — so a list containing
      * them dark-fails exactly like a blank one while looking configured.
+     *
+     * Keys arrive as ints for digit-only snowflakes (PHP array semantics), so
+     * they are cast back to string: every comparison below is ID-match on the
+     * string form, exactly as the constants this replaced did.
+     *
+     * @return array<string, string> snowflake => description
      */
-    private const DOOMED = [
-        '1078757544169848933' => 'Officer (3 holders, DELETE in wave 6)',
-        '1087192823767515219' => 'Staff (6 holders, DELETE in wave 6)',
-        '1078757266469175386' => 'Game Master (1 holder, DELETE in wave 6)',
-        '1078757184021733426' => 'Captain (0 holders, DELETE in role-consolidation)',
-        '1078756990710452365' => 'Lieutenant (0 holders, DELETE in role-consolidation)',
-    ];
+    private function doomed(): array
+    {
+        $described = (array) config('services.discord.retired_moderator_role_ids', []);
+
+        $out = [];
+        foreach ($described as $id => $label) {
+            $out[(string) $id] = (string) $label;
+        }
+
+        return $out;
+    }
 
     private const PASS = 'PASS';
 
@@ -150,7 +169,7 @@ class CheckDiscordModerators extends Command
         }
 
         if ($this->option('require-configured')) {
-            $this->record(self::FAIL, 'configured', 'moderator_role_ids is empty. Nobody is a moderator and the admin link is offered to no one — silently. Set DISCORD_MODERATOR_ROLE_IDS='.self::SYSOP.' in this environment.');
+            $this->record(self::FAIL, 'configured', 'moderator_role_ids is empty. Nobody is a moderator and the admin link is offered to no one — silently. Set DISCORD_MODERATOR_ROLE_IDS='.$this->sysopId().' in this environment.');
 
             return;
         }
@@ -166,7 +185,8 @@ class CheckDiscordModerators extends Command
      */
     private function checkDoomed(array $configured): void
     {
-        $found = array_intersect($configured, array_keys(self::DOOMED));
+        $doomed = $this->doomed();
+        $found = array_intersect($configured, array_keys($doomed));
 
         if ($found === []) {
             $this->record(self::PASS, 'no-doomed-roles', 'none of the 5 ban/kick roles scheduled for deletion are present');
@@ -175,7 +195,7 @@ class CheckDiscordModerators extends Command
         }
 
         $described = implode('; ', array_map(
-            fn (string $id): string => "{$id} = ".self::DOOMED[$id],
+            fn (string $id): string => "{$id} = ".$doomed[$id],
             $found,
         ));
 
@@ -191,25 +211,27 @@ class CheckDiscordModerators extends Command
      */
     private function checkExactlySysop(array $configured, string $rendered): void
     {
+        $sysop = $this->sysopId();
+
         if ($configured === []) {
             $this->record(self::UNKNOWN, 'is-sysop', 'nothing configured, so there is nothing to compare against TOG-106');
 
             return;
         }
 
-        if ($configured === [self::SYSOP]) {
-            $this->record(self::PASS, 'is-sysop', 'exactly SySOp ('.self::SYSOP.'), which is the value signed off on TOG-106');
+        if ($configured === [$sysop]) {
+            $this->record(self::PASS, 'is-sysop', 'exactly SySOp ('.$sysop.'), which is the value signed off on TOG-106');
 
             return;
         }
 
-        if (! in_array(self::SYSOP, $configured, true)) {
-            $this->record(self::FAIL, 'is-sysop', 'SySOp ('.self::SYSOP.") is not in the list. Configured: {$rendered}. The owner holds SySOp, so as configured the owner cannot reach the admin panel.");
+        if (! in_array($sysop, $configured, true)) {
+            $this->record(self::FAIL, 'is-sysop', 'SySOp ('.$sysop.") is not in the list. Configured: {$rendered}. The owner holds SySOp, so as configured the owner cannot reach the admin panel.");
 
             return;
         }
 
-        $extra = implode(',', array_values(array_diff($configured, [self::SYSOP])));
+        $extra = implode(',', array_values(array_diff($configured, [$sysop])));
         $this->record(self::UNKNOWN, 'is-sysop', "SySOp is present, plus {$extra}. TOG-106 signed off one ID; anything beyond it grants the panel to holders nobody approved. Deliberate, or a widening that needs sign-off?");
     }
 
@@ -270,7 +292,7 @@ class CheckDiscordModerators extends Command
 
         try {
             config(['services.discord.moderator_role_ids' => []]);
-            $grantsOnEmpty = array_intersect([self::SYSOP], (array) config('services.discord.moderator_role_ids', [])) !== [];
+            $grantsOnEmpty = array_intersect([$this->sysopId()], (array) config('services.discord.moderator_role_ids', [])) !== [];
         } finally {
             config(['services.discord.moderator_role_ids' => $saved]);
         }

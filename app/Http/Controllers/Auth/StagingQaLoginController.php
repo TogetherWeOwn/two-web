@@ -18,23 +18,42 @@ class StagingQaLoginController
 {
     public const HEADER = 'X-TWO-QA-Auth';
 
-    public const MODERATOR_ROLE_ID = '508654771276873729';
+    /**
+     * The signed-off moderator ID, from `services.discord.sysop_role_id` — the
+     * same reference `discord:check-moderators` compares the grant against. The
+     * qa-moderator fixture holds this role so the deterministic sign-in
+     * exercises the real moderator path, and the value lives in one place
+     * (config/services.php) instead of drifting as a second hard-coded copy.
+     */
+    private function sysopId(): string
+    {
+        return (string) config('services.discord.sysop_role_id');
+    }
 
-    /** @var array<string, array{discord_id: string, username: string, display_name: string, roles: list<string>}> */
-    private const IDENTITIES = [
-        'qa-member' => [
-            'discord_id' => '900000000000001396',
-            'username' => 'qa-member',
-            'display_name' => 'QA Member',
-            'roles' => [],
-        ],
-        'qa-moderator' => [
-            'discord_id' => '900000000000001397',
-            'username' => 'qa-moderator',
-            'display_name' => 'QA Moderator',
-            'roles' => [self::MODERATOR_ROLE_ID],
-        ],
-    ];
+    /**
+     * Built at runtime rather than as a class constant because the moderator
+     * fixture holds the configured SySOp ID, and config is not available in a
+     * constant expression.
+     *
+     * @return array<string, array{discord_id: string, username: string, display_name: string, roles: list<string>}>
+     */
+    private function identities(): array
+    {
+        return [
+            'qa-member' => [
+                'discord_id' => '900000000000001396',
+                'username' => 'qa-member',
+                'display_name' => 'QA Member',
+                'roles' => [],
+            ],
+            'qa-moderator' => [
+                'discord_id' => '900000000000001397',
+                'username' => 'qa-moderator',
+                'display_name' => 'QA Moderator',
+                'roles' => [$this->sysopId()],
+            ],
+        ];
+    }
 
     public function __invoke(Request $request, string $identity): Response
     {
@@ -60,7 +79,7 @@ class StagingQaLoginController
             abort(404);
         }
 
-        $fixture = self::IDENTITIES[$identity] ?? null;
+        $fixture = $this->identities()[$identity] ?? null;
 
         if ($fixture === null) {
             abort(404);
@@ -73,7 +92,7 @@ class StagingQaLoginController
                 'username' => $fixture['username'],
                 'display_name' => $fixture['display_name'],
                 'avatar' => null,
-                'is_moderator' => in_array(self::MODERATOR_ROLE_ID, $roles, strict: true),
+                'is_moderator' => in_array($this->sysopId(), $roles, strict: true),
                 'discord_joined_at' => '2024-01-01 00:00:00',
                 'discord_synced_at' => now(),
             ],
