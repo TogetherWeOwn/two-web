@@ -127,9 +127,11 @@ it('keeps the strict CSP on the funnel-served about page', function () {
     // pinned in full, like tests/Feature/ContentSecurityPolicyTest.php pins
     // it — a widening has to edit an assertion, not slip past one.
     //
-    // TOG-7095 follow-up: `upgrade-insecure-requests` is https-only (it broke
-    // form POST on http origins), and feature tests run over http — so the
-    // http expectation carries no upgrade directive. The https variant is
+    // TOG-7095 follow-up: `upgrade-insecure-requests` is https-only, and the
+    // explicit `form-action` directive is gone entirely (it blocked the admin
+    // logout POST in Chrome while the identical site sign-out passed;
+    // submissions fall back to `default-src 'self'`). Feature tests run over
+    // http, so the http expectation carries neither. The https variant is
     // pinned in ContentSecurityPolicyTest.
     $this->get('/about')
         ->assertOk()
@@ -139,7 +141,6 @@ it('keeps the strict CSP on the funnel-served about page', function () {
             ."img-src 'self' data: https:; "
             ."font-src 'self' data:; "
             .'connect-src \'self\'; '
-            ."form-action 'self'; "
             ."frame-ancestors 'none'; "
             ."base-uri 'self'; "
             ."object-src 'none'");

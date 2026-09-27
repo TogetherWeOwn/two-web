@@ -54,7 +54,6 @@ function strictCsp(bool $secure = false): string
         ."img-src 'self' data: https:; "
         ."font-src 'self' data:; "
         .'connect-src \'self\'; '
-        ."form-action 'self'; "
         ."frame-ancestors 'none'; "
         ."base-uri 'self'; "
         ."object-src 'none'";
@@ -120,6 +119,14 @@ it('keeps the Livewire allowances but nothing wider', function () {
 
     expect($directives['object-src'])->toBe("'none'")
         ->and($directives['frame-ancestors'])->toBe("'none'");
+
+    // No `form-action` directive on purpose (TOG-7095): the explicit
+    // `form-action 'self'` blocked the admin logout POST in Chrome while the
+    // identical site sign-out POST passed, with no determinable cause.
+    // Omitting it is not a hole — submissions fall back to
+    // `default-src 'self'`, so they stay same-origin. This assertion pins the
+    // omission so a re-add has to justify itself against the Dusk evidence.
+    expect($directives)->not->toHaveKey('form-action');
 });
 
 it('does not put a CSP on non-HTML responses', function () {
