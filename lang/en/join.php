@@ -8,6 +8,8 @@ return [
     'recovery_denied' => 'You cancelled the Discord approval, so we did not add you to the server. Nothing changed — try again whenever you like.',
     'recovery_error' => 'Discord answered with an error instead of adding you to the server. Nothing changed — try again whenever you like.',
     'recovery_retry' => 'Try joining again',
+    'recovery_discord_down_title' => 'Discord did not answer',
+    'recovery_discord_down' => 'Discord did not answer just now, so we could not add you to the server. Nothing changed — try again in a minute, or use the invite below.',
     'invite' => 'Use the Discord invite instead',
     'result' => [
         'added' => 'You are in. Finish Discord’s rules screening before you can post.',

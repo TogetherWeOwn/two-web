@@ -7,6 +7,7 @@ use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
 use Laravel\Socialite\Facades\Socialite;
 use Laravel\Socialite\Two\AbstractProvider;
+use Laravel\Socialite\Two\InvalidStateException;
 use SocialiteProviders\Manager\OAuth2\User as SocialiteUser;
 
 const JOIN_BOT_URL = 'http://bot.internal:3001';
@@ -189,4 +190,94 @@ it('shows the recovery page with the generic message for any other OAuth error',
 
     $this->assertGuest();
     expect(User::query()->count())->toBe(0);
+});
+
+// ---------------------------------------------------------------------------
+// The Discord-is-down path (TOG-5605). The token exchange throws — Discord
+// refused the connection, timed out, or rejected a stale code — and the
+// callback answers with the recovery page at 503: what happened, one button
+// to try again. No 500, no trace, no token in the log; the attempt is logged
+// with JoinOutcome=error so the funnel stays countable.
+// ---------------------------------------------------------------------------
+
+function stubFailingJoinProvider(Throwable $throws): void
+{
+    $provider = Mockery::mock(AbstractProvider::class)->makePartial();
+    $provider->shouldReceive('setScopes')->andReturnSelf();
+    $provider->shouldReceive('redirectUrl')->andReturnSelf();
+    $provider->shouldReceive('user')->andThrow($throws);
+    Socialite::shouldReceive('driver')->with('discord')->andReturn($provider);
+}
+
+it('serves the retry page at 503 when Discord does not answer the token exchange', function () {
+    stubFailingJoinProvider(new ConnectionException('Discord is down: '.JOIN_TOKEN));
+    Log::spy();
+
+    $response = $this->get('/join/callback?code=good&state=x');
+
+    $response->assertServiceUnavailable()
+        ->assertSee(__('join.recovery_discord_down_title'), escape: false)
+        ->assertSee(__('join.recovery_discord_down'), escape: false)
+        ->assertSeeHtml('data-testid="oauth-recovery"')
+        ->assertSeeHtml('data-testid="oauth-recovery-retry"')
+        ->assertSee(route('join.redirect'), escape: false)
+        ->assertDontSee('Discord is down')
+        ->assertDontSee(JOIN_TOKEN);
+
+    $this->assertGuest();
+    expect(User::query()->count())->toBe(0);
+
+    // Exact-args match: this pins that the log carries the class name, the
+    // source and the error outcome — and nothing else, in particular no
+    // exception message that could quote the failed request's token.
+    Log::shouldHaveReceived('warning')->with('Discord token exchange failed on the join journey.', [
+        'exception' => ConnectionException::class,
+        'source' => null,
+        'outcome' => 'error',
+    ])->once();
+});
+
+it('serves the same retry page for a stale or replayed approval, with the source attributed', function () {
+    $this->get(route('join.redirect', ['source' => 'web:homepage']))->assertRedirect();
+    stubFailingJoinProvider(new InvalidStateException);
+    Log::spy();
+
+    $response = $this->get('/join/callback?code=stale&state=wrong');
+
+    $response->assertServiceUnavailable()
+        ->assertSee(__('join.recovery_discord_down'), escape: false)
+        ->assertSeeHtml('data-testid="oauth-recovery-retry"');
+
+    $this->assertGuest();
+
+    Log::shouldHaveReceived('warning')->with('Discord token exchange failed on the join journey.', [
+        'exception' => InvalidStateException::class,
+        'source' => 'web:homepage',
+        'outcome' => 'error',
+    ])->once();
+    expect(session('join_source'))->toBeNull();
+});
+
+it('serves the retry page instead of a 500 when the driver answers with something unreadable', function () {
+    $provider = Mockery::mock(AbstractProvider::class)->makePartial();
+    $provider->shouldReceive('setScopes')->andReturnSelf();
+    $provider->shouldReceive('redirectUrl')->andReturnSelf();
+    $provider->shouldReceive('user')->andReturn(new stdClass);
+    Socialite::shouldReceive('driver')->with('discord')->andReturn($provider);
+    Log::spy();
+
+    $response = $this->get('/join/callback?code=good&state=x');
+
+    $response->assertServiceUnavailable()
+        ->assertSee(__('join.recovery_discord_down'), escape: false)
+        ->assertSeeHtml('data-testid="oauth-recovery-retry"');
+
+    $this->assertGuest();
+    expect(User::query()->count())->toBe(0);
+
+    Log::shouldHaveReceived('warning')->with(
+        'Discord driver returned an unexpected user object on the join journey.',
+        Mockery::on(fn ($context) => ($context['outcome'] ?? null) === 'error'
+            && ($context['exception'] ?? null) === 'stdClass'),
+    )->once();
 });
