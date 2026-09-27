@@ -82,7 +82,11 @@
                                         <p class="mt-3 max-w-2xl text-lg leading-relaxed">{{ $item->body }}</p>
                                     @endif
                                     @if ($item->image_url)
-                                        <img src="{{ $item->image_url }}" alt="" loading="lazy" decoding="async" class="mt-5 w-full border border-ledger-rule">
+                                        {{-- Moderator URLs have no known dimensions, so `aspect-video`
+                                             reserves the box (no CLS) the same way the taste concept
+                                             does; `object-cover` keeps the crop honest. Lazy: this
+                                             sits beside/below the hero, not in the LCP path. --}}
+                                        <img src="{{ $item->image_url }}" alt="" loading="lazy" decoding="async" class="mt-5 aspect-video w-full border border-ledger-rule object-cover">
                                     @endif
                                 </article>
                             @endforeach
