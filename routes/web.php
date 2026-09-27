@@ -32,6 +32,7 @@ Route::get('/sitemap_index.xml', function () {
         ['loc' => route('join'), 'changefreq' => 'monthly', 'priority' => '0.9'],
         ['loc' => route('events.index'), 'changefreq' => 'daily', 'priority' => '0.8'],
         ['loc' => route('about'), 'changefreq' => 'monthly', 'priority' => '0.7'],
+        ['loc' => route('rules'), 'changefreq' => 'monthly', 'priority' => '0.7'],
     ];
 
     return response()
@@ -43,6 +44,11 @@ Route::get('/sitemap_index.xml', function () {
 // database, no Livewire — Route::view only, so it renders even when the bot's
 // database is down.
 Route::view('/about', 'about')->name('about');
+
+// Static house rules. Dependency-free leaf (TOG-5147): no controller, no
+// database, no Livewire — Route::view only, so it renders even when the bot's
+// database is down.
+Route::view('/rules', 'rules')->name('rules');
 
 // One-click join needs the web session for OAuth state and for signing the new
 // member in after Discord adds them. `/discord` remains the database-free invite
