@@ -18,9 +18,12 @@ use Illuminate\Support\Facades\Gate;
  * `application/rss+xml`.
  *
  * Public, like the shareable page: a feed reader has no session, so a login
- * wall would make the feed useless. Drafts never appear — the reader is always
- * a guest, and `viewDrafts` is never granted to one — so this lists the same
- * published (and cancelled/past) events the guest calendar shows.
+ * wall would make the feed useless. Only published upcoming events appear —
+ * the reader is always a guest, and `viewDrafts` is never granted to one, so
+ * per-user visibility cannot apply and the guest rule is the only honest one.
+ * "Upcoming" is the calendar's definition (`ends_at >= now`, including an
+ * event happening right now), not just "not a draft": a feed of upcoming
+ * events that still lists last year's is a bug, not an archive.
  */
 final class EventRssController
 {
@@ -28,11 +31,9 @@ final class EventRssController
     {
         Gate::authorize('viewAny', Event::class);
 
-        // Drafts excluded, even for moderators: the feed URL is fetched without
-        // a session, so per-user visibility cannot apply — the guest rule is
-        // the only honest one.
         $events = Event::query()
-            ->where('status', '!=', EventStatus::Draft->value)
+            ->where('status', EventStatus::Published->value)
+            ->where('ends_at', '>=', now())
             ->orderBy('starts_at')
             ->get();
 

@@ -2,16 +2,15 @@
 
 namespace App\Support;
 
-use App\Enums\EventStatus;
 use App\Models\Event;
 
 /**
  * The event collection as an RSS 2.0 feed.
  *
  * A pure builder over already-fetched `Event` models — no query, no auth, no
- * HTTP. The controller owns the visibility rule (publicly viewable events only)
- * and the `application/rss+xml` response; this owns the text, so a change to
- * either side has one place to land.
+ * HTTP. The controller owns the scope (published upcoming) and the
+ * `application/rss+xml` response; this owns the text, so a change to either
+ * side has one place to land.
  *
  * `pubDate` carries the start instant in UTC, not the wall time: feed readers
  * sort on it, and a floating local time would reintroduce the DST ambiguity the
@@ -49,15 +48,8 @@ final class EventRss
     {
         $url = route('events.page', $event);
 
-        // A cancelled event stays in the feed — readers that already picked it
-        // up need the update — but the title says so, or the reader shows it
-        // as if it were still on.
-        $title = $event->status === EventStatus::Cancelled
-            ? '[Cancelled] '.$event->title
-            : $event->title;
-
         $xml = '<item>'
-            .'<title>'.self::e($title).'</title>'
+            .'<title>'.self::e($event->title).'</title>'
             .'<link>'.self::e($url).'</link>'
             // The permalink is the guid: re-fetching the feed updates the entry
             // instead of duplicating it.
