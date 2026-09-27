@@ -96,6 +96,67 @@ it('rejects a timezone that is not an IANA identifier', function () {
     $response->assertStatus(422)->assertJsonValidationErrors('timezone');
 });
 
+// TOG-6804: CarbonImmutable::parse honors an embedded offset over the explicit
+// $timezone argument, so POSTing `2026-07-15T20:00:00+02:00` with
+// `Europe/London` stored 18:00Z while the 20:00 London wall the host typed is
+// 19:00Z — and the page then rendered 19:00 for a host who typed 20:00. The
+// fix is on the reject side: an offset-bearing string is a 422 the host can
+// fix, never a silently stored wrong instant. Stripping the offset instead
+// would just swap one silent wrong answer for another, because the two
+// readings disagree about which instant was meant.
+
+it('rejects a create whose wall time carries its own offset', function (string $startsAt) {
+    $host = User::factory()->create(['is_moderator' => true]);
+    $this->actingAs($host);
+
+    $response = $this->postJson(route('events.store'), [
+        'title' => 'Offset trap',
+        'starts_at' => $startsAt,
+        'ends_at' => '2026-07-15 22:00',
+        'timezone' => 'Europe/London',
+        'location' => 'Voice: General',
+    ]);
+
+    $response->assertStatus(422)->assertJsonValidationErrors('starts_at');
+
+    expect(Event::query()->count())->toBe(0);
+})->with([
+    'numeric offset' => '2026-07-15T20:00:00+02:00',
+    'zulu' => '2026-07-15T20:00:00Z',
+    'named zone' => '2026-07-15 20:00 Europe/London',
+]);
+
+it('rejects an update whose wall time carries its own offset', function () {
+    $host = User::factory()->create(['is_moderator' => true]);
+    $event = Event::factory()->create(['timezone' => 'Europe/London']);
+    $original = $event->starts_at->utc()->format('Y-m-d H:i:s');
+    $this->actingAs($host);
+
+    $response = $this->patchJson(route('events.update', $event), [
+        'title' => $event->title,
+        'starts_at' => '2026-07-15T20:00:00+02:00',
+        'ends_at' => '2026-07-15 22:00',
+        'timezone' => 'Europe/London',
+        'location' => $event->location ?? 'Voice: General',
+    ]);
+
+    $response->assertStatus(422)->assertJsonValidationErrors('starts_at');
+
+    expect($event->fresh()?->starts_at->utc()->format('Y-m-d H:i:s'))->toBe($original);
+});
+
+it('refuses an offset-bearing wall time at the domain edge, not just in HTTP validation', function () {
+    // The Filament panel calls fromValidated() directly and never sees the
+    // NaiveWallTime rule, so EventInput::instant is the backstop for that path.
+    expect(fn () => EventInput::instant('2026-07-15T20:00:00+02:00', 'Europe/London'))
+        ->toThrow(InvalidArgumentException::class);
+});
+
+it('still accepts a naive wall time at the domain edge', function () {
+    expect(EventInput::instant('2026-07-15 20:00', 'Europe/London')->format('Y-m-d H:i:s'))
+        ->toBe('2026-07-15 19:00:00');
+});
+
 it('keeps a real IANA identifier', function () {
     $host = User::factory()->create(['is_moderator' => true]);
     $this->actingAs($host);

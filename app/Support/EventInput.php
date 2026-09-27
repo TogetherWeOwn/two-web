@@ -30,10 +30,41 @@ final readonly class EventInput
      *
      * "20:00 Europe/London" is 19:00Z in July and 20:00Z in December. Storing the
      * reading without the zone gets one of those two wrong every year.
+     *
+     * The input must be naive: CarbonImmutable::parse honors an embedded offset
+     * over the explicit $timezone argument, so an offset-bearing string would
+     * silently resolve against the wrong zone (TOG-6804). Refuse it loudly
+     * rather than store an instant nobody typed.
      */
     public static function instant(string $localWallTime, string $timezone): CarbonImmutable
     {
+        if (self::carriesZone($localWallTime)) {
+            throw new \InvalidArgumentException(
+                "Refusing '{$localWallTime}': it names its own zone or offset, which would silently win over '{$timezone}'. Pass a naive wall time instead.",
+            );
+        }
+
         return CarbonImmutable::parse($localWallTime, $timezone)->utc();
+    }
+
+    /**
+     * Whether a date string names its own zone or offset.
+     *
+     * `date_parse` reports zone_type 1 for a numeric offset (+02:00), 2 for an
+     * abbreviation (Z), and 3 for an identifier (Europe/London); a naive wall
+     * time has no zone_type key at all. Unparseable strings return false here
+     * and are left to the `date` validation rule, so callers never
+     * double-report the same bad input.
+     */
+    public static function carriesZone(string $value): bool
+    {
+        $parsed = date_parse($value);
+
+        if (($parsed['error_count'] ?? 0) > 0) {
+            return false;
+        }
+
+        return isset($parsed['zone_type']) && in_array($parsed['zone_type'], [1, 2, 3], true);
     }
 
     /** @param  array<string, mixed>  $validated */

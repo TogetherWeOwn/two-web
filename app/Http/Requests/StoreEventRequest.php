@@ -4,6 +4,7 @@ namespace App\Http\Requests;
 
 use App\Models\Event;
 use App\Rules\IanaTimeZone;
+use App\Rules\NaiveWallTime;
 use App\Support\EventInput;
 use Illuminate\Support\Facades\Gate;
 
@@ -32,8 +33,11 @@ class StoreEventRequest extends AuthenticatedRequest
 
             // Local wall time in `timezone`, not an instant. The pair is what makes
             // "8pm London" mean the same thing in July and in December.
-            'starts_at' => ['required', 'date'],
-            'ends_at' => ['required', 'date', 'after:starts_at'],
+            // NaiveWallTime: an embedded offset would silently win over
+            // `timezone` (TOG-6804), so offset-bearing strings are a 422 here
+            // rather than a stored wrong instant.
+            'starts_at' => ['required', 'date', new NaiveWallTime],
+            'ends_at' => ['required', 'date', 'after:starts_at', new NaiveWallTime],
             'timezone' => ['required', 'string', new IanaTimeZone],
 
             'location' => ['required', 'string', 'max:255'],
