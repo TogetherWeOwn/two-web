@@ -17,12 +17,14 @@
 # What is pinned:
 #
 #   private          a coolify-vps-* self-hosted runner   -> exit 0
+#   private-rbx1/-w2494  the other audited prefixes (ci-rbx1-<n>, ci-w2494-<n>) -> exit 0
 #   notice           ...and it emits the ::notice that carries runner_name into
 #                    the annotations API, which is the only place an auditor
 #                    without `actions:read` can read it (TOG-2847)
 #   hosted           RUNNER_ENVIRONMENT=github-hosted     -> exit 1  (the billing case)
 #   hosted-spoofed   github-hosted *named* coolify-vps-1  -> exit 1  (name alone is not proof)
 #   unaudited        self-hosted, but an unknown host     -> exit 1
+#   unaudited-suffix known prefix, non-numeric suffix     -> exit 1
 #   unset            RUNNER_NAME absent, i.e. not in CI   -> exit 1  (refuse, do not guess)
 #   empty            RUNNER_NAME set but empty            -> exit 1
 #   args             called with an argument              -> exit 2
@@ -81,6 +83,12 @@ run_case private 0 "ran on private runner 'coolify-vps-3'" \
 run_case notice 0 "::notice title=runner::job=dusk runner_name=coolify-vps-1 environment=self-hosted" \
   RUNNER_NAME=coolify-vps-1 RUNNER_ENVIRONMENT=self-hosted GITHUB_JOB=dusk
 
+# Every audited host prefix is accepted, each with a numeric suffix.
+run_case private-rbx1 0 "ran on private runner 'ci-rbx1-12'" \
+  RUNNER_NAME=ci-rbx1-12 RUNNER_ENVIRONMENT=self-hosted GITHUB_JOB=static
+run_case private-w2494 0 "ran on private runner 'ci-w2494-3'" \
+  RUNNER_NAME=ci-w2494-3 RUNNER_ENVIRONMENT=self-hosted GITHUB_JOB=gitleaks
+
 printf '\n\033[1m==> A billable runner is rejected\033[0m\n'
 
 run_case hosted 1 "ran on a github-hosted runner" \
@@ -95,6 +103,11 @@ printf '\n\033[1m==> An unaudited host is rejected\033[0m\n'
 
 run_case unaudited 1 "is not one of the audited" \
   RUNNER_NAME=some-other-box RUNNER_ENVIRONMENT=self-hosted GITHUB_JOB=budgets
+# A known prefix is not enough on its own: the suffix must be the runner number.
+run_case unaudited-suffix 1 "is not one of the audited" \
+  RUNNER_NAME=coolify-vps-evil RUNNER_ENVIRONMENT=self-hosted GITHUB_JOB=budgets
+run_case unaudited-bare-prefix 1 "is not one of the audited" \
+  RUNNER_NAME=ci-rbx1- RUNNER_ENVIRONMENT=self-hosted GITHUB_JOB=budgets
 
 printf '\n\033[1m==> Outside Actions it refuses rather than guesses\033[0m\n'
 
