@@ -29,7 +29,7 @@ use Illuminate\Contracts\Validation\ValidationRule;
  * layer guards the same strings this rule guards (the Filament panel calls
  * fromValidated() directly and never sees this rule).
  */
-class RealWallTime implements ValidationRule, DataAwareRule
+class RealWallTime implements DataAwareRule, ValidationRule
 {
     /** @var array<string, mixed> */
     protected array $data = [];
