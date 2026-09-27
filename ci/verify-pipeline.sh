@@ -573,6 +573,27 @@ lint() {
         fail "the relaxed \`/admin\` LCP budget reads \`${admin_lcp}\`, not \`error|3000|median\`. That budget exists because Filament's stylesheet is render-blocking; it is not a general allowance to be widened. TOG-1008 tree-shook the theme to 342KB and brought the ceiling down from 3200 with it, and with the stylesheet stubbed out entirely the panel still medians 2047ms, so no further CSS work reaches the public 2000ms budget. If the panel genuinely got slower, find what regressed; do not raise this number."
         rc=1
       fi
+
+      # How LHCI launches Chrome, read the same way — through node, not grep.
+      # TOG-7021: the budgets job died on `Invalid URL: undefined`, the
+      # DevTools endpoint of a browser that never started, because LHCI shelled
+      # out to an unpinned Chrome with none of the sandbox workarounds every
+      # other launcher here passes. Both flags match ci/browser/launch.mjs and
+      # ci/a11y.mjs; dropping either is how the next startup crash arrives.
+      local chrome_flags
+      chrome_flags=$(node -e '
+        const path = require("path");
+        const config = require(path.resolve(process.argv[1]));
+        console.log((config.ci || {}).collect?.settings?.chromeFlags ?? "absent");
+      ' "$budget_file" 2>&1) || chrome_flags="unreadable: ${chrome_flags}"
+      for chrome_flag in --no-sandbox --disable-dev-shm-usage; do
+        if has_line "$chrome_flags" "$chrome_flag"; then
+          pass "LHCI launches Chrome with \`${chrome_flag}\`"
+        else
+          fail "ci/lighthouserc.cjs launches Chrome without \`${chrome_flag}\` (chromeFlags reads \`${chrome_flags}\`). On the persistent self-hosted hosts that is a browser that dies at startup and a job that fails as \`Invalid URL: undefined\` with zero assertion results (TOG-7021). The flags match ci/browser/launch.mjs and ci/a11y.mjs; if one genuinely has to go, say which and why in the commit, and update this check with it."
+          rc=1
+        fi
+      done
     fi
   fi
 
