@@ -47,6 +47,17 @@
         </div>
     </header>
 
+    {{-- TOG-7332: the list <-> calendar swap re-renders the content below
+         without reloading. The radio group already names the checked option;
+         this names the content change, politely. --}}
+    <p class="sr-only" role="status" data-testid="events-view-status">
+        @if ($view === 'list')
+            Showing events as a list.
+        @else
+            Showing events as a calendar.
+        @endif
+    </p>
+
     {{-- Search. Server-side: the query narrows the same rows the list and the
          grid render, and `?q=` stays in the URL so a search is a link a member
          can share. `live` with a debounce re-queries as the member types
@@ -185,6 +196,13 @@
                 @endforeach
             </ul>
         @endif
+
+        {{-- TOG-7332: the "See past events" drawer reveals the list below
+             without reloading. role="status" announces the reveal politely;
+             empty until asked so initial load stays silent. $showingPast, not
+             $showPast: a search also reveals past matches, and that change is
+             already named by the search status above. --}}
+        <p class="sr-only" role="status" data-testid="events-past-status">@if ($showingPast && $past->isNotEmpty())Showing past events.@endif</p>
 
     {{-- ------------------------------------------------------------------
          Calendar view. A real table, because a month grid is tabular data and
