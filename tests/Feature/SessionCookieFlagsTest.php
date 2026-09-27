@@ -16,15 +16,17 @@ use Symfony\Component\HttpFoundation\Cookie;
 
 it('pins the session cookie flags explicitly in .env.example', function () {
     $example = file_get_contents(base_path('.env.example'));
-    expect($example)->not->toBeFalse('.env.example must be readable');
+    expect($example)->not->toBeFalse();
 
-    foreach ([
+    // One assertion, not a loop with a message: Pest's toContain is variadic
+    // over needles and takes no message argument, so a second argument would
+    // be asserted as file content too. Either half of this file can fail on
+    // its own, so both stay — see the header comment.
+    expect($example)->toContain(
         'SESSION_SECURE_COOKIE=true',
         'SESSION_SAME_SITE=lax',
         'SESSION_DOMAIN=null',
-    ] as $line) {
-        expect($example)->toContain($line, ".env.example must pin {$line}");
-    }
+    );
 });
 
 /** The session cookie on a session-bearing response, with its flags attached. */
