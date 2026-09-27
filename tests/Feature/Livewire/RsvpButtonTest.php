@@ -216,6 +216,32 @@ it('shows a full event as full before the member ever clicks', function () {
         ->assertDontSeeHtml('data-testid="rsvp-going"');
 });
 
+it('shows the closed copy when the last seat goes while the member is deciding', function () {
+    // The stale-component edge, with no mocks: the button is offered because
+    // there is room at render, the seats fill before the click, and the real
+    // service refuses. The member must see "full", never a retryable failure.
+    $component = Livewire::actingAs($this->member)
+        ->test(RsvpButton::class, ['event' => $this->event])
+        ->assertSeeHtml('data-testid="rsvp-going"');
+
+    $takers = User::factory()->count(4)->create(['is_moderator' => false]);
+    foreach ($takers as $taker) {
+        app(EventService::class)->rsvp($this->event->fresh(), $taker, RsvpStatus::Going);
+    }
+
+    $component->call('rsvp', RsvpStatus::Going->value)
+        ->assertSee("This one's full.", false)
+        ->assertSee('Cap is 4.')
+        // Closed, not failed: nothing here may invite a retry that cannot succeed.
+        ->assertDontSee("That RSVP didn't save.", false)
+        ->assertDontSee('Try once more.', false)
+        ->assertDontSeeHtml('data-testid="rsvp-going"')
+        ->assertDontSeeHtml('data-testid="rsvp-failed"');
+
+    // And nothing was saved for the loser of the race.
+    expect(Rsvp::query()->where('user_id', $this->member->id)->exists())->toBeFalse();
+});
+
 it('still lets somebody already going stand down from a full event', function () {
     $full = Event::factory()->create([
         'starts_at' => now()->addDays(3),
