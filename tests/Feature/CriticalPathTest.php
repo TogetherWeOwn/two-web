@@ -82,3 +82,48 @@ it('serves the events page without a render-blocking script in the head', functi
         expect($tag)->toMatch('/\b(defer|async|type="module")\b/');
     }
 });
+
+/*
+ * Wall-time budgets for the funnel: home (/), join (/join), events (/events).
+ *
+ * These are server-side response times through the test client (no network),
+ * so they pin application regressions (N+1s, missing eager loads, middleware
+ * pile-ups), not front-end paint — paint is covered by the Lighthouse budgets
+ * job and the render-blocking assertions above.
+ *
+ * Measured locally 2026-09-27 (3 runs, sqlite, warmed app):
+ *     home    14–20ms
+ *     join     2–3ms
+ *     events  11–13ms
+ *
+ * Budgets are deliberately generous and CI-safe: CI runners are slower and
+ * noisier than a local box, so each budget sits ~50–300x above the measured
+ * local number. A ~10x regression against a realistic CI baseline (a few
+ * hundred ms) still fails loudly; normal CI jitter does not.
+ */
+it('serves the funnel within response-time budgets', function () {
+    Event::factory()->create([
+        'title' => 'Friday night Helldivers',
+        'starts_at' => now()->addDays(3),
+        'ends_at' => now()->addDays(3)->addHours(2),
+        'status' => EventStatus::Published,
+    ]);
+
+    $budgets = [
+        // route name => [url, budget ms]
+        'home' => [route('home'), 1500],
+        'join' => [route('join'), 1000],
+        'events' => [route('events.index'), 2000],
+    ];
+
+    foreach ($budgets as $name => [$url, $budgetMs]) {
+        $start = microtime(true);
+        $this->get($url)->assertOk();
+        $elapsedMs = (microtime(true) - $start) * 1000;
+
+        expect($elapsedMs)->toBeLessThan(
+            $budgetMs,
+            sprintf('%s took %.0fms against a %dms budget', $name, $elapsedMs, $budgetMs)
+        );
+    }
+});
