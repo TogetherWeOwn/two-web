@@ -42,9 +42,11 @@ and nobody sees a panel at all.
 ## What is built
 
 Everything below is in the tree and covered by
-`tests/Feature/MemberDataAccessLogTest.php` — twenty tests: one per clause of the
-requirement, and one per way the control was found to be evadable in review. None
-of it depends on Filament, which is not a dependency of this repo yet.
+`tests/Feature/MemberDataAccessLogTest.php` — twenty-four tests: one per clause
+of the requirement, one per way the control was found to be evadable in review,
+and four from the TOG-5611 coverage audit (keyless-User refusal, keyed-partial
+boundary, relation traversal, the `note()` escape hatch). None of it depends on
+Filament, which is not a dependency of this repo yet.
 
 | Piece | File |
 |---|---|
@@ -110,6 +112,23 @@ rather than read off the model. Reading the property would return null and drop
 the read silently, and what gets served in that case is a bio: contents, not an
 identifier. A select carrying neither the key nor `user_id` cannot be resolved at
 all, and is refused rather than dropped — see §2.
+
+The same rule covers a `User` hydrated without its key — `select('username')`,
+or `value('username')`, which is `first(['username'])` underneath. There is no
+owner key to resolve through (usernames are mutable, display names are not
+unique), so refusal is the only honest answer. The boundary is the key: a
+partial select carrying it (`select('id', 'username')`) is an ordinary recorded
+read. Both sides are pinned — `it refuses to serve a user read it cannot
+attribute to a member` and `it records a keyed partial select on users` — so a
+panel dropdown or autocomplete knows which side of the line it has to stay on.
+
+What the automatic path cannot see at all is a read that never hydrates:
+`pluck()`, aggregates, raw SQL, and the bot's read-only views. `pluck()` runs
+on the query builder — no model, no `retrieved` event, nothing for the listener
+to catch. Those screens must call `note()` with the members they showed, and
+`it records a pluck-shaped read the screen declares with note()` pins that the
+escape hatch writes the row. This is the same standing obligation as the raw-SQL
+one in "Still open" below, extended to plucks by the TOG-5611 audit.
 
 The viewer's own record is excluded. The authenticated user is hydrated on every
 request; without the exclusion, every page view would log a moderator looking at
@@ -229,7 +248,8 @@ beyond staging rather than by this table:
    dashboards, no rate limiting. The log answers questions when someone asks
    them. If a "who read the whole member list this week" query ever gets written,
    `subject_count` and the GIN index on `subject_user_ids` are there for it.
-3. **Reads outside Eloquent are not seen** — raw SQL, and the bot's read-only
+3. **Reads that never hydrate are not seen** — raw SQL, `pluck()` and other
+   query-builder reads that bypass the model layer, and the bot's read-only
    views (TWO-23). `note()` is the escape hatch and calling it is a thing to
    remember, which is the weakness of every escape hatch. Named again here
    because §1's automatic path is what the rest of this document leans on.
