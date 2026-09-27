@@ -6,8 +6,6 @@
 
 return [
 
-    'denied' => 'You cancelled the Discord sign-in, so we did not sign you in. Try again whenever you like.',
-
     'expired' => 'That sign-in attempt took too long and expired. Please try again.',
 
     'not_a_member' => 'You need to be a member of the Together We Own Discord server to sign in. Join the server, then come back.',
