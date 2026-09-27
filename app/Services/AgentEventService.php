@@ -2,6 +2,8 @@
 
 namespace App\Services;
 
+use App\Exceptions\EventNotOpenException;
+use App\Exceptions\StaleAgentVersionException;
 use App\Http\Requests\StoreEventRequest;
 use App\Models\AgentEventAudit;
 use App\Models\AgentEventGrant;
@@ -10,8 +12,6 @@ use App\Models\Event;
 use App\Services\Bot\EventRead;
 use App\Services\Bot\Exceptions\BotNotConfiguredException;
 use App\Services\Bot\Exceptions\BotTransportException;
-use App\Exceptions\EventNotOpenException;
-use App\Exceptions\StaleAgentVersionException;
 use App\Services\Bot\InternalActionClient;
 use App\Services\Bot\InternalActionFailure;
 use App\Support\AgentEventRateLimit;
