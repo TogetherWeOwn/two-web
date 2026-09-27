@@ -122,9 +122,7 @@
                 before they land on this page.
             </p>
             <div class="mt-5">
-                {{-- Route through /join (one-click OAuth + invite fallback), not the raw
-                     /discord invite — matches every other visitor-facing join CTA. --}}
-                <a href="{{ route('join') }}"
+                <a href="{{ route('discord') }}"
                    data-testid="discord-join"
                    class="inline-flex items-center justify-center gap-2 min-h-11 px-6 rounded-md
                           bg-brand text-on-brand font-semibold

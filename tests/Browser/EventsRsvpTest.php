@@ -235,6 +235,7 @@ test('an empty calendar reads as early rather than broken', function () {
                 ->visit('/events')
                 ->waitFor('[data-testid="events-empty-never"]')
                 ->assertSeeIn('[data-testid="events-empty-never"]', 'Nothing on the calendar yet.')
+                ->assertAttribute('[data-testid="events-empty-never"] [data-testid="discord-join"]', 'href', route('discord'))
                 ->assertSeeLink('Join the Discord')
                 ->assertMissing('[data-testid="events-empty-error"]')
                 ->assertMissing('[data-testid="rsvp-failed"]')
