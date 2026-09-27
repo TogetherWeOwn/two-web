@@ -1,7 +1,7 @@
 <?php
 
+use App\Services\Paperclip\BotEnvironment;
 use App\Services\Paperclip\ColdSetting;
-use App\Services\Paperclip\Exceptions\RestartCommandNotPinnedException;
 use App\Services\Paperclip\RestartCard;
 
 // ---------------------------------------------------------------------------
@@ -21,82 +21,35 @@ it('is a closed enum, so an unknown setting cannot be constructed from a string'
 });
 
 // ---------------------------------------------------------------------------
-// Fail closed until TOG-3573 pins the real host command.
+// The pinned restart command (TOG-3573) and the fixed card around it.
 // ---------------------------------------------------------------------------
 
-it('reports TWO_AUTOMOD as not yet pinned', function () {
-    expect(ColdSetting::TWO_AUTOMOD->isPinned())->toBeFalse()
-        ->and(ColdSetting::TWO_AUTOMOD->commands())->toBeNull();
+it('pins each bot environment to its own Coolify application', function () {
+    expect(BotEnvironment::Staging->coolifyAppUuid())->toBe('uy4d9ndeygjcem6lgayhxgub')
+        ->and(BotEnvironment::Production->coolifyAppUuid())->toBe('cangagerae31txrk2vfvzzyq')
+        ->and(BotEnvironment::tryFrom('prod'))->toBeNull();
 });
 
-it('refuses to build a card while the restart command is unpinned', function () {
-    expect(fn () => ColdSetting::TWO_AUTOMOD->restartCard('true'))
-        ->toThrow(RestartCommandNotPinnedException::class);
+it('restarts TWO_AUTOMOD through the Coolify API for the target environment only', function () {
+    $staging = ColdSetting::TWO_AUTOMOD->restartCommand(BotEnvironment::Staging);
+
+    expect($staging)->toBe('curl -fsS -X POST -H "Authorization: Bearer $COOLIFY_TOKEN" '
+        .'"$COOLIFY_URL/api/v1/applications/uy4d9ndeygjcem6lgayhxgub/restart"')
+        ->and($staging)->not->toContain('cangagerae31txrk2vfvzzyq')
+        ->and(ColdSetting::TWO_AUTOMOD->restartCommand(BotEnvironment::Production))
+        ->toContain('/applications/cangagerae31txrk2vfvzzyq/restart');
 });
 
-it('names the setting in the not-pinned failure so the reason is legible', function () {
-    try {
-        ColdSetting::TWO_AUTOMOD->restartCard('true');
-        test()->fail('Expected a RestartCommandNotPinnedException.');
-    } catch (RestartCommandNotPinnedException $e) {
-        expect($e->getMessage())->toContain('TWO_AUTOMOD');
-    }
-});
-
-// ---------------------------------------------------------------------------
-// Card shape, once a command is pinned. Proven against a pinned fake so the
-// template is under test today without shipping a guessed host command.
-// ---------------------------------------------------------------------------
-
-it('builds a card from constants and one validated value once pinned', function () {
-    // A stand-in for a pinned enum case: same template, a concrete command.
-    $card = fakePinnedCard(
-        setting: 'TWO_AUTOMOD',
-        newValue: 'true',
-        restart: 'docker restart two-bot',
-        rollback: 'docker restart two-bot  # after reverting the value',
-    );
+it('builds a card from constants, the environment and one validated value', function () {
+    $card = ColdSetting::TWO_AUTOMOD->restartCard('true', BotEnvironment::Staging);
 
     expect($card)->toBeInstanceOf(RestartCard::class)
-        ->and($card->title)->toBe('Operator: restart TWO bot to apply TWO_AUTOMOD=true')
+        ->and($card->title)->toBe('Operator: restart TWO bot (staging) to apply TWO_AUTOMOD=true')
         ->and($card->body)->toContain('`TWO_AUTOMOD`')
         ->and($card->body)->toContain('`true`')
-        ->and($card->body)->toContain('docker restart two-bot')
+        ->and($card->body)->toContain('two-bot staging (Coolify app `uy4d9ndeygjcem6lgayhxgub`)')
         ->and($card->body)->toContain('## Apply')
-        ->and($card->body)->toContain('## Rollback');
+        ->and($card->body)->toContain('## Rollback')
+        ->and($card->body)->toContain('back to its previous value')
+        ->and(substr_count($card->body, ColdSetting::TWO_AUTOMOD->restartCommand(BotEnvironment::Staging)))->toBe(2);
 });
-
-/**
- * Rebuild the fixed template with a concrete command, mirroring
- * ColdSetting::restartCard()/body() exactly. Keeps the card-shape assertions
- * honest while every real case is still unpinned (TOG-3573): if the enum's
- * template drifts from this, the assertions above catch it.
- */
-function fakePinnedCard(string $setting, string $newValue, string $restart, string $rollback): RestartCard
-{
-    $body = <<<MD
-        A cold bot setting was changed in the admin panel and needs a bot restart to take effect.
-
-        - **Setting:** `{$setting}`
-        - **New value:** `{$newValue}`
-
-        ## Apply
-
-        ```
-        {$restart}
-        ```
-
-        ## Rollback
-
-        ```
-        {$rollback}
-        ```
-
-        Filed automatically by two-web (TOG-3537). See `docs/cold-setting-restart-cards.md` for the decision record.
-        MD;
-
-    return new RestartCard(
-        title: "Operator: restart TWO bot to apply {$setting}={$newValue}",
-        body: $body,
-    );
-}
