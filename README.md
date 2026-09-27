@@ -231,6 +231,13 @@ with backoff, and tells the member plainly what state it is in. `rsvps` carries 
 `synced_to_discord_at` column so a page can tell the truth about whether Discord
 knows yet. QA tests this path deliberately, so build for it.
 
+### A demo calendar for staging reviewers
+
+`php artisan db:seed --class=Database\Seeders\StagingCalendarSeeder` builds a
+fixed 50-event calendar (30 published incl. 4 full, 6 drafts, 5 cancelled,
+9 past, across 6 timezones). Re-running updates the same rows, never duplicates;
+it throws in production. See `database/seeders/StagingCalendarSeeder.php`.
+
 ---
 
 ## Secrets
