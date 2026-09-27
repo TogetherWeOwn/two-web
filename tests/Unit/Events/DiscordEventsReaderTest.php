@@ -2,9 +2,9 @@
 
 use App\Enums\EventStatus;
 use App\Support\Events\DiscordEventsReader;
+use Illuminate\Contracts\Cache\Repository as CacheRepository;
 use Illuminate\Database\Connection;
 use Illuminate\Database\DatabaseManager;
-use Illuminate\Contracts\Cache\Repository as CacheRepository;
 use Illuminate\Support\Facades\Log;
 
 function discordReader(Connection $connection): DiscordEventsReader
@@ -76,7 +76,12 @@ it('renders nothing, not an error, when the bot database is unreachable', functi
     $db->shouldReceive('connection')->once()->with('bot')->andThrow(new RuntimeException('secret connection string'));
 
     $cache = Mockery::mock(CacheRepository::class);
-    $cache->shouldNotReceive('remember');
+    $cache->shouldReceive('remember')
+        ->once()
+        ->with('events.discord-upcoming', 600, Mockery::type(Closure::class))
+        ->andReturnUsing(
+            fn (string $key, int $ttl, Closure $read): mixed => $read(),
+        );
 
     expect((new DiscordEventsReader($db, $cache))->upcoming())->toBe([]);
 

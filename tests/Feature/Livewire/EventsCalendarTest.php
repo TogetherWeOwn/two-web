@@ -6,6 +6,7 @@ use App\Livewire\EventsCalendar;
 use App\Models\Event;
 use App\Models\Rsvp;
 use App\Models\User;
+use App\Support\Events\DiscordEventsSource;
 use Livewire\Livewire;
 
 /**
@@ -338,9 +339,9 @@ function sundaySquadEvent(): Event
 
 function mockDiscordEvents(array $events): void
 {
-    $source = Mockery::mock(App\Support\Events\DiscordEventsSource::class);
+    $source = Mockery::mock(DiscordEventsSource::class);
     $source->shouldReceive('upcoming')->andReturn($events);
-    app()->instance(App\Support\Events\DiscordEventsSource::class, $source);
+    app()->instance(DiscordEventsSource::class, $source);
 }
 
 it('lists the guild Sunday Squad event even when our own table is empty', function () {
@@ -385,9 +386,9 @@ it('orders Discord rows with local rows by start time', function () {
 });
 
 it('degrades to the local calendar when the bot database is unreachable', function () {
-    $source = Mockery::mock(App\Support\Events\DiscordEventsSource::class);
+    $source = Mockery::mock(DiscordEventsSource::class);
     $source->shouldReceive('upcoming')->andReturn([]);
-    app()->instance(App\Support\Events\DiscordEventsSource::class, $source);
+    app()->instance(DiscordEventsSource::class, $source);
 
     Livewire::test(EventsCalendar::class)
         ->assertSeeHtml('data-testid="events-empty-never"')
