@@ -16,6 +16,12 @@
         </a>
 
         <article data-testid="event-page" class="mt-4 rounded-lg bg-surface border border-line p-5 md:p-8">
+            {{-- Machine-readable event for crawlers: schema.org JSON-LD in the
+                 body is valid and parsed by Google, and keeps this off the
+                 shared layout that every other page hangs off. --}}
+            <script type="application/ld+json" data-testid="event-jsonld">
+                {!! json_encode(\App\Support\EventJsonLd::for($event), JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE) !!}
+            </script>
             <div class="flex flex-wrap items-start justify-between gap-3">
                 <div class="min-w-0">
                     <h1 class="u-display text-3xl text-ink lg:text-4xl">{{ $event->title }}</h1>
