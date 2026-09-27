@@ -47,6 +47,67 @@
         </div>
     </header>
 
+    {{-- Search. Server-side: the query narrows the same rows the list and the
+         grid render, and `?q=` stays in the URL so a search is a link a member
+         can share. `live` with a debounce re-queries as the member types
+         without turning each keystroke into a round trip. --}}
+    <div class="mt-6 flex items-center gap-2" role="search">
+        <label for="events-search" class="sr-only">Search events</label>
+        <input id="events-search"
+               type="search"
+               wire:model.live.debounce.300ms="search"
+               placeholder="Search events…"
+               autocomplete="off"
+               data-testid="events-search"
+               class="min-h-11 w-full max-w-md rounded-md border border-line bg-surface px-3
+                      text-ink placeholder:text-ink-muted" />
+        @if ($searching)
+            <button type="button"
+                    wire:click="clearSearch"
+                    data-testid="events-search-clear"
+                    class="inline-flex shrink-0 items-center justify-center min-h-11 px-4 rounded-md
+                           bg-transparent text-ink border border-line-strong
+                           hover:bg-raised hover:border-ink-muted active:bg-surface
+                           transition-colors duration-fast ease-out-quick">
+                Clear
+            </button>
+        @endif
+    </div>
+
+    {{-- What a search found, in words. `{{ }}` escapes the query on the way
+         out, so echoing it back here cannot become markup no matter what the
+         URL carried. `aria-live` because the line changes without reloading. --}}
+    @if ($searching)
+        <p class="mt-4 text-sm text-ink-muted" aria-live="polite" data-testid="events-search-status">
+            @if ($hasVisibleResults)
+                Results for &ldquo;{{ trim($search) }}&rdquo;
+            @else
+                Nothing matches &ldquo;{{ trim($search) }}&rdquo;.
+            @endif
+        </p>
+
+        @unless ($hasVisibleResults)
+            <div class="u-hatch mt-4 rounded-lg border border-line p-8 text-center"
+                 data-testid="events-empty-search">
+                <h2 class="text-lg font-semibold text-ink">Nothing matches that search.</h2>
+                <p class="mx-auto mt-1.5 max-w-prose text-sm text-ink-muted">
+                    Titles and descriptions are what's searched — try a different word.
+                </p>
+                <div class="mt-5">
+                    <button type="button"
+                            wire:click="clearSearch"
+                            data-testid="events-search-clear-empty"
+                            class="inline-flex items-center justify-center gap-2 min-h-11 px-5 rounded-md
+                                   bg-transparent text-ink border border-line-strong
+                                   hover:bg-raised hover:border-ink-muted active:bg-surface
+                                   transition-colors duration-fast ease-out-quick">
+                        Clear the search
+                    </button>
+                </div>
+            </div>
+        @endunless
+    @endif
+
     {{-- ------------------------------------------------------------------
          Empty states. Two of them, and they say different things. Neither
          reads as a broken page: that is the requirement this card names.
@@ -116,7 +177,7 @@
             </ul>
         @endif
 
-        @if ($showingPast && $past->isNotEmpty())
+        @if ($showPast && $past->isNotEmpty())
             <h2 class="mt-12 text-2xl text-ink">Past events</h2>
             <ul class="mt-4 flex flex-col gap-4" role="list" data-testid="events-past-list">
                 @foreach ($past as $event)
