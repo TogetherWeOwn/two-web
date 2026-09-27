@@ -92,6 +92,36 @@ it('shows a full event as closed on the shareable page, with no seat to take', f
         ->assertDontSee("That RSVP didn't save.", false);
 });
 
+it('lists attendee display names for a signed-in member', function () {
+    $event = publishedEvent();
+    $alice = User::factory()->create(['display_name' => 'Alice Attendee']);
+    $bob = User::factory()->create(['display_name' => 'Bob Going']);
+    Rsvp::factory()->for($event)->for($alice)->create(['status' => RsvpStatus::Going]);
+    Rsvp::factory()->for($event)->for($bob)->create(['status' => RsvpStatus::Going]);
+    // A maybe is not a seat and must not appear in the list.
+    Rsvp::factory()->for($event)->for($this->member)->create(['status' => RsvpStatus::Maybe]);
+
+    $this->actingAs($this->member)
+        ->get(route('events.page', $event))
+        ->assertOk()
+        ->assertSeeHtml('data-testid="event-attendees"')
+        ->assertSee('Alice Attendee')
+        ->assertSee('Bob Going');
+});
+
+it('hides attendee names from guests while keeping the count and join pitch', function () {
+    $event = publishedEvent();
+    $alice = User::factory()->create(['display_name' => 'Alice Attendee']);
+    Rsvp::factory()->for($event)->for($alice)->create(['status' => RsvpStatus::Going]);
+
+    $response = $this->get(route('events.page', $event))->assertOk();
+
+    $response->assertSee('1 going')
+        ->assertSeeHtml('data-testid="event-join-pitch"')
+        ->assertDontSeeHtml('data-testid="event-attendees"')
+        ->assertDontSee('Alice Attendee');
+});
+
 it('hides a draft from guests and members but shows it to moderators', function () {
     $draft = publishedEvent(['status' => EventStatus::Draft]);
 

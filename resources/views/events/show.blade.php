@@ -111,6 +111,28 @@
                 </a>
             </div>
 
+            {{-- Who's going: member display names for signed-in viewers only.
+                 Guests see the count in the header plus the join pitch below —
+                 no member-identifying data for logged-out visitors (TOG-5621).
+                 Names only, no profile links (TOG-6926 owns that). --}}
+            @auth
+                @if ($attendees->isNotEmpty())
+                    <div class="mt-6 border-t border-line pt-6" data-testid="event-attendees">
+                        <h2 class="text-sm font-semibold text-ink">
+                            Who's going ({{ $attendees->count() }})
+                        </h2>
+                        <ul class="mt-2 flex flex-wrap gap-1.5">
+                            @foreach ($attendees as $name)
+                                <li class="inline-flex items-center rounded-sm px-2 py-0.5 text-xs font-medium
+                                           bg-raised text-ink-muted border border-line">
+                                    {{ $name }}
+                                </li>
+                            @endforeach
+                        </ul>
+                    </div>
+                @endif
+            @endauth
+
             <div class="mt-6 border-t border-line pt-6">
                 @auth
                     <livewire:rsvp-button :event="$event" />

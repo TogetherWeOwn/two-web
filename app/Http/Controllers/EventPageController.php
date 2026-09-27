@@ -42,7 +42,23 @@ final class EventPageController
         $event->loadCount(['rsvps as going_count' => fn ($query) => $query->where('status', RsvpStatus::Going)]);
         $event->loadMissing('viewerRsvps');
 
-        $response = response()->view('events.show', ['event' => $event]);
+        // Who's going: member display names for signed-in viewers only, one
+        // query ordered by answer time. A guest gets the count the page already
+        // prints plus the join pitch — no member-identifying data leaves the
+        // server for a logged-out visitor (TOG-5621). Names only, no profile
+        // links: those belong to TOG-6926.
+        $attendees = auth()->check()
+            ? $event->rsvps()
+                ->where('status', RsvpStatus::Going)
+                ->with('user:id,display_name,username')
+                ->orderBy('created_at')
+                ->get()
+                ->map(fn ($rsvp) => $rsvp->user->display_name ?? $rsvp->user?->username)
+                ->filter()
+                ->values()
+            : collect();
+
+        $response = response()->view('events.show', ['event' => $event, 'attendees' => $attendees]);
 
         // Moderator-only preview: keep it out of the index. Published pages send
         // no robots signal at all — see EventGoneTest.
