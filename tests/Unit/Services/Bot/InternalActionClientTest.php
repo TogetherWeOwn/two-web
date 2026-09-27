@@ -18,10 +18,10 @@ use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
 use Monolog\Handler\TestHandler;
 
-const BOT_URL = 'http://bot.internal:3001';
+const BOT_URL = 'http://127.0.0.1:3001';
 const BOT_SECRET = 'two-web-test-secret-at-least-32-characters';
 const BOT_KEY_ID = 'web-test';
-const BOT_ENDPOINT = 'http://bot.internal:3001/internal/actions';
+const BOT_ENDPOINT = 'http://127.0.0.1:3001/internal/actions';
 
 function botClient(?string $url = BOT_URL, ?string $secret = BOT_SECRET, ?string $keyId = BOT_KEY_ID): InternalActionClient
 {
