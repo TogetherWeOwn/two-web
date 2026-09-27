@@ -433,6 +433,44 @@ it('clears the search and brings the full list back', function () {
 });
 
 /* ---------------------------------------------------------------------------
+   Live-region announcements (TOG-7332). The list <-> calendar swap, the month
+   steps and the past drawer all re-render without reloading, so each change
+   has to be named for screen readers — politely (role="status"), never as an
+   alert.
+   --------------------------------------------------------------------------- */
+
+it('names the current view in a polite live region', function () {
+    Livewire::test(EventsCalendar::class)
+        ->assertSeeHtml('data-testid="events-view-status"')
+        ->assertSee('Showing events as a list.')
+        ->call('setView', 'calendar')
+        ->assertSee('Showing events as a calendar.');
+});
+
+it('announces the past-events reveal, and stays silent until asked', function () {
+    pastEvent();
+
+    // Empty until asked, so the initial load announces nothing.
+    $html = Livewire::test(EventsCalendar::class)->html();
+
+    expect($html)->toContain('data-testid="events-past-status"')
+        ->not->toContain('Showing past events.');
+
+    Livewire::test(EventsCalendar::class)
+        ->call('showPast')
+        ->assertSee('Showing past events.');
+});
+
+it('announces month steps through a polite live month label', function () {
+    $html = Livewire::test(EventsCalendar::class)
+        ->call('setView', 'calendar')
+        ->html();
+
+    expect($html)->toContain('aria-live="polite"')
+        ->toContain('data-testid="calendar-month"');
+});
+
+/* ---------------------------------------------------------------------------
    Performance. The page is server-rendered and the counts must not be a query
    per card — this is the LCP budget, asserted rather than hoped for.
    --------------------------------------------------------------------------- */
