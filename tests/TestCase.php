@@ -29,8 +29,6 @@ abstract class TestCase extends BaseTestCase
      *     assumption this method rests on.
      *   - an entrypoint that does not exist is caught with no build at all by
      *     tests/Unit/ViteEntrypointsTest.php.
-     *   - a missing or broken build fails `dusk` and `budgets`, which both build
-     *     for real and render the layout in real Chrome.
      *
      * Dusk does not come through here — DuskTestCase extends Laravel\Dusk\TestCase
      * — so the browser suite still gets the real, built assets.
