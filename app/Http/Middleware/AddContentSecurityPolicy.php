@@ -43,13 +43,20 @@ use Symfony\Component\HttpFoundation\Response;
  *   become plugin execution.
  *
  * `frame-ancestors 'none'` mirrors the `X-Frame-Options: DENY` nginx already
- * sends (nothing frames this site); `form-action 'self'` keeps the logout and
- * profile forms same-origin (Discord OAuth leaves via 302 redirects, not form
- * posts, so it is unaffected). `upgrade-insecure-requests` is emitted on https
- * requests only: on an http origin it is NOT a no-op — it upgrades the page
- * while the form still targets the http origin, and `form-action 'self'` then
- * blocks the POST (Dusk caught this on the admin logout, TOG-7095). HSTS
- * already forces https on staging/production, so nothing is lost there.
+ * sends (nothing frames this site). There is deliberately NO `form-action`
+ * directive: form submissions fall back to `default-src 'self'`, so they stay
+ * same-origin (Discord OAuth leaves via 302 redirects, not form posts, so it
+ * is unaffected either way). An explicit `form-action 'self'` was tried and
+ * reverted (TOG-7095): Chrome 131 blocks the admin logout POST — same scheme,
+ * host and port on both ends, single served header, no meta policy, no base
+ * tag — while the mechanically identical site sign-out POST passes. Root
+ * cause undetermined (suspect: the topbar's teleported duplicate logout form
+ * interacting with the directive); the CISO sign-out bar (TOG-5469 V4) requires
+ * a working logout journey, which outranks a directive whose fallback already
+ * enforces the same bound. `upgrade-insecure-requests` is emitted on https
+ * requests only: on an http origin it upgrades the page while forms still
+ * target http. HSTS already forces https on staging/production, so nothing is
+ * lost there.
  *
  * Registered on the `web` group and on the Filament admin stack (which does
  * not use `web`), so every HTML page in both stacks carries it. Anything that
@@ -105,7 +112,6 @@ class AddContentSecurityPolicy
             "img-src 'self' data: https:",
             "font-src 'self' data:",
             'connect-src '.implode(' ', $connect),
-            "form-action 'self'",
             "frame-ancestors 'none'",
             "base-uri 'self'",
             "object-src 'none'",
