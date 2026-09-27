@@ -72,6 +72,30 @@ it('omits location rather than emitting null when the event has none', function 
     expect($data)->not->toHaveKey('location');
 });
 
+it('keeps a hostile title inside the JSON-LD block instead of breaking out of the script tag', function () {
+    // Titles are free text, so a literal `</script>` in the JSON would close
+    // this block and let the rest parse as HTML. `<`, `>`, `&` and quotes go
+    // out hex-escaped (`<` etc.), which is still valid JSON-LD: the raw
+    // block holds no literal closing tag and decodes back to the exact title.
+    $title = 'Raid night </script><script>alert(1)</script>';
+    $event = Event::factory()->create([
+        'title' => $title,
+        'status' => EventStatus::Published,
+    ]);
+
+    $html = $this->get(route('events.page', $event))->assertOk()->getContent();
+
+    preg_match(
+        '/<script type="application\/ld\+json" data-testid="event-jsonld">(.*?)<\/script>/s',
+        $html,
+        $matches
+    );
+
+    expect($matches[1] ?? null)->not->toBeNull()
+        ->and($matches[1])->not->toContain('</script>')
+        ->and(jsonLdOnPage($html)['name'])->toBe($title);
+});
+
 it('builds the JSON-LD from the same model without an HTTP round trip', function () {
     $event = Event::factory()->create([
         'title' => 'Friday night Helldivers',

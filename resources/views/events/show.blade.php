@@ -18,9 +18,12 @@
         <article data-testid="event-page" class="mt-4 rounded-lg bg-surface border border-line p-5 md:p-8">
             {{-- Machine-readable event for crawlers: schema.org JSON-LD in the
                  body is valid and parsed by Google, and keeps this off the
-                 shared layout that every other page hangs off. --}}
+                 shared layout that every other page hangs off. Slashes and
+                 unicode stay readable; `<`, `>`, `&`, quotes are hex-escaped
+                 so a title containing `</script>` cannot break out of this
+                 block — titles are free text. --}}
             <script type="application/ld+json" data-testid="event-jsonld">
-                {!! json_encode(\App\Support\EventJsonLd::for($event), JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE) !!}
+                {!! json_encode(\App\Support\EventJsonLd::for($event), JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_AMP | JSON_HEX_QUOT) !!}
             </script>
             <div class="flex flex-wrap items-start justify-between gap-3">
                 <div class="min-w-0">
