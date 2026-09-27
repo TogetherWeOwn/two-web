@@ -2,6 +2,8 @@
 
 namespace App\Providers;
 
+use App\Enums\EventStatus;
+use App\Models\Event as EventModel;
 use App\Models\Profile;
 use App\Models\User;
 use App\Services\Bot\InternalActionClient;
@@ -19,10 +21,12 @@ use Illuminate\Support\Facades\Event;
 use Illuminate\Support\Facades\Gate;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Queue;
+use Illuminate\Support\Facades\View;
 use Illuminate\Support\ServiceProvider;
 use Livewire\Livewire;
 use SocialiteProviders\Discord\DiscordExtendSocialite;
 use SocialiteProviders\Manager\SocialiteWasCalled;
+use Throwable;
 
 class AppServiceProvider extends ServiceProvider
 {
@@ -143,6 +147,37 @@ class AppServiceProvider extends ServiceProvider
         // provider is about seventy lines we would then own and get subtly
         // wrong, against a package the Laravel ecosystem already leans on.
         Event::listen(SocialiteWasCalled::class, [DiscordExtendSocialite::class, 'handle']);
+
+        // The 404 page's "happening soon" suggestions (TOG-6929). A composer,
+        // not controller code: Laravel renders `errors/404.blade.php` directly
+        // from the exception handler, so no controller ever runs for it.
+        //
+        // The catch is deliberate and broad. A 404 fires for any unknown URL,
+        // including while the database is down — catching only QueryException
+        // would turn "page not found" into a 500 the day the schema is the
+        // thing that is broken. The failure is logged at warning, not hidden:
+        // an empty suggestion list is the degraded state, not the quiet one.
+        View::composer('errors.404', function (\Illuminate\View\View $view): void {
+            try {
+                $query = EventModel::query()
+                    ->where('ends_at', '>=', now())
+                    ->orderBy('starts_at')
+                    ->limit(3);
+
+                // A draft has not been announced to anybody. Moderators see them
+                // so they can check a card before publishing it; nobody else
+                // knows it exists. Same rule the listing enforces.
+                if (! Gate::allows('viewDrafts', EventModel::class)) {
+                    $query->where('status', '!=', EventStatus::Draft->value);
+                }
+
+                $view->with('suggestedEvents', $query->get());
+            } catch (Throwable $e) {
+                Log::warning('404 suggestions unavailable.', ['exception' => get_class($e)]);
+
+                $view->with('suggestedEvents', collect());
+            }
+        });
 
         // The one permission the site has. It is recomputed from the member's
         // Discord roles on every login — see DiscordLoginController — so removing
