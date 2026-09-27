@@ -7,6 +7,7 @@ use App\Enums\RsvpStatus;
 use App\Models\Event;
 use Carbon\CarbonImmutable;
 use Carbon\Exceptions\InvalidFormatException;
+use DateTimeZone;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Collection;
 use Illuminate\Support\Facades\Gate;
@@ -224,7 +225,13 @@ class EventsCalendar extends Component
 
         $cursor = $start->startOfWeek(CarbonImmutable::MONDAY);
         $end = $start->endOfMonth()->endOfWeek(CarbonImmutable::SUNDAY);
-        $today = CarbonImmutable::now()->format('Y-m-d');
+        // The buckets above are keyed by each event's host-zone date, so today
+        // has to be a host-zone date too. A server-zone Y-m-d lights the wrong
+        // cell whenever the two zones disagree about what day it is — for a
+        // London community on UTC servers, the small hours of every summer
+        // morning. See calendarZone() for why this is the hosts' zone and not
+        // the viewer's.
+        $today = CarbonImmutable::now($this->calendarZone($events))->format('Y-m-d');
 
         $weeks = [];
         $week = [];
@@ -248,6 +255,51 @@ class EventsCalendar extends Component
         }
 
         return $weeks;
+    }
+
+    /**
+     * The zone the grid's "today" is evaluated in: the hosts' zone, not the
+     * server's and not the viewer's.
+     *
+     * Times on this page are the wall clock in the zone the host chose — the
+     * card partial, the share page, the JSON `starts_at_local` and the ICS all
+     * contract that, and the `<time datetime>` instant beside each one lets any
+     * viewer reinterpret it. A guest has no profile timezone, so per-viewer
+     * rendering would fork this public page into two display modes anyway; and
+     * `profiles.timezone` is collected so people know when to find each other
+     * ("Add yours so people know when you are around"), not for rendering.
+     *
+     * Each event carries its own zone, but the highlight is one cell: the most
+     * common zone among the events shown, which is the community's zone in
+     * practice. No events, no hosts — the app zone, which is what an empty
+     * grid has always used. An unknown identifier there falls back the same
+     * way rather than fataling on a row written before validation existed.
+     *
+     * @param  Collection<int, Event>  $events
+     */
+    private function calendarZone(Collection $events): string
+    {
+        $counts = [];
+
+        foreach ($events as $event) {
+            // The column is a non-nullable string, so the only unusable value
+            // is an empty one; anything else is validated against the IANA
+            // list below rather than trusted.
+            if ($event->timezone !== '') {
+                $counts[$event->timezone] = ($counts[$event->timezone] ?? 0) + 1;
+            }
+        }
+
+        if ($counts !== []) {
+            arsort($counts);
+            $zone = (string) array_key_first($counts);
+
+            if (in_array($zone, DateTimeZone::listIdentifiers(), true)) {
+                return $zone;
+            }
+        }
+
+        return config('app.timezone', 'UTC');
     }
 
     /**
