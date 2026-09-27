@@ -17,11 +17,12 @@ class EventForm
             ->components([
                 TextInput::make('title')
                     ->required()
-                    ->maxLength(255),
+                    ->maxLength(100),
                 TextInput::make('game')
-                    ->maxLength(255),
+                    ->maxLength(100),
                 Textarea::make('description')
                     ->rows(4)
+                    ->maxLength(1000)
                     ->columnSpanFull(),
 
                 // Wall time plus zone, resolved to a UTC instant by EventInput
