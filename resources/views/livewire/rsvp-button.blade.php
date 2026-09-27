@@ -25,7 +25,7 @@
             <p class="inline-flex items-center gap-1.5 rounded-sm px-2 py-0.5 text-xs font-medium
                       bg-raised text-ink-muted border border-line self-start"
                data-testid="rsvp-closed">
-                {{ $this->event->status === \App\Enums\EventStatus::Cancelled ? 'Cancelled' : 'This one has been and gone' }}
+                {{ $this->event->status === \App\Enums\EventStatus::Cancelled ? 'Cancelled' : ($this->event->status === \App\Enums\EventStatus::Draft ? 'Not published yet' : 'This one has been and gone') }}
             </p>
 
         @elseif ($full || $atCapacity)
