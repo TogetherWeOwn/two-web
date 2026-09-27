@@ -170,3 +170,18 @@ it('keeps the form open and identifies fields when an edit fails validation', fu
         ->toContain('wire:loading.attr="disabled"')
         ->toContain('Saving…');
 });
+
+it('saves an empty games list without errors', function () {
+    $member = User::factory()->create();
+    Profile::factory()->for($member)->create(['games' => ['Minecraft']]);
+
+    Livewire::actingAs($member)
+        ->test(MemberProfile::class, ['member' => $member, 'stats' => profileStats($member->discord_id)])
+        ->call('edit')
+        ->set('gamesText', '')
+        ->call('save')
+        ->assertSet('editing', false)
+        ->assertSee('Profile saved.');
+
+    expect($member->profile()->first()->games)->toBe([]);
+});
