@@ -43,11 +43,6 @@ Route::get('/sitemap_index.xml', function () {
         ->header('Content-Type', 'application/xml; charset=UTF-8');
 })->name('sitemap');
 
-// Static about page. Dependency-free leaf (TOG-5310): no controller, no
-// database, no Livewire — Route::view only, so it renders even when the bot's
-// database is down.
-Route::view('/about', 'about')->name('about');
-
 // Static house rules. Dependency-free leaf (TOG-5147): no controller, no
 // database, no Livewire — Route::view only, so it renders even when the bot's
 // database is down.
