@@ -10,7 +10,7 @@
     ruled sections rather than fabricated community imagery. Featured content is
     the honest artifact path when moderators have a sourced item to publish.
 --}}
-<x-layouts.app title="Together We Own — the lobby is open" scheme="ledger">
+<x-layouts.app title="Together We Own — the lobby is open" scheme="ledger" :canonical="route('home')" :shareDescription="$content['hero']['lead']">
     <div class="min-h-full bg-ledger-paper text-ledger-ink">
         <div class="h-2 bg-brand" aria-hidden="true"></div>
 
