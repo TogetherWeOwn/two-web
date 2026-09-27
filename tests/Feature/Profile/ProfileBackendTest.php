@@ -147,3 +147,37 @@ it('still renders the profile when member stats are unavailable', function () {
         ->assertSee('Activity is taking a breather')
         ->assertDontSee('SQLSTATE');
 });
+
+it('accepts a profile update without the games key', function () {
+    $member = User::factory()->create();
+    Profile::factory()->for($member)->create([
+        'bio' => 'Before',
+        'games' => ['Minecraft'],
+        'timezone' => 'Europe/London',
+    ]);
+
+    $this->actingAs($member)
+        ->patch(route('profiles.update', $member), [
+            'bio' => 'Still here, new bio.',
+        ])
+        ->assertRedirect(route('profiles.show', $member));
+
+    expect($member->profile()->first())
+        ->bio->toBe('Still here, new bio.')
+        ->games->toBe([])
+        ->timezone->toBeNull();
+});
+
+it('accepts an explicit null games list', function () {
+    $member = User::factory()->create();
+    Profile::factory()->for($member)->create(['games' => ['Minecraft']]);
+
+    $this->actingAs($member)
+        ->patch(route('profiles.update', $member), [
+            'bio' => 'Bio stays.',
+            'games' => null,
+        ])
+        ->assertRedirect(route('profiles.show', $member));
+
+    expect($member->profile()->first()->games)->toBe([]);
+});

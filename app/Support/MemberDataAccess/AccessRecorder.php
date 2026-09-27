@@ -99,11 +99,17 @@ class AccessRecorder
         }
 
         // Member data was read and we cannot say whose. Dropping it would serve
-        // profile contents with no record — the exact failure this table exists
+        // member contents with no record — the exact failure this table exists
         // to prevent — so it is remembered and the middleware refuses the read.
-        if ($model instanceof Profile) {
-            $this->unattributable = true;
-        }
+        //
+        // This is not Profile-only. A keyless User hydration —
+        // `select('username')`, or `value('username')` which is `first(['username'])`
+        // underneath — serves member contents with no key on the model to record
+        // against, and unlike a Profile there is no owner key to resolve through.
+        // Usernames are mutable and display names are not unique, so there is
+        // nothing reliable to look the member up by: refusal is the honest answer,
+        // on the same rule as the Profile residue below.
+        $this->unattributable = true;
     }
 
     /**

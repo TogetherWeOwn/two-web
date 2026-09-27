@@ -79,3 +79,33 @@ if [ "$staging_rule_count" -ne 1 ] || [ "$default_rule_count" -ne 1 ] || [ "$hea
 fi
 
 pass "nginx emits X-Robots-Tag only for staging.togetherweown.com"
+
+# The CISO session-handling bar (TOG-5469, violations V2) pins the origin
+# security headers to the docs/dns.md "Security headers" table. Each header
+# must appear exactly once with exactly the documented value, so a later
+# template edit cannot silently drop HSTS or loosen framing back to SAMEORIGIN.
+check_header() {
+  # Fixed-string match on the full directive: header values carry parentheses
+  # and semicolons that must not be read as regex.
+  local name="$1" value="$2" line count
+  line="add_header ${name} \"${value}\""
+  count="$(grep -F -c -- "${line}" "$CONFIG")"
+  if [ "$count" -ne 1 ]; then
+    fail "nginx.template.conf must emit ${line} exactly once (found ${count})"
+    exit 1
+  fi
+}
+
+check_header 'Strict-Transport-Security' 'max-age=31536000; includeSubDomains'
+check_header 'X-Content-Type-Options' 'nosniff'
+check_header 'Referrer-Policy' 'strict-origin-when-cross-origin'
+check_header 'X-Frame-Options' 'DENY'
+check_header 'Permissions-Policy' 'camera=(), microphone=(), geolocation=()'
+
+hsts_always="$(grep -Ec '^[[:space:]]*add_header[[:space:]]+Strict-Transport-Security[[:space:]]+.*always;[[:space:]]*$' "$CONFIG")"
+if [ "$hsts_always" -ne 1 ]; then
+  fail "Strict-Transport-Security must carry always so error responses send HSTS too (found ${hsts_always})"
+  exit 1
+fi
+
+pass "nginx emits the docs/dns.md origin security headers with the documented values"

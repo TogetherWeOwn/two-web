@@ -79,6 +79,13 @@ class RsvpButton extends Component
         try {
             RsvpRateLimit::hit($user);
             $events->rsvp($this->event, $user, $answer);
+            // TOG-6956: a successful write swaps the focused button for the
+            // confirmation, which drops keyboard focus to <body>. The
+            // self-dispatch fires after Livewire has morphed the new state in,
+            // and the view's listener moves focus to the confirmation. Only on
+            // success: on failure the button stays put, so focus is already
+            // where it belongs.
+            $this->dispatch('rsvp-state-changed')->self();
         } catch (EventAtCapacityException) {
             $this->full = true;
         } catch (EventNotOpenException) {
@@ -111,6 +118,9 @@ class RsvpButton extends Component
         try {
             RsvpRateLimit::hit($user);
             $events->withdrawRsvp($this->event, $user);
+            // TOG-6956: same swap in reverse — the withdraw control is replaced
+            // by the "I'm in" button. Refocus after the successful round trip.
+            $this->dispatch('rsvp-state-changed')->self();
         } catch (ThrottleRequestsException $exception) {
             throw $exception;
         } catch (Throwable) {

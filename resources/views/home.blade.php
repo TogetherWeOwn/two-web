@@ -10,7 +10,7 @@
     ruled sections rather than fabricated community imagery. Featured content is
     the honest artifact path when moderators have a sourced item to publish.
 --}}
-<x-layouts.app title="Together We Own — the lobby is open" scheme="ledger">
+<x-layouts.app title="Together We Own — the lobby is open" scheme="ledger" :canonical="route('home')" :shareDescription="$content['hero']['lead']">
     <div class="min-h-full bg-ledger-paper text-ledger-ink">
         <div class="h-2 bg-brand" aria-hidden="true"></div>
 
@@ -82,7 +82,11 @@
                                         <p class="mt-3 max-w-2xl text-lg leading-relaxed">{{ $item->body }}</p>
                                     @endif
                                     @if ($item->image_url)
-                                        <img src="{{ $item->image_url }}" alt="" loading="lazy" decoding="async" class="mt-5 w-full border border-ledger-rule">
+                                        {{-- Moderator URLs have no known dimensions, so `aspect-video`
+                                             reserves the box (no CLS) the same way the taste concept
+                                             does; `object-cover` keeps the crop honest. Lazy: this
+                                             sits beside/below the hero, not in the LCP path. --}}
+                                        <img src="{{ $item->image_url }}" alt="" loading="lazy" decoding="async" class="mt-5 aspect-video w-full border border-ledger-rule object-cover">
                                     @endif
                                 </article>
                             @endforeach
@@ -180,11 +184,15 @@
 
             <footer class="flex flex-col gap-4 pb-4 pt-10 text-sm md:flex-row md:items-center md:justify-between">
                 <p>Together We Own · adult gaming community · founded 1998</p>
-                @auth
-                    <a href="{{ route('profile') }}" class="font-semibold underline underline-offset-4 hover:text-brand">Your profile</a>
-                @else
-                    <a href="{{ route('login') }}" data-testid="discord-login" class="font-semibold underline underline-offset-4 hover:text-brand">Log in with Discord</a>
-                @endauth
+                <div class="flex flex-wrap items-center gap-4 md:gap-6">
+                    <a href="{{ route('about') }}" class="font-semibold underline underline-offset-4 hover:text-brand">About</a>
+                    <a href="{{ route('rules') }}" class="font-semibold underline underline-offset-4 hover:text-brand">House rules</a>
+                    @auth
+                        <a href="{{ route('profile') }}" class="font-semibold underline underline-offset-4 hover:text-brand">Your profile</a>
+                    @else
+                        <a href="{{ route('login') }}" data-testid="discord-login" class="font-semibold underline underline-offset-4 hover:text-brand">Log in with Discord</a>
+                    @endauth
+                </div>
             </footer>
         </div>
     </div>
