@@ -80,6 +80,10 @@ it('adds and signs in the member before landing on the profile', function () {
     $user = User::query()->sole();
     $this->assertAuthenticatedAs($user);
 
+    // New rows still land non-moderator via the column default; login sets
+    // the flag from Discord roles on the next sign-in.
+    expect($user->is_moderator)->toBeFalse();
+
     Http::assertSent(function (ClientRequest $request) {
         $payload = json_decode($request->body(), true);
 
@@ -91,6 +95,24 @@ it('adds and signs in the member before landing on the profile', function () {
             ]
             && $request->header('Idempotency-Key') === [];
     });
+});
+
+it('does not demote a returning moderator on re-join', function () {
+    $existing = User::factory()->moderator()->create(['discord_id' => JOIN_ID]);
+
+    stubJoinProvider();
+    Http::fake([JOIN_ENDPOINT => Http::response([
+        'ok' => true,
+        'result' => ['outcome' => 'already_member'],
+        'request_id' => '01JMODKEPT',
+    ], 200)]);
+
+    $this->get('/join/callback?code=good&state=x')
+        ->assertRedirect(route('profile'))
+        ->assertSessionHas('join_result', 'already_member');
+
+    expect($existing->fresh()->is_moderator)->toBeTrue()
+        ->and(User::query()->where('discord_id', JOIN_ID)->count())->toBe(1);
 });
 
 it('falls back to the invite without storing the token when the bot is down', function () {
