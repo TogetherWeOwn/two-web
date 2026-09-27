@@ -274,6 +274,40 @@ Frontend Engineer. It is a CEO decision, made in writing on the issue, and then
 landed here as its own commit that says so. A threshold quietly relaxed inside a
 feature PR is the specific thing this file exists to prevent.
 
+### On the bundle budget
+
+Two earlier defects are why the built assets have ceilings of their own. An
+`axios` import nothing called cost 48 KB of the 49 KB bundle on every page
+(TOG-53), and `hallmark.css` listed unconditionally cost a second render-blocking
+stylesheet on pages that never render it (TOG-3233). Both merged while every
+check stayed green, because no check was measuring the bytes.
+
+`ci/bundle-budget.json` caps every vite `input:` entrypoint twice: raw bytes
+and gzip bytes, measured against `public/build/manifest.json` — the assets the
+pages really load. Raw catches dependency accidents; gzip is what the Slow 4G
+profile actually pays for. Raising a ceiling is a deliberate edit in its own
+commit that says what grew and why, plus the matching `--lint` pin — the same
+standard as the Lighthouse budgets above.
+
+Three layers, because each one covers a failure the others cannot see:
+
+| Layer | Where it runs | What it catches |
+|---|---|---|
+| `node ci/check-bundle-budget.mjs` | `budgets`, right after `npm run build` | the built bytes over a ceiling — fails the job |
+| `tests/Unit/ViteBundleBudgetTest.php` | `pest`, no build | an input with no budget, a stale ceiling, a non-positive number |
+| `--lint` check 12 in `ci/verify-pipeline.sh` | `static` | a ceiling quietly raised, an entry deleted, the enforcement step dropped |
+| `node ci/check-bundle-budget.mjs --selftest` | `static` | the checker itself going quiet — a neutered checker and a fitting bundle look identical otherwise |
+
+Baseline (vite 7.3.6, 2026-09-27): app.css 62,560 raw / 11,719 gzip against
+76,800 / 15,360; theme.css 342,710 / 33,013 against 375,000 / 38,000;
+hallmark.css 10,853 / 2,651 against 15,360 / 4,096; app.js 1 / 21 against
+5,120 / 2,048. theme.css is the tightest ceiling on purpose: it is Filament's
+vendor stylesheet (342 KB of hand-authored component CSS, see the header of
+`resources/css/filament/admin/theme.css`), so most of its bytes are not ours to
+shrink — but a vendor upgrade that grows it is not our regression to absorb
+silently either. ~9% raw / ~15% gzip headroom means an upgrade that meaningfully
+grows the panel goes red and gets a decision, while patch releases pass.
+
 ### Adding a page
 
 `ci/pages.cjs` is the one list both budget tools read. **A route that is not in that
