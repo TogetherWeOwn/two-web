@@ -70,7 +70,9 @@ class AppServiceProvider extends ServiceProvider
             token: $this->stringConfig('services.paperclip.token'),
             companyId: $this->stringConfig('services.paperclip.company_id'),
             operatorLabelId: $this->stringConfig('services.paperclip.operator_label_id'),
-            operatorAssigneeUserId: $this->stringConfig('services.paperclip.operator_assignee_user_id'),
+            parentIssueId: $this->stringConfig('services.paperclip.parent_issue_id'),
+            restartAssigneeAgentId: $this->stringConfig('services.paperclip.restart_assignee_agent_id'),
+            botEnvironment: $this->stringConfig('services.paperclip.bot_environment'),
             timeoutSeconds: (int) config('services.paperclip.timeout', 5),
         ));
     }
