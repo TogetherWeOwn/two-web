@@ -1,5 +1,6 @@
 <?php
 
+use App\Enums\EventStatus;
 use App\Http\Controllers\Auth\DiscordLoginController;
 use App\Http\Controllers\Auth\StagingQaLoginController;
 use App\Http\Controllers\DesignLab\HallmarkController;
@@ -14,6 +15,7 @@ use App\Http\Controllers\ProfileController;
 use App\Http\Controllers\RsvpController;
 use App\Livewire\EventsCalendar;
 use App\Livewire\PastEvents;
+use App\Models\Event;
 use Illuminate\Support\Facades\Route;
 
 // The landing page reads the bot's counts and the featured rows moderators
@@ -28,8 +30,15 @@ Route::get('/', HomeController::class)->name('home');
 Route::get('/design-lab/hallmark', HallmarkController::class)->name('design-lab.hallmark');
 Route::get('/design-lab/taste', [HomeController::class, 'taste'])->name('design-lab.taste');
 
-// Public pages only. Keep this explicit: auth callbacks, signed-in profiles and
-// event-detail URLs do not belong in the index, while the event collection does.
+// Public pages plus the shareable event pages (TOG-7072). Keep this explicit:
+// auth callbacks, signed-in profiles, the JSON collection and /admin never
+// belong in the index, while the event collection and the live event-detail
+// pages do.
+//
+// Published events only: drafts 403 for guests, cancelled answers 410 Gone
+// (TOG-6781), and past events are over — none of those belong in a crawlable
+// index. The sitemap is fetched without a session, so this is exactly the set
+// a guest can open with a 200.
 Route::get('/sitemap_index.xml', function () {
     $urls = [
         ['loc' => route('home'), 'changefreq' => 'weekly', 'priority' => '1.0'],
@@ -38,6 +47,20 @@ Route::get('/sitemap_index.xml', function () {
         ['loc' => route('about'), 'changefreq' => 'monthly', 'priority' => '0.7'],
         ['loc' => route('rules'), 'changefreq' => 'monthly', 'priority' => '0.7'],
     ];
+
+    $events = Event::query()
+        ->where('status', EventStatus::Published->value)
+        ->orderBy('starts_at')
+        ->get(['event_key', 'updated_at']);
+
+    foreach ($events as $event) {
+        $urls[] = [
+            'loc' => route('events.page', $event),
+            'lastmod' => $event->updated_at?->toAtomString(),
+            'changefreq' => 'weekly',
+            'priority' => '0.6',
+        ];
+    }
 
     return response()
         ->view('sitemap', ['urls' => $urls])
