@@ -27,10 +27,11 @@ class AgentEventController
     {
         // The JSON document, exactly as sent: it is what the idempotency
         // digest is computed over, so query strings and form fields stay out.
-        $body = $request->json()->all();
-
+        // `json()->all()` always returns an array — a non-object document
+        // still decodes to one and is answered by the service's audited 422,
+        // so no shape guard belongs here.
         $answer = $this->agentEvents->handle(
-            is_array($body) ? $body : [],
+            $request->json()->all(),
             $request->bearerToken(),
         );
 

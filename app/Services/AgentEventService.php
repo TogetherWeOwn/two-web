@@ -56,6 +56,7 @@ class AgentEventService
     ) {}
 
     /**
+     * @param  array<string, mixed>  $body
      * @return array{status: int, body: array<string, mixed>}
      */
     public function handle(array $body, ?string $credential): array
@@ -280,7 +281,7 @@ class AgentEventService
      * Store one execution's answer, or answer from the concurrent winner.
      *
      * @param  array{status: int, body: array<string, mixed>, event_key: string|null, stored: bool|null}  $answer
-     * @return array{status: int, body: array<string, mixed>}|null null when this run stored and proceeds
+     * @return array{status: int, body: array<string, mixed>}|null
      */
     private function storeReplay(AgentEventGrant $grant, string $op, string $idempotencyKey, string $digest, array $answer, string $requestId): ?array
     {
@@ -326,6 +327,7 @@ class AgentEventService
     }
 
     /**
+     * @param  array<string, mixed>  $body
      * @return array{status: int, body: array<string, mixed>, event_key: string|null, stored: bool|null}
      */
     private function create(AgentEventGrant $grant, array $body, string $idempotencyKey, string $digest, string $requestId): array
@@ -390,6 +392,7 @@ class AgentEventService
     }
 
     /**
+     * @param  array<string, mixed>  $body
      * @return array{status: int, body: array<string, mixed>, event_key: string|null, stored: bool|null}
      */
     private function read(AgentEventGrant $grant, array $body, string $idempotencyKey, string $digest, string $requestId): array
@@ -440,6 +443,7 @@ class AgentEventService
     }
 
     /**
+     * @param  array<string, mixed>  $body
      * @return array{status: int, body: array<string, mixed>, event_key: string|null, stored: bool|null}
      */
     private function mutateOwned(AgentEventGrant $grant, string $op, array $body, string $idempotencyKey, string $digest, string $requestId): array
@@ -543,6 +547,7 @@ class AgentEventService
      * human routes' implicit binding, and neither answer leaks anything but
      * the key the caller already supplied.
      *
+     * @param  array<string, mixed>  $body
      * @return Event|'event_not_found'|'foreign_event'
      */
     private function ownedEvent(AgentEventGrant $grant, array $body): Event|string
@@ -661,7 +666,11 @@ class AgentEventService
             ->all();
     }
 
-    /** Event fields, validated against the same rules the human form answers to. */
+    /**
+     * Event fields, validated against the same rules the human form answers to.
+     *
+     * @param  array<string, mixed>  $body
+     */
     private function fields(array $body): EventInput
     {
         $fields = $body['fields'] ?? null;
@@ -709,6 +718,8 @@ class AgentEventService
      * Sorting means key order never distinguishes two payloads; the hash means
      * the store carries equality, not content. Hash comparison uses
      * hash_equals at the call site.
+     *
+     * @param  array<string, mixed>  $body
      */
     public static function digest(array $body): string
     {
@@ -718,7 +729,10 @@ class AgentEventService
         ));
     }
 
-    /** @param  array<string, mixed>  $value @return array<string, mixed> */
+    /**
+     * @param  array<string, mixed>  $value
+     * @return array<string, mixed>
+     */
     private static function sortRecursive(array $value): array
     {
         foreach ($value as $key => $item) {
@@ -732,7 +746,10 @@ class AgentEventService
         return $value;
     }
 
-    /** @param  array<string, mixed>  $body @return array{status: int, body: array<string, mixed>} */
+    /**
+     * @param  array<string, mixed>  $body
+     * @return array{status: int, body: array<string, mixed>}
+     */
     private function answer(int $status, array $body): array
     {
         return ['status' => $status, 'body' => $body];

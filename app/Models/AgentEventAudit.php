@@ -4,6 +4,7 @@ namespace App\Models;
 
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Support\Carbon;
 
 /**
  * One row per agent-ingress attempt, including denials (Gate 2).
@@ -30,6 +31,8 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
  * @property string $result
  * @property string|null $reason_code
  * @property string|null $discord_event_id
+ * @property Carbon $created_at
+ * @property Carbon $updated_at
  */
 class AgentEventAudit extends Model
 {
