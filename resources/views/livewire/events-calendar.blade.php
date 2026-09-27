@@ -15,23 +15,35 @@
         </div>
 
         {{-- A radio group, not two buttons: it is one choice with two options, and
-             that is what a screen reader should hear. --}}
-        <div class="flex items-center gap-1 rounded-md border border-line bg-surface p-1 self-start"
-             role="radiogroup" aria-label="How to show the events">
-            @foreach (['list' => 'List', 'calendar' => 'Calendar'] as $key => $label)
-                <button type="button"
-                        wire:click="setView('{{ $key }}')"
-                        role="radio"
-                        aria-checked="{{ $view === $key ? 'true' : 'false' }}"
-                        data-testid="events-view-{{ $key }}"
-                        @class([
-                            'min-h-11 px-4 rounded-md text-sm font-medium transition-colors duration-fast ease-out-quick',
-                            'bg-raised text-ink' => $view === $key,
-                            'text-ink-muted hover:text-ink hover:bg-raised' => $view !== $key,
-                        ])>
-                    {{ $label }}
-                </button>
-            @endforeach
+             that is what a screen reader should hear. The archive link sits
+             beside it, not inside it — history is a destination, not a third
+             view, and a link that acted as a radio option would lie about
+             what it does. --}}
+        <div class="flex items-center gap-3 self-start">
+            <div class="flex items-center gap-1 rounded-md border border-line bg-surface p-1"
+                 role="radiogroup" aria-label="How to show the events">
+                @foreach (['list' => 'List', 'calendar' => 'Calendar'] as $key => $label)
+                    <button type="button"
+                            wire:click="setView('{{ $key }}')"
+                            role="radio"
+                            aria-checked="{{ $view === $key ? 'true' : 'false' }}"
+                            data-testid="events-view-{{ $key }}"
+                            @class([
+                                'min-h-11 px-4 rounded-md text-sm font-medium transition-colors duration-fast ease-out-quick',
+                                'bg-raised text-ink' => $view === $key,
+                                'text-ink-muted hover:text-ink hover:bg-raised' => $view !== $key,
+                            ])>
+                        {{ $label }}
+                    </button>
+                @endforeach
+            </div>
+            <a href="{{ route('events.past') }}"
+               data-testid="events-past-archive-link"
+               class="inline-flex items-center min-h-11 px-4 rounded-md text-sm font-medium
+                      text-ink-muted hover:text-ink hover:bg-raised
+                      transition-colors duration-fast ease-out-quick">
+                Past events
+            </a>
         </div>
     </header>
 
