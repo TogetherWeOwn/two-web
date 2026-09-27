@@ -460,6 +460,44 @@ A 200 from Coolify means the deploy was *queued*, not that it is live, so the jo
 then polls `/up` until the new release answers. Ten minutes of silence is a failure,
 and the previous release is one rollback away in the Coolify dashboard.
 
+### Queue workers drain on deploy (TOG-7288)
+
+Staging runs a second Coolify app, `two-web-staging-worker` (TOG-2625): a
+`queue:work --queue=default --sleep=1 --tries=6 --timeout=30` daemon that shares
+the web app's repository, environment, database and cache — no FQDN, no exposed
+port. A web deploy never touches it, so without a drain a worker keeps
+processing jobs on old code mid-deploy, and a deploy can strand running jobs.
+
+The lever is the post-deployment command on `two-web-staging` (set once, in the
+Coolify panel — [TOG-7486](/TOG/issues/TOG-7486)):
+
+```
+php artisan queue:restart
+```
+
+This broadcasts an `illuminate:queue:restart` timestamp through the default
+cache. The worker daemon compares it after every job (`Worker::daemon` →
+`stopIfNecessary`) and exits 0, and Coolify respawns it on the new release. A
+running job finishes — none is killed, none runs twice. Per-job `tries` still
+win over the worker's `--tries` flag (`markJobAsFailedIfAlreadyExceedsMaxAttempts`
+prefers the job's own `maxTries()`), so the restart changes *when* workers
+recycle, not how often a job is attempted.
+
+Post-deployment, not pre, and on the web app, not the worker: the signal must
+fire after the new release answers, so respawned workers boot new code rather
+than the release being replaced. This is a box-side setting, like the
+moderator `.env` above — GitHub Actions never SSHes in, so it cannot go in
+`deploy.yml`.
+
+The bound, stated plainly: the signal restarts processes — it does not ship code. It recycles the worker onto whatever release the worker app is running —
+if the worker app itself never redeploys, the worker runs new timestamps on old
+code forever. Today both apps share the repository so they move together; if
+that ever stops being true, the worker needs its own deploy or redeploy step,
+and this section needs rewriting, not rereading.
+
+Pinned by `tests/Unit/QueueDrainOnDeployTest.php`, which asserts this section
+still names the command, the placement, and the bound.
+
 ### Production deploys are manual, in the hosting dashboard
 
 Not in GitHub Actions, and not because nobody has got round to wiring it. `two-web`
