@@ -4,6 +4,7 @@ namespace App\Filament\Resources\Events\Schemas;
 
 use DateTimeZone;
 use Filament\Forms\Components\DateTimePicker;
+use Filament\Forms\Components\Hidden;
 use Filament\Forms\Components\Select;
 use Filament\Forms\Components\Textarea;
 use Filament\Forms\Components\TextInput;
@@ -38,6 +39,14 @@ class EventForm
                     ->seconds(false)
                     ->required()
                     ->after('starts_at'),
+
+                // Instant carriers for the edit page (TOG-6805). A wall time near
+                // a DST fold or gap does not name a unique instant, so the edit
+                // page stores the exact UTC instant it rendered and reattaches it
+                // on save when the wall text comes back untouched. Empty on the
+                // create page, where there is no stored instant to preserve.
+                Hidden::make('starts_at_utc'),
+                Hidden::make('ends_at_utc'),
                 Select::make('timezone')
                     ->options(array_combine(
                         DateTimeZone::listIdentifiers(),
