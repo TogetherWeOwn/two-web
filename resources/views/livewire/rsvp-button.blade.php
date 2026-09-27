@@ -57,11 +57,13 @@
                     wire:click="withdraw"
                     wire:loading.attr="disabled"
                     wire:target="withdraw"
+                    aria-busy="false"
                     data-testid="rsvp-withdraw"
                     class="inline-flex items-center justify-center gap-2 min-h-11 px-3 rounded-md
                            text-ink-muted hover:text-ink hover:bg-raised
                            transition-colors duration-fast ease-out-quick self-start">
-                Can't make it
+                <span wire:loading.remove wire:target="withdraw">Can't make it</span>
+                <span wire:loading wire:target="withdraw" aria-busy="true">Removing…</span>
             </button>
 
         @else
