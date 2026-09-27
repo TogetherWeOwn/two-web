@@ -45,6 +45,11 @@ final class EventIcs
             $lines[] = 'LOCATION:'.self::text($event->location);
         }
 
+        $lines[] = 'BEGIN:VALARM';
+        $lines[] = 'TRIGGER:-PT30M';
+        $lines[] = 'ACTION:DISPLAY';
+        $lines[] = 'DESCRIPTION:'.self::text($event->title);
+        $lines[] = 'END:VALARM';
         $lines[] = 'END:VEVENT';
         $lines[] = 'END:VCALENDAR';
 
