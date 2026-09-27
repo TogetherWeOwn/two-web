@@ -1,15 +1,22 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# All five self-hosted runners share one network namespace. GitHub schedules only
-# one job at a time on a runner, so give each runner a stable ten-port block.
-# Numeric coolify-vps-* suffixes are collision-free; the checksum fallback keeps
-# local/renamed runners usable without restoring globally fixed ports.
+# Give each job a stable ten-port block derived from the runner name.
+#
+# On the old self-hosted runners five jobs shared one host network namespace, so
+# fixed host ports collided and each runner needed its own block. GitHub-hosted
+# runners are fresh VMs, so a collision there is impossible — but the block is
+# still derived per runner name rather than hardcoded, which keeps the jobs
+# portable and keeps parallel matrix entries from ever sharing a socket.
+# Numeric suffixes hash straight to a slot; the checksum fallback keeps any
+# other runner name usable without restoring globally fixed ports.
 runner_name="${RUNNER_NAME:?RUNNER_NAME is required}"
-suffix="${runner_name#coolify-vps-}"
 
-if [[ "$runner_name" == coolify-vps-* && "$suffix" =~ ^[0-9]+$ ]]; then
-  slot=$((10#$suffix))
+# A trailing run of digits (e.g. a hosted runner pool index) hashes straight to
+# a slot; anything else falls back to a checksum of the full name. Either way
+# the block is stable for a given runner name without any globally fixed ports.
+if [[ "$runner_name" =~ ([0-9]+)$ ]]; then
+  slot=$((10#${BASH_REMATCH[1]}))
 else
   read -r checksum _ < <(printf '%s' "$runner_name" | cksum)
   slot="$checksum"

@@ -73,7 +73,7 @@ jobs:
     if: >-
       github.event_name == 'workflow_dispatch' ||
       github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success'
-    runs-on: [self-hosted, two-selfhosted]
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     # Decorative on GitHub Free + private: environments are ignored, so this grants no
     # protection and claims none. It is here so the deployment shows up in the UI the
@@ -83,7 +83,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # Every job attests where it ran. See ci/attest-runner.sh (TOG-2847).
+      # Every job attests where it ran. See ci/attest-runner.sh (TOG-4025).
       - name: Attest the runner
         run: ./ci/attest-runner.sh
 

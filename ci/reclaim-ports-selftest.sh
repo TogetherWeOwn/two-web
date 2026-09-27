@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
 #
-# Tests for the cleanup that makes a persistent runner behave like a fresh one.
+# Tests for the port-block cleanup (and the teardown assertions that keep it).
 #
 # The bug this is about is worth restating, because the symptom pointed nowhere
-# near the cause. On the first post-merge `main` run after the self-hosted
-# migration, `budgets` failed at "could not mint a session cookie — /admin
+# near the cause. On the old persistent self-hosted runners, on the first
+# post-merge `main` run after the self-hosted migration, `budgets` failed at
+# "could not mint a session cookie — /admin
 # cannot be measured", 57 seconds in. The identical tree had passed in 4m34 on
 # the pull request, on the same runner. Nothing about sessions was broken: the
 # previous run had leaked `artisan serve` on a port that ci/runner-ports.sh

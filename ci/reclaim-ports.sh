@@ -1,18 +1,19 @@
 #!/usr/bin/env bash
 set -uo pipefail
 
-# Kill whatever is still listening on this runner's port block.
+# Kill whatever is still listening on this job's port block.
 #
-# On a GitHub-hosted runner every job got a fresh VM, so a server a job forgot
-# to stop died with the machine and nobody ever paid for the omission. The
-# self-hosted runners are persistent: the same host, the same checkout path and
-# — by design, see ci/runner-ports.sh — the same ports, run after run.
+# Every job now gets a fresh hosted VM, so a server a job forgets to stop dies
+# with the machine and this script is normally a no-op — kept so the jobs stay
+# portable and a leak fails loudly rather than flaking. On the old persistent
+# self-hosted runners it was load-bearing: the same host, the same checkout path
+# and — by design, see ci/runner-ports.sh — the same ports, run after run.
 #
-# That turns a leaked process into a cross-run failure, and a confusing one.
+# That turned a leaked process into a cross-run failure, and a confusing one.
 # The `budgets` job starts `artisan serve` and the compressing proxy and never
 # stops them (TOG-2847, first post-merge run on `main`: budgets died 57s in at
 # the /admin session mint, having passed in 4m34 on the identical tree — same
-# runner, coolify-vps-2, both times). A stale server from the previous run is
+# self-hosted runner both times). A stale server from the previous run is
 # still bound, so the new run's `artisan serve` loses the bind and exits, while
 # the readiness probe cheerfully gets a 200 from the *old* process. The job then
 # measures a zombie app: an app pointed at a torn-down Postgres service

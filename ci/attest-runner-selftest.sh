@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
 #
-# Tests for the guard that refuses to run on a billable runner.
+# Tests for the guard that refuses to run on a self-hosted runner.
 #
 # ci/attest-runner.sh is the only thing in this repository that can tell where a
 # job actually ran. It is also the kind of check that is invisible when it stops
 # working: it lives in the happy path, it passes on every normal run, and a
 # version that returns 0 unconditionally looks identical in review and in the
 # logs. The failure it exists to catch — a job silently rescheduled onto a
-# GitHub-hosted runner after a label typo — would then bill exactly as before,
-# with a green attestation step sitting on top of it.
+# self-hosted runner after a label edit — would then execute pull-request code
+# on our own hardware, with a green attestation step sitting on top of it.
 #
 # So each case runs the real script with a synthetic runner environment and pins
 # the exit code *and* the reason. No network, no Actions, no runner: the whole
@@ -16,15 +16,14 @@
 #
 # What is pinned:
 #
-#   private          a coolify-vps-* self-hosted runner   -> exit 0
-#   private-rbx1/-w2494  the other audited prefixes (ci-rbx1-<n>, ci-w2494-<n>) -> exit 0
+#   hosted           RUNNER_ENVIRONMENT=github-hosted     -> exit 0
 #   notice           ...and it emits the ::notice that carries runner_name into
 #                    the annotations API, which is the only place an auditor
 #                    without `actions:read` can read it (TOG-2847)
-#   hosted           RUNNER_ENVIRONMENT=github-hosted     -> exit 1  (the billing case)
-#   hosted-spoofed   github-hosted *named* coolify-vps-1  -> exit 1  (name alone is not proof)
-#   unaudited        self-hosted, but an unknown host     -> exit 1
-#   unaudited-suffix known prefix, non-numeric suffix     -> exit 1
+#   self-hosted      RUNNER_ENVIRONMENT=self-hosted      -> exit 1  (our hardware
+#                    must never execute pull-request code — TOG-4025)
+#   self-hosted-named a self-hosted runner with any name    -> exit 1  (the
+#                    environment is what matters, not the name)
 #   unset            RUNNER_NAME absent, i.e. not in CI   -> exit 1  (refuse, do not guess)
 #   empty            RUNNER_NAME set but empty            -> exit 1
 #   args             called with an argument              -> exit 2
@@ -69,10 +68,10 @@ run_case() {
   pass "$slug"
 }
 
-printf '\n\033[1m==> A private runner is accepted\033[0m\n'
+printf '\n\033[1m==> A GitHub-hosted runner is accepted\033[0m\n'
 
-run_case private 0 "ran on private runner 'coolify-vps-3'" \
-  RUNNER_NAME=coolify-vps-3 RUNNER_ENVIRONMENT=self-hosted GITHUB_JOB=pest
+run_case hosted 0 "ran on GitHub-hosted runner 'fv-az1234-567'" \
+  RUNNER_NAME=fv-az1234-567 RUNNER_ENVIRONMENT=github-hosted GITHUB_JOB=static
 
 # The ::notice is not decoration. With `actions:read` refused by this repo's
 # token broker, the Actions `jobs` endpoint — the one carrying runner_name — is
@@ -80,47 +79,31 @@ run_case private 0 "ran on private runner 'coolify-vps-3'" \
 # the only machine-readable record of where a job ran. If this line is ever
 # dropped the attestation still passes and the evidence silently disappears,
 # which is the exact shape of defect this suite exists for.
-run_case notice 0 "::notice title=runner::job=dusk runner_name=coolify-vps-1 environment=self-hosted" \
-  RUNNER_NAME=coolify-vps-1 RUNNER_ENVIRONMENT=self-hosted GITHUB_JOB=dusk
+run_case notice 0 "::notice title=runner::job=dusk runner_name=gh-hosted-1 environment=github-hosted" \
+  RUNNER_NAME=gh-hosted-1 RUNNER_ENVIRONMENT=github-hosted GITHUB_JOB=dusk
 
-# Every audited host prefix is accepted, each with a numeric suffix.
-run_case private-rbx1 0 "ran on private runner 'ci-rbx1-12'" \
-  RUNNER_NAME=ci-rbx1-12 RUNNER_ENVIRONMENT=self-hosted GITHUB_JOB=static
-run_case private-w2494 0 "ran on private runner 'ci-w2494-3'" \
-  RUNNER_NAME=ci-w2494-3 RUNNER_ENVIRONMENT=self-hosted GITHUB_JOB=gitleaks
+printf '\n\033[1m==> A self-hosted runner is rejected\033[0m\n'
 
-printf '\n\033[1m==> A billable runner is rejected\033[0m\n'
+run_case self-hosted 1 "must run on GitHub-hosted runners" \
+  RUNNER_NAME=selfhost-1 RUNNER_ENVIRONMENT=self-hosted GITHUB_JOB=pest
 
-run_case hosted 1 "ran on a github-hosted runner" \
-  RUNNER_NAME=fv-az1234-567 RUNNER_ENVIRONMENT=github-hosted GITHUB_JOB=static
-
-# Two independent signals, and the weaker one must not be able to carry the
-# check on its own. GitHub sets RUNNER_ENVIRONMENT; the name is just a string.
-run_case hosted-spoofed 1 "ran on a github-hosted runner" \
-  RUNNER_NAME=coolify-vps-1 RUNNER_ENVIRONMENT=github-hosted GITHUB_JOB=static
-
-printf '\n\033[1m==> An unaudited host is rejected\033[0m\n'
-
-run_case unaudited 1 "is not one of the audited" \
+# The environment is the signal, not the name: any self-hosted host refuses,
+# whatever it calls itself.
+run_case self-hosted-named 1 "must run on GitHub-hosted runners" \
   RUNNER_NAME=some-other-box RUNNER_ENVIRONMENT=self-hosted GITHUB_JOB=budgets
-# A known prefix is not enough on its own: the suffix must be the runner number.
-run_case unaudited-suffix 1 "is not one of the audited" \
-  RUNNER_NAME=coolify-vps-evil RUNNER_ENVIRONMENT=self-hosted GITHUB_JOB=budgets
-run_case unaudited-bare-prefix 1 "is not one of the audited" \
-  RUNNER_NAME=ci-rbx1- RUNNER_ENVIRONMENT=self-hosted GITHUB_JOB=budgets
 
 printf '\n\033[1m==> Outside Actions it refuses rather than guesses\033[0m\n'
 
 run_case unset 1 "RUNNER_NAME is unset" \
-  RUNNER_ENVIRONMENT=self-hosted GITHUB_JOB=static
+  RUNNER_ENVIRONMENT=github-hosted GITHUB_JOB=static
 run_case empty 1 "RUNNER_NAME is unset" \
-  RUNNER_NAME= RUNNER_ENVIRONMENT=self-hosted GITHUB_JOB=static
+  RUNNER_NAME= RUNNER_ENVIRONMENT=github-hosted GITHUB_JOB=static
 
 # Not routed through run_case: that helper puts everything after the substring
 # into the *environment*, and an argument is not an environment entry. Spelled
 # out here so the ordering is visible rather than encoded in a helper.
 n=$((n + 1))
-args_out="$(env -i PATH="$PATH" RUNNER_NAME=coolify-vps-1 RUNNER_ENVIRONMENT=self-hosted \
+args_out="$(env -i PATH="$PATH" RUNNER_NAME=gh-hosted-1 RUNNER_ENVIRONMENT=github-hosted \
   GITHUB_JOB=static ./ci/attest-runner.sh --force 2>&1)"
 args_status=$?
 if [ "$args_status" -ne 2 ]; then
@@ -136,7 +119,7 @@ fi
 printf '\n\033[1m==> Every job still attests\033[0m\n'
 
 # The guard is per-job, so coverage is per-job too: one job that skips the step
-# is one job that can be moved back onto a billable runner without anything
+# is one job that can be moved back onto a self-hosted runner without anything
 # going red. Enumerated from the files rather than from a stored list, so a new
 # job is covered the moment it exists instead of when someone remembers.
 n=$((n + 1))
@@ -161,7 +144,7 @@ done
 if [ "$jobs_seen" -eq 0 ]; then
   fail "every-job-attests: found no jobs at all — this assertion is vacuous, not passing"
 elif [ -n "$missing" ]; then
-  fail "every-job-attests: these jobs do not run ci/attest-runner.sh and could run on a billable runner unnoticed:${missing}"
+  fail "every-job-attests: these jobs do not run ci/attest-runner.sh and could run on a self-hosted runner unnoticed:${missing}"
 else
   pass "every-job-attests: all ${jobs_seen} jobs across $(ls .github/workflows/*.yml | wc -l | tr -d ' ') workflows attest their runner"
 fi

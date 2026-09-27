@@ -23,49 +23,53 @@ a minute so you are not waiting on Dusk to be told about an unused import.
 
 Locally, `composer check` runs the first two.
 
-### Everything runs on our own runners
+### Everything runs on GitHub-hosted runners
 
-Every job in every workflow is `runs-on: [self-hosted, two-selfhosted]` — the
-org's own runners, on audited hosts only (TOG-2847): `coolify-vps-<n>` on the
-Coolify VPS, `ci-rbx1-<n>` in the LXD CI VM on the rbx1 host, and `ci-w2494-<n>`
-on worker host vps-2494bf63. `ci/attest-runner.sh` holds that prefix list; a job
-on any other runner fails its first step. There are no GitHub-hosted jobs in this repository and no
-`ubuntu-latest` fallback: Actions spend is not available to us, so a job that lands
-on a hosted runner does not cost a little extra, it fails before its first step.
+Every job in every workflow is `runs-on: ubuntu-24.04` — GitHub-hosted runners
+only, never self-hosted (TOG-4025; publication gate TOG-4818). Pull-request code
+must never execute on our own hardware. `runs-on:` is only a request — a label
+typo silently reroutes rather than erroring — so `ci/attest-runner.sh` runs as
+the first step of every job and fails anything that did not land on a hosted
+runner. There are no self-hosted jobs in this repository and no runner-group
+labels: the old `two-selfhosted` group was removed when the publication gate
+landed, and the audited-host prefix list it used to check against went with it.
 
 Three consequences you will actually run into:
 
-**The runners are persistent.** Same host, same checkout path, same ports, run after
-run. A process a job leaks outlives the job and breaks *the next* run on that
-runner — so anything you start, stop, with `if: always()`. `budgets` learned this
-the expensive way: it leaked `artisan serve`, and the next run's readiness probe was
-answered by the stale process, which was still holding the previous run's `APP_KEY`.
-The job then failed at the `/admin` session mint, several steps and one very
-misleading error message away from the actual cause. `ci/reclaim-ports.sh` now
-clears the block first and the job tears down after itself; do both for anything new
-that binds a port.
+**Every job gets a fresh VM.** Same ports, same paths, no leftovers from the
+previous run — a process a job leaks dies with the machine instead of breaking
+the *next* run. `ci/reclaim-ports.sh` still clears the port block before binding
+and the jobs still tear down after themselves with `if: always()`: on a fresh VM
+that is normally a no-op, kept so the jobs stay portable and a leak fails loudly
+rather than flaking. The history is worth knowing because the comments still
+reference it: on the old persistent runners `budgets` leaked `artisan serve`,
+and the next run's readiness probe was answered by the stale process, which was
+still holding the previous run's `APP_KEY`. The job then failed at the `/admin`
+session mint, several steps and one very misleading error message away from the
+actual cause (TOG-2847).
 
-**They share one network namespace.** Five runners, one host, so fixed host ports
-collide between parallel jobs. `ci/runner-ports.sh` derives a stable ten-port block
-per runner — use it rather than hardcoding a port. For service containers, map with
-no host port (`ports: ["5432"]`) and read `${{ job.services.postgres.ports[5432] }}`.
+**Parallel jobs never share a machine.** On the old runners five jobs shared one
+host network namespace, so fixed host ports collided. `ci/runner-ports.sh` still
+derives a stable ten-port block per runner name — harmless on fresh VMs, and it
+keeps the jobs portable. For service containers, map with no host port
+(`ports: ["5432"]`) and read `${{ job.services.postgres.ports[5432] }}`.
 
 **Every job attests where it ran.** `ci/attest-runner.sh` runs as the first step of
-all nine jobs and fails on a hosted runner — `runs-on:` is only a request, and a
-label typo silently reroutes rather than erroring. It also emits the runner name as
+all nine jobs and fails on a self-hosted runner — `runs-on:` is only a request, and a
+label edit silently reroutes rather than erroring. It also emits the runner name as
 a `::notice`, which lands in the check-run *annotations* API. That is deliberate: it
 makes the per-job runner readable with `checks=read`, without the `actions:read`
 scope this repo's token broker does not issue.
 
 ```
 GET /repos/TogetherWeOwn/two-web/check-runs/{id}/annotations
-notice  runner  job=budgets runner_name=coolify-vps-2 environment=self-hosted
+notice  runner  job=budgets runner_name=gh-hosted-1 environment=github-hosted
 ```
 
-The runners are lean: php8.3, composer, node 22, go, the psql/mysql/redis clients,
-jq, shellcheck, git, curl, rootless docker. Anything else, install it in the job —
-`dusk` installs Chrome that way. `gha-runner` has passwordless sudo, so
-`sudo apt-get install -y <pkg>` works.
+The jobs install their own toolchain: PHP via `shivammathur/setup-php` and Node
+via `setup-node` (versions pinned in `env:` at the top of `ci.yml`), Chrome
+installed per-run in `dusk`. Anything else, install it in the job. Passwordless
+`sudo` works on the hosted image, so `sudo apt-get install -y <pkg>` works.
 
 ### Job names are a contract
 
