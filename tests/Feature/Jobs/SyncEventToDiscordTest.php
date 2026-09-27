@@ -211,13 +211,13 @@ it('does not tell discord about a draft, because a draft has never been publishe
 // sending it through event.upsert re-receives a live event (TOG-5863).
 // ---------------------------------------------------------------------------
 
-function botCancelled(string $eventId = '1234567890'): array
+function jobBotCancelled(string $eventId = '1234567890'): array
 {
     return ['ok' => true, 'result' => ['outcome' => 'cancelled', 'event_id' => $eventId], 'request_id' => '01JCANCEL0123456789'];
 }
 
 it('cancels rather than upserts when the event was cancelled', function () {
-    Http::fake([JOB_BOT_ENDPOINT => Http::response(botCancelled())]);
+    Http::fake([JOB_BOT_ENDPOINT => Http::response(jobBotCancelled())]);
 
     $event = syncableEvent(['status' => EventStatus::Cancelled, 'discord_event_id' => '1234567890']);
 
@@ -238,7 +238,7 @@ it('cancels rather than upserts when the event was cancelled', function () {
 });
 
 it('sends only the event key on a cancel, so the bot cannot mistake it for a live event', function () {
-    Http::fake([JOB_BOT_ENDPOINT => Http::response(botCancelled())]);
+    Http::fake([JOB_BOT_ENDPOINT => Http::response(jobBotCancelled())]);
 
     $event = syncableEvent(['status' => EventStatus::Cancelled, 'discord_event_id' => '1234567890']);
 
