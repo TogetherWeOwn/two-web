@@ -26,8 +26,8 @@ use Monolog\Handler\TestHandler;
  * no header at all and `announcement.post` must send one on every attempt.
  */
 
-const RA_URL = 'http://bot.internal:3001';
-const RA_ENDPOINT = 'http://bot.internal:3001/internal/actions';
+const RA_URL = 'http://127.0.0.1:3001';
+const RA_ENDPOINT = 'http://127.0.0.1:3001/internal/actions';
 const RA_SECRET = 'two-web-test-secret-at-least-32-characters';
 const RA_KEY_ID = 'web-test';
 

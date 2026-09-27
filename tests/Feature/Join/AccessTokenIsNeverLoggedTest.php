@@ -14,7 +14,7 @@ it('redacts the member token from the entire exception chain and written log', f
     $token = 'member-token-that-must-never-be-written';
 
     config([
-        'services.bot.url' => 'http://bot.internal:3001',
+        'services.bot.url' => 'http://127.0.0.1:3001',
         'services.bot.secret' => 'test-shared-secret-that-is-long-enough-32',
         'services.bot.key_id' => 'web-test',
         'services.bot.timeout' => 2,

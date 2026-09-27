@@ -27,10 +27,10 @@ use Monolog\Handler\TestHandler;
  *     you get two Discord events out of one operation.
  */
 
-const JOB_BOT_ENDPOINT = 'http://bot.internal:3001/internal/actions';
+const JOB_BOT_ENDPOINT = 'http://127.0.0.1:3001/internal/actions';
 
 beforeEach(function () {
-    config()->set('services.bot.url', 'http://bot.internal:3001');
+    config()->set('services.bot.url', 'http://127.0.0.1:3001');
     config()->set('services.bot.secret', 'two-web-test-secret-at-least-32-characters');
     config()->set('services.bot.key_id', 'web-test');
     config()->set('services.bot.timeout', 5);

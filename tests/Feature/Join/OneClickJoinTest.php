@@ -9,7 +9,7 @@ use Laravel\Socialite\Facades\Socialite;
 use Laravel\Socialite\Two\AbstractProvider;
 use SocialiteProviders\Manager\OAuth2\User as SocialiteUser;
 
-const JOIN_BOT_URL = 'http://bot.internal:3001';
+const JOIN_BOT_URL = 'http://127.0.0.1:3001';
 const JOIN_ENDPOINT = JOIN_BOT_URL.'/internal/actions';
 const JOIN_SECRET = 'test-shared-secret-that-is-long-enough-32';
 const JOIN_TOKEN = 'member-live-oauth-token';
