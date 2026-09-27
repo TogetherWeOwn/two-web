@@ -180,11 +180,14 @@
 
             <footer class="flex flex-col gap-4 pb-4 pt-10 text-sm md:flex-row md:items-center md:justify-between">
                 <p>Together We Own · adult gaming community · founded 1998</p>
-                @auth
-                    <a href="{{ route('profile') }}" class="font-semibold underline underline-offset-4 hover:text-brand">Your profile</a>
-                @else
-                    <a href="{{ route('login') }}" data-testid="discord-login" class="font-semibold underline underline-offset-4 hover:text-brand">Log in with Discord</a>
-                @endauth
+                <div class="flex flex-wrap items-center gap-4 md:gap-6">
+                    <a href="{{ route('about') }}" class="font-semibold underline underline-offset-4 hover:text-brand">About</a>
+                    @auth
+                        <a href="{{ route('profile') }}" class="font-semibold underline underline-offset-4 hover:text-brand">Your profile</a>
+                    @else
+                        <a href="{{ route('login') }}" data-testid="discord-login" class="font-semibold underline underline-offset-4 hover:text-brand">Log in with Discord</a>
+                    @endauth
+                </div>
             </footer>
         </div>
     </div>
