@@ -1,4 +1,12 @@
-<x-layouts.app :title="($member->display_name ?? $member->username).' — Member profile'">
+{{--
+    Share tags (TOG-6793). Same opt-in as the event page: the canonical is
+    always the shareable member URL, so `/profile` and `/members/{user}` never
+    present as two pages. The description stays generic on purpose — the only
+    member data in the tags is the display name already in the title.
+--}}
+<x-layouts.app :title="($member->display_name ?? $member->username).' — Member profile'"
+               :canonical="route('profiles.show', $member)"
+               :shareDescription="'A member of Together We Own.'">
     {{--
         The post-join confirmation (TOG-6229). JoinController::callback redirects
         here with a `join_result` flash; this page is the only thing that renders
