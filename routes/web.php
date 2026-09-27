@@ -12,6 +12,7 @@ use App\Http\Controllers\JoinController;
 use App\Http\Controllers\ProfileController;
 use App\Http\Controllers\RsvpController;
 use App\Livewire\EventsCalendar;
+use App\Livewire\PastEvents;
 use Illuminate\Support\Facades\Route;
 
 // The landing page reads the bot's counts and the featured rows moderators
@@ -76,6 +77,13 @@ Route::get('/join/callback', [JoinController::class, 'callback'])
 // crawlers and curl different answers, which is a trap this repo has already been
 // bitten by once on the apex.
 Route::get('/events', EventsCalendar::class)->name('events.index');
+
+// The past-events archive. Public like the calendar: history is not a
+// signed-in privilege, and the empty state pitches joining to guests. A
+// literal, registered before the `auth` group below — otherwise `/events/past`
+// would fall through to the `events.show` wildcard there and 302 a guest to
+// the Discord handoff instead of showing them history.
+Route::get('/events/past', PastEvents::class)->name('events.past');
 
 // The shareable event page. A link passed around Discord lands here, so it is
 // public: a guest sees the event plus a join pitch, never the OAuth handoff.
