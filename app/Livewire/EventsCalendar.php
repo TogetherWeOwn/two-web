@@ -12,6 +12,7 @@ use Illuminate\Database\Eloquent\Collection;
 use Illuminate\Support\Facades\Gate;
 use Illuminate\View\View;
 use Livewire\Attributes\Layout;
+use Livewire\Attributes\Url;
 use Livewire\Component;
 
 /**
@@ -39,6 +40,20 @@ class EventsCalendar extends Component
     /** Whether the member has asked to see events that have already happened. */
     public bool $showingPast = false;
 
+    /**
+     * The search query, from `?q=`. Bound to the URL so a search is a link a
+     * member can share, and so back/forward works. `except: ''` keeps the URL
+     * clean when there is no search — `?q=` with nothing in it is noise.
+     *
+     * This is user input twice over: it arrives in the URL and it becomes SQL.
+     * It is never interpolated — it goes through bindings via `whereLike` — and
+     * the LIKE wildcards in it are escaped so `%` searches for a percent sign,
+     * not for everything. Blade escapes it again on the way out, so echoing it
+     * back in the results heading cannot become markup.
+     */
+    #[Url(as: 'q', except: '')]
+    public string $search = '';
+
     private const VIEWS = ['list', 'calendar'];
 
     public function mount(): void
@@ -64,6 +79,21 @@ class EventsCalendar extends Component
         $this->showingPast = true;
     }
 
+    /**
+     * A new search starts from the list, not from wherever the member was.
+     * Search results are a list; landing on a month grid that may not contain
+     * them would read as "no results" while matches sit one click away.
+     */
+    public function updatedSearch(): void
+    {
+        $this->view = 'list';
+    }
+
+    public function clearSearch(): void
+    {
+        $this->search = '';
+    }
+
     public function nextMonth(): void
     {
         $this->month = $this->monthStart()->addMonth()->format('Y-m');
@@ -78,6 +108,12 @@ class EventsCalendar extends Component
     {
         $upcoming = $this->upcoming();
         $past = $this->past();
+        // A blank search is no search: spaces alone must not narrow the page to
+        // nothing, and must not swap the empty states for the search one.
+        $searching = trim($this->search) !== '';
+        // While searching, matching past events show without opening the drawer:
+        // a match hidden behind a closed drawer reads as "no results".
+        $showPast = $this->showingPast || $searching;
 
         return view('livewire.events-calendar', [
             'upcoming' => $upcoming,
@@ -85,8 +121,17 @@ class EventsCalendar extends Component
             'weeks' => $this->weeks($upcoming->concat($past)),
             'monthLabel' => $this->monthStart()->format('F Y'),
             // Which of the two empty states applies. They are different messages:
-            // one is "we are new", the other is "there was a last one".
-            'emptyState' => $upcoming->isEmpty() ? ($past->isEmpty() ? 'never' : 'no-upcoming') : null,
+            // one is "we are new", the other is "there was a last one". Neither
+            // applies while searching — a query with no matches gets its own
+            // message below, not "nothing is planned".
+            'emptyState' => $searching
+                ? null
+                : ($upcoming->isEmpty() ? ($past->isEmpty() ? 'never' : 'no-upcoming') : null),
+            // Whether the member currently sees anything. The past list only
+            // counts once asked for — an unopened drawer is not results.
+            'hasVisibleResults' => $upcoming->isNotEmpty() || ($showPast && $past->isNotEmpty()),
+            'showPast' => $showPast,
+            'searching' => $searching,
             'lastEventAgo' => $past->first()?->endsAtLocal()->diffForHumans(),
             // Share tags (TOG-5624). `layoutData` merges into the `#[Layout]`
             // params above — the attribute params win on conflict, but these keys
@@ -134,9 +179,25 @@ class EventsCalendar extends Component
             ->with('viewerRsvps')
             // A draft has not been announced to anybody. Moderators see them so they
             // can check a card before publishing it; nobody else knows it exists.
+            // This applies inside a search too: a member searching for a draft's
+            // title learns nothing, not even that it exists.
             ->unless(
                 Gate::allows('viewDrafts', Event::class),
                 fn (Builder $query): Builder => $query->where('status', '!=', EventStatus::Draft->value),
+            )
+            ->when(
+                trim($this->search) !== '',
+                function (Builder $query): void {
+                    // `whereLike` binds the value (never interpolated) and is
+                    // `ilike` on Postgres, so casing is the database's problem,
+                    // not the member's. The escape is ours, though: `%` and `_`
+                    // in the query must match themselves, not act as wildcards.
+                    $term = '%'.addcslashes(trim($this->search), '%_\\').'%';
+
+                    $query->where(fn (Builder $nested): Builder => $nested
+                        ->whereLike('title', $term)
+                        ->orWhereLike('description', $term));
+                },
             );
     }
 
