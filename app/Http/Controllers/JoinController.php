@@ -112,13 +112,16 @@ final class JoinController
             'request_id' => $result->requestId,
         ]);
 
+        // Join never writes `is_moderator`: only login recomputes it from Discord
+        // roles, and join's scopes (identify + guilds.join) cannot read roles.
+        // Writing `false` here would demote a returning moderator until their
+        // next login. New rows fall back to the column default (false).
         $user = User::query()->updateOrCreate(
             ['discord_id' => (string) $discordUser->getId()],
             [
                 'username' => (string) $discordUser->getNickname(),
                 'display_name' => $discordUser->getRaw()['global_name'] ?? null,
                 'avatar' => $discordUser->getAvatar(),
-                'is_moderator' => false,
                 'discord_synced_at' => now(),
             ],
         );
