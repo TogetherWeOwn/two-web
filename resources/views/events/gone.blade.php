@@ -13,6 +13,13 @@
         </a>
 
         <article data-testid="event-gone" class="mt-4 rounded-lg bg-surface border border-line p-5 md:p-8">
+            {{-- Machine-readable status survives the 410: same JSON-LD block
+                 and builder as the live page (see events/show), so crawlers
+                 read EventCancelled off the gone page instead of a 200.
+                 Same escaping contract — titles are free text. --}}
+            <script type="application/ld+json" data-testid="event-jsonld">
+                {!! json_encode(\App\Support\EventJsonLd::for($event), JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_AMP | JSON_HEX_QUOT) !!}
+            </script>
             <h1 class="u-display text-3xl text-ink lg:text-4xl">{{ $event->title }}</h1>
 
             <p class="mt-4 max-w-prose text-ink-muted">

@@ -34,6 +34,19 @@ it('answers a cancelled event page with 410 and says so in words', function () {
         ->assertSee($event->title)
         ->assertSee('This event was cancelled.', false)
         ->assertSeeHtml('data-testid="event-gone"');
+
+    // The machine-readable status travels on the 410 page (TOG-6941's
+    // EventCancelled mapping survives the gone rewrite): same block the live
+    // page carries, so crawlers read the cancellation off the gone URL.
+    preg_match(
+        '/<script type="application\/ld\+json" data-testid="event-jsonld">(.*?)<\/script>/s',
+        $response->getContent(),
+        $matches
+    );
+
+    expect($matches[1] ?? null)->not->toBeNull('gone page carries a JSON-LD block')
+        ->and(json_decode(trim($matches[1]), true)['eventStatus'])
+        ->toBe('https://schema.org/EventCancelled');
 });
 
 it('keeps an unknown event key a 404, not a 410', function () {
