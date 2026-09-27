@@ -40,11 +40,9 @@ function cspDirectives(string $header): array
 
 /**
  * The strict policy this suite pins. It is scheme-dependent by design
- * (TOG-7095): `upgrade-insecure-requests` is emitted on https requests only,
- * because on an http origin it upgrades the page while forms still target
- * http and `form-action 'self'` then blocks the POST — Dusk caught this on
- * the admin logout. Feature tests run over http, so the default expectation
- * carries no upgrade directive; pass `true` for the https variant.
+ * (TOG-7095): `upgrade-insecure-requests` is emitted on https requests only.
+ * Feature tests run over http, so the default expectation carries no upgrade
+ * directive; pass `true` for the https variant.
  */
 function strictCsp(bool $secure = false): string
 {
@@ -122,10 +120,15 @@ it('keeps the Livewire allowances but nothing wider', function () {
 
     // No `form-action` directive on purpose (TOG-7095): the explicit
     // `form-action 'self'` blocked the admin logout POST in Chrome while the
-    // identical site sign-out POST passed, with no determinable cause.
-    // Omitting it is not a hole — submissions fall back to
-    // `default-src 'self'`, so they stay same-origin. This assertion pins the
-    // omission so a re-add has to justify itself against the Dusk evidence.
+    // identical site sign-out POST passed, with no determinable cause — and
+    // Dusk proves the journey works with the directive absent. This is a
+    // risk-accepted tradeoff, stated honestly: unlike fetch directives,
+    // `form-action` does NOT fall back to `default-src`, so forms may submit
+    // anywhere; the bound is that our forms are same-origin by construction
+    // and a script-injection attacker already holds better exfil channels
+    // (`img-src ... https:`). Full rationale in the middleware docblock.
+    // This assertion pins the omission so a re-add has to justify itself
+    // against the Dusk evidence.
     expect($directives)->not->toHaveKey('form-action');
 });
 
@@ -154,12 +157,10 @@ it('serves the CSP on the admin panel too', function () {
 });
 
 it('emits upgrade-insecure-requests on https and omits it on http', function () {
-    // The Dusk regression this pins (TOG-7095): on an http origin the
-    // directive upgrades the page while the logout form still targets http,
-    // and `form-action 'self'` blocks the POST — so http responses must not
-    // carry it. Staging terminates TLS at nginx, so PHP sees an http request
-    // and the forwarded proto is the only way `isSecure()` can know — same
-    // posture as RobotsTxtTest.
+    // The https-only emission this pins (TOG-7095): http responses carry no
+    // upgrade directive. Staging terminates TLS at nginx, so PHP sees an http
+    // request and the forwarded proto is the only way `isSecure()` can know
+    // — same posture as RobotsTxtTest.
     $this->get('/')
         ->assertOk()
         ->assertHeader('Content-Security-Policy', strictCsp());

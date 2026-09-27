@@ -44,19 +44,34 @@ use Symfony\Component\HttpFoundation\Response;
  *
  * `frame-ancestors 'none'` mirrors the `X-Frame-Options: DENY` nginx already
  * sends (nothing frames this site). There is deliberately NO `form-action`
- * directive: form submissions fall back to `default-src 'self'`, so they stay
- * same-origin (Discord OAuth leaves via 302 redirects, not form posts, so it
- * is unaffected either way). An explicit `form-action 'self'` was tried and
- * reverted (TOG-7095): Chrome 131 blocks the admin logout POST — same scheme,
- * host and port on both ends, single served header, no meta policy, no base
- * tag — while the mechanically identical site sign-out POST passes. Root
- * cause undetermined (suspect: the topbar's teleported duplicate logout form
- * interacting with the directive); the CISO sign-out bar (TOG-5469 V4) requires
- * a working logout journey, which outranks a directive whose fallback already
- * enforces the same bound. `upgrade-insecure-requests` is emitted on https
- * requests only: on an http origin it upgrades the page while forms still
- * target http. HSTS already forces https on staging/production, so nothing is
- * lost there.
+ * directive, and this is an explicit risk-accepted tradeoff, not an oversight:
+ * an explicit `form-action 'self'` was tried and reverted (TOG-7095) because
+ * Chrome 131 blocks the admin logout POST with it — same scheme, host and
+ * port on both ends, single served header, no meta policy, no base tag —
+ * while the mechanically identical site sign-out POST passes, and Dusk proves
+ * it (red with the directive, green without). Root cause undetermined
+ * (suspect: the topbar's teleported duplicate logout form interacting with
+ * the directive). The CISO sign-out bar (TOG-5469 V4) requires a working
+ * logout journey, and a security header that breaks the security-critical
+ * logout flow is worse than the narrow gap its absence leaves.
+ *
+ * The gap, stated plainly so nobody has to re-derive it: unlike the fetch
+ * directives, `form-action` does NOT fall back to `default-src` (CSP3 §6.6.1.3
+ * — the first version of this comment claimed otherwise, and the reviewer was
+ * right to reject it), so without the directive forms may submit anywhere.
+ * The bound on that gap: our own forms are same-origin by construction
+ * (`route()` URLs; Discord OAuth leaves via 302 redirects, not form posts),
+ * and a script-injection attacker — the only party who could plant a foreign
+ * form — already holds better exfil channels under this same policy:
+ * `img-src ... https:` (required by Discord CDN avatars and moderator-pasted
+ * photo URLs) permits a beacon to any https host, and `connect-src 'self'`
+ * still bars fetch/XHR exfil. `form-action` would close only form-POST exfil,
+ * which is not the cheapest channel on offer. Revisit if the policy ever
+ * tightens img-src or script-src, or if the Chrome behaviour gets a root
+ * cause and a targeted fix.
+ *
+ * `upgrade-insecure-requests` is emitted on https requests only. HSTS already
+ * forces https on staging/production, so nothing is lost there.
  *
  * Registered on the `web` group and on the Filament admin stack (which does
  * not use `web`), so every HTML page in both stacks carries it. Anything that
@@ -117,9 +132,7 @@ class AddContentSecurityPolicy
             "object-src 'none'",
         ];
 
-        // https only (see the class docblock): on an http origin this
-        // directive upgrades the page while forms still target http, and
-        // `form-action 'self'` then blocks the POST. `$request->isSecure()`
+        // https only (see the class docblock). `$request->isSecure()`
         // honours the trusted-proxy `X-Forwarded-Proto` nginx sets, so this
         // fires on staging/production where TLS terminates at the proxy.
         if ($request->isSecure()) {
