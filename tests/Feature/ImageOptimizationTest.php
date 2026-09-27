@@ -147,3 +147,53 @@ it('renders the admin featured preview with lazy loading and async decoding', fu
     expect($tag)->toContain('loading="lazy"')
         ->toContain('decoding="async"');
 });
+
+// TOG-6784: the gap list assumed a home hero image that does not exist. The
+// hero is an h1 plus copy (home.blade.php:41-45) — deliberately no stock or
+// generated imagery — so the LCP element is text and there is nothing to give
+// `fetchpriority="high"`. The only preload the LCP path is owed is the Archivo
+// font the headline renders in. This pins that invariant both ways: a future
+// hero image cannot slip in without LCP discipline, and nobody "fixes" this
+// card by preloading the lazy featured image beside the hero.
+it('keeps the home hero imageless with only the font preload in the LCP path', function () {
+    $html = $this->get('/')->assertOk()->getContent();
+
+    expect($html)->toContain('id="hero-heading"');
+
+    $matched = preg_match(
+        '/<section[^>]*aria-labelledby="hero-heading"[^>]*>(.*?)<\/section>/s',
+        $html,
+        $matches,
+    );
+
+    expect($matched)->toBe(1, 'No hero section found on the homepage');
+    expect($matches[1])->not->toContain('<img');
+
+    expect($html)->toContain('<link rel="preload" href="/fonts/archivo-latin.woff2"')
+        ->not->toContain('as="image"');
+
+    // No image promotion is owed on a page with no images. Scoped to <img>
+    // tags on purpose: the deferred Livewire runtime carries
+    // fetchpriority="low" by design (AppServiceProvider) and Livewire's
+    // asset-injection state can leak between tests sharing one process, so a
+    // whole-page fetchpriority assertion would pin test ordering, not the LCP
+    // contract.
+    preg_match_all('/<img[^>]*>/', $html, $imgTags);
+
+    expect($imgTags[0])->toBeEmpty('home renders no images without featured content');
+});
+
+it('keeps the homepage featured image out of the LCP path when present', function () {
+    FeaturedContent::factory()->published()->create([
+        'title' => 'Community night on Friday',
+        'image_url' => 'https://example.org/photo.jpg',
+    ]);
+
+    $html = $this->get('/')->assertOk()->getContent();
+    $tag = imageTagFor($html, 'https://example.org/photo.jpg');
+
+    // Lazy and boxed (asserted above); additionally never promoted: a preload
+    // or fetchpriority="high" here would contend with the text LCP paint.
+    expect($tag)->not->toContain('fetchpriority');
+    expect($html)->not->toContain('as="image"');
+});
