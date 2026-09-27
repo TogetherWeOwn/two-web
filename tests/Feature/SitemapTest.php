@@ -33,16 +33,25 @@ it('lists published event pages with lastmod, never drafts, gone or gated URLs',
     $xml = simplexml_load_string($body);
     expect($xml)->not->toBeFalse();
 
-    // Plain array, not a Collection: `toContain` traverses arrays reliably.
-    $locs = collect(iterator_to_array($xml->url))->map(fn ($url) => (string) $url->loc)->all();
+    // preserve_keys: false — SimpleXML siblings share the `url` key, so the
+    // default collapses every <url> into one and all but the last vanish.
+    $locs = collect(iterator_to_array($xml->url, false))->map(fn ($url) => (string) $url->loc)->all();
 
     // The published event is advertised as an absolute same-host URL with lastmod.
+    // Matched by iterating, not xpath: the sitemap root declares the default
+    // `http://www.sitemaps.org/schemas/sitemap/0.9` namespace, so a bare
+    // `//url[loc=...]` xpath silently matches nothing.
     $pageUrl = route('events.page', $published);
     expect($locs)->toContain($pageUrl);
 
-    $entry = $xml->xpath("//url[loc='{$pageUrl}']");
-    expect($entry)->not->toBeFalse()->and($entry)->toHaveCount(1);
-    expect((string) $entry[0]->lastmod)->toBe($published->fresh()->updated_at->toAtomString());
+    $matches = [];
+    foreach ($xml->url as $url) {
+        if ((string) $url->loc === $pageUrl) {
+            $matches[] = $url;
+        }
+    }
+    expect($matches)->toHaveCount(1)
+        ->and((string) $matches[0]->lastmod)->toBe($published->fresh()->updated_at->toAtomString());
 
     // Draft (guest 403), cancelled (410 Gone) and past (over) stay out.
     foreach ([$draft, $cancelled, $past] as $event) {
@@ -69,7 +78,7 @@ it('serves a valid sitemap with no events', function () {
     $xml = simplexml_load_string($body);
     expect($xml)->not->toBeFalse();
 
-    $locs = collect(iterator_to_array($xml->url))->map(fn ($url) => (string) $url->loc)->all();
+    $locs = collect(iterator_to_array($xml->url, false))->map(fn ($url) => (string) $url->loc)->all();
 
     expect($locs)->toContain(route('home'))
         ->and($locs)->toContain(route('join'))

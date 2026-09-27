@@ -56,7 +56,7 @@ Route::get('/sitemap_index.xml', function () {
     foreach ($events as $event) {
         $urls[] = [
             'loc' => route('events.page', $event),
-            'lastmod' => $event->updated_at->toAtomString(),
+            'lastmod' => $event->updated_at?->toAtomString(),
             'changefreq' => 'weekly',
             'priority' => '0.6',
         ];
