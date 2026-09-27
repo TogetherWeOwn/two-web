@@ -3,7 +3,7 @@
 use App\Enums\EventStatus;
 use App\Models\Event;
 use App\Models\User;
-use Illuminate\Support\Facades\Schema;
+use Illuminate\Support\Facades\DB;
 
 /*
  * The 404 page is a signpost, not a dead end (TOG-6929). On top of the branded
@@ -105,8 +105,9 @@ it('still answers 404 when the events table is gone', function () {
     // The degraded state, proved for real rather than stubbed: dropping the
     // table makes the composer's query throw, and the page must answer 404
     // with its copy and CTA intact instead of escalating to a 500. The table
-    // comes back with the test transaction's rollback.
-    Schema::drop('events');
+    // comes back with the test transaction's rollback. CASCADE because the
+    // rsvps foreign key depends on events — a plain drop is refused.
+    DB::statement('DROP TABLE events CASCADE');
 
     $this->get('/nx-9x7q2-zzz')
         ->assertStatus(404)

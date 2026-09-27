@@ -152,12 +152,20 @@ class AppServiceProvider extends ServiceProvider
         // not controller code: Laravel renders `errors/404.blade.php` directly
         // from the exception handler, so no controller ever runs for it.
         //
+        // Registered on BOTH `errors::404` and `errors.404`. The exception
+        // handler looks the view up as `errors::404` (hint notation — see
+        // Handler::getHttpExceptionView), which is a different view name from
+        // the `errors.404` dot notation a direct `view('errors.404')` render
+        // uses. A composer on only one of them silently never fires on the
+        // other path, and the blade's empty-state fallback masks it as "no
+        // upcoming events". Both registrations share one closure.
+        //
         // The catch is deliberate and broad. A 404 fires for any unknown URL,
         // including while the database is down — catching only QueryException
         // would turn "page not found" into a 500 the day the schema is the
         // thing that is broken. The failure is logged at warning, not hidden:
         // an empty suggestion list is the degraded state, not the quiet one.
-        View::composer('errors.404', function (\Illuminate\View\View $view): void {
+        $suggestUpcomingEvents = function (\Illuminate\View\View $view): void {
             try {
                 $query = EventModel::query()
                     ->where('ends_at', '>=', now())
@@ -177,7 +185,9 @@ class AppServiceProvider extends ServiceProvider
 
                 $view->with('suggestedEvents', collect());
             }
-        });
+        };
+
+        View::composer(['errors::404', 'errors.404'], $suggestUpcomingEvents);
 
         // The one permission the site has. It is recomputed from the member's
         // Discord roles on every login — see DiscordLoginController — so removing
