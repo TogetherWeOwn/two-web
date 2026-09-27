@@ -4,6 +4,7 @@ use App\Http\Controllers\Auth\DiscordLoginController;
 use App\Http\Controllers\Auth\StagingQaLoginController;
 use App\Http\Controllers\DesignLab\HallmarkController;
 use App\Http\Controllers\EventController;
+use App\Http\Controllers\EventIcsController;
 use App\Http\Controllers\EventPageController;
 use App\Http\Controllers\EventStatusController;
 use App\Http\Controllers\HomeController;
@@ -84,6 +85,15 @@ Route::get('/events', EventsCalendar::class)->name('events.index');
 // JSON route (Event::getRouteKeyName()); an unknown key is a 404 from the
 // implicit binding, and a draft 403s for non-moderators via the policy.
 Route::get('/e/{event}', EventPageController::class)->name('events.page');
+
+// The per-event calendar download, on the same `event_key` binding. Public like
+// the page: a calendar client fetching the URL has no session, so a login wall
+// would make the download useless. The visibility rule is the same `view` policy
+// the JSON route and the page enforce — published (and cancelled/past) for
+// everyone, drafts for moderators only; an unknown key is a 404 from the
+// implicit binding. Registered before the `auth` group below so `/events/{key}.ics`
+// matches here instead of falling through to the JSON show route.
+Route::get('/events/{event}.ics', EventIcsController::class)->name('events.ics');
 
 // Discord is the only way in, so the route Laravel redirects guests to *is* the
 // Discord handoff. There is no login form to design because there is nothing to
