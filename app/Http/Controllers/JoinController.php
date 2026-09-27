@@ -2,6 +2,8 @@
 
 namespace App\Http\Controllers;
 
+use App\Enums\JoinOutcome;
+use App\Models\JoinAttempt;
 use App\Models\User;
 use App\Services\Bot\Exceptions\BotException;
 use App\Services\Bot\InternalActionClient;
@@ -31,6 +33,8 @@ final class JoinController
     public function redirect(Request $request): RedirectResponse
     {
         if (! $this->botConfigured()) {
+            $this->recordAttempt(JoinOutcome::Degraded, null, null, null);
+
             return $this->done('unavailable');
         }
 
@@ -45,6 +49,8 @@ final class JoinController
     public function callback(Request $request): RedirectResponse
     {
         if ($request->filled('error')) {
+            $this->recordAttempt(JoinOutcome::Denied, null, null, null);
+
             return $this->done('denied');
         }
 
@@ -53,14 +59,22 @@ final class JoinController
                 ->redirectUrl($this->callbackUrl())
                 ->user();
         } catch (Throwable $exception) {
+            $deniedSource = $request->session()->pull('join_source');
+
             Log::warning('Discord token exchange failed on the join journey.', [
                 'exception' => $exception::class,
             ]);
+
+            $this->recordAttempt(JoinOutcome::Error, is_string($deniedSource) ? $deniedSource : null, null, null);
 
             return $this->done('expired');
         }
 
         if (! $discordUser instanceof DiscordUser) {
+            $unexpectedSource = $request->session()->pull('join_source');
+
+            $this->recordAttempt(JoinOutcome::Error, is_string($unexpectedSource) ? $unexpectedSource : null, null, null);
+
             throw new RuntimeException('The Discord driver returned an unexpected user object.');
         }
 
@@ -70,15 +84,20 @@ final class JoinController
                 (string) $discordUser->token,
             );
         } catch (BotException $exception) {
+            $source = $request->session()->pull('join_source');
+
             Log::warning('One-click join could not reach the bot contract.', [
                 'exception' => $exception::class,
-                'source' => $request->session()->pull('join_source'),
+                'source' => $source,
             ]);
+
+            $this->recordAttempt(JoinOutcome::Degraded, is_string($source) ? $source : null, null, $this->safeDiscordId($discordUser));
 
             return $this->done('unavailable');
         }
 
         $source = $request->session()->pull('join_source');
+        $discordId = $this->safeDiscordId($discordUser);
 
         if ($result->outcome === null) {
             Log::warning('One-click join fell back to the invite.', [
@@ -86,6 +105,8 @@ final class JoinController
                 'code' => $result->failure?->code,
                 'request_id' => $result->requestId,
             ]);
+
+            $this->recordAttempt(JoinOutcome::Degraded, is_string($source) ? $source : null, $result->requestId !== '' ? $result->requestId : null, $discordId);
 
             return $this->done('unavailable');
         }
@@ -95,6 +116,8 @@ final class JoinController
             'outcome' => $result->outcome->value,
             'request_id' => $result->requestId,
         ]);
+
+        $this->recordAttempt($result->outcome, is_string($source) ? $source : null, $result->requestId !== '' ? $result->requestId : null, $discordId);
 
         // Join never writes `is_moderator`: only login recomputes it from Discord
         // roles, and join's scopes (identify + guilds.join) cannot read roles.
@@ -161,5 +184,43 @@ final class JoinController
     private function done(string $result): RedirectResponse
     {
         return redirect()->route('join')->with('join_result', $result);
+    }
+
+    /**
+     * One queryable row per terminal join path (TOG-5617), next to the log
+     * line that stays the human-readable trail.
+     *
+     * Only the four safe columns ever reach the table: outcome, source,
+     * request_id, discord_id. The OAuth token lives in the signed bot request
+     * body and the stack frame only; exception messages can quote it; Discord's
+     * error_description is attacker-shaped. None of them is a parameter here,
+     * so none of them can end up in the row.
+     */
+    private function recordAttempt(JoinOutcome $outcome, ?string $source, ?string $requestId, ?string $discordId): void
+    {
+        JoinAttempt::query()->create([
+            'outcome' => $outcome,
+            'source' => $source,
+            'request_id' => $requestId !== '' ? $requestId : null,
+            'discord_id' => $discordId !== '' ? $discordId : null,
+        ]);
+    }
+
+    /**
+     * The Discord id when there is one to record, never the token.
+     *
+     * Takes the Socialite user (or anything unexpected the driver handed
+     * back) and returns only the id string — the one join key the funnel
+     * needs. Anything without a readable id records null rather than a dump.
+     */
+    private function safeDiscordId(mixed $discordUser): ?string
+    {
+        if (! $discordUser instanceof DiscordUser) {
+            return null;
+        }
+
+        $id = (string) $discordUser->getId();
+
+        return $id !== '' ? $id : null;
     }
 }
