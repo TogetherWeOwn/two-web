@@ -8,8 +8,8 @@ use App\Support\EventRss;
 
 // The event collection as an RSS 2.0 feed: `GET /events.rss` as
 // `application/rss+xml`. Public like the shareable page — a feed reader has no
-// session — with drafts excluded outright, since per-user visibility cannot
-// apply to a sessionless fetch.
+// session — listing published upcoming events only, since per-user visibility
+// cannot apply to a sessionless fetch.
 
 beforeEach(function () {
     $this->moderator = User::factory()->create(['is_moderator' => true]);
@@ -34,8 +34,8 @@ it('serves published events as RSS with links to the shareable pages', function 
     $event = Event::factory()->create([
         'title' => 'Friday night Helldivers',
         'description' => 'Bring stims.',
-        'starts_at' => EventInput::instant('2026-07-15 19:00', 'Europe/London'),
-        'ends_at' => EventInput::instant('2026-07-15 21:00', 'Europe/London'),
+        'starts_at' => EventInput::instant('2027-07-15 19:00', 'Europe/London'),
+        'ends_at' => EventInput::instant('2027-07-15 21:00', 'Europe/London'),
         'timezone' => 'Europe/London',
         'status' => EventStatus::Published,
     ]);
@@ -61,12 +61,18 @@ it('serves published events as RSS with links to the shareable pages', function 
         ->and((string) $items[0]->description)->toBe('Bring stims.')
         ->and((string) $items[0]->link)->toBe(route('events.page', $event))
         ->and((string) $items[0]->guid)->toBe(route('events.page', $event))
-        ->and((string) $items[0]->pubDate)->toBe('Wed, 15 Jul 2026 18:00:00 +0000');
+        ->and((string) $items[0]->pubDate)->toBe('Thu, 15 Jul 2027 18:00:00 +0000');
 });
 
-it('excludes drafts from the feed, even for moderators', function () {
+it('lists only published upcoming events, even for moderators', function () {
     Event::factory()->create(['status' => EventStatus::Draft]);
-    $published = Event::factory()->create(['status' => EventStatus::Published]);
+    Event::factory()->create(['status' => EventStatus::Cancelled]);
+    Event::factory()->create([
+        'status' => EventStatus::Published,
+        'starts_at' => now()->subHours(3),
+        'ends_at' => now()->subHour(),
+    ]);
+    $upcoming = Event::factory()->create(['status' => EventStatus::Published]);
 
     $guestItems = rssFeed($this->get(route('events.rss'))->assertOk()->getContent())->channel->item;
     $moderatorItems = rssFeed($this->actingAs($this->moderator)->get(route('events.rss'))->assertOk()->getContent())->channel->item;
@@ -75,20 +81,23 @@ it('excludes drafts from the feed, even for moderators', function () {
     // apply: the guest rule is the only honest one, for everyone.
     expect($guestItems)->toHaveCount(1)
         ->and($moderatorItems)->toHaveCount(1)
-        ->and((string) $guestItems[0]->guid)->toBe(route('events.page', $published));
+        ->and((string) $guestItems[0]->guid)->toBe(route('events.page', $upcoming));
 });
 
-it('marks cancelled events instead of silently listing them as upcoming', function () {
-    $event = Event::factory()->create([
-        'title' => 'Raid night',
-        'status' => EventStatus::Cancelled,
+it('serves a valid empty feed when nothing is upcoming', function () {
+    // A draft and a past event exist, so "empty" means the scope excluded them,
+    // not that the database is bare.
+    Event::factory()->create(['status' => EventStatus::Draft]);
+    Event::factory()->create([
+        'status' => EventStatus::Published,
+        'starts_at' => now()->subHours(3),
+        'ends_at' => now()->subHour(),
     ]);
 
-    $items = rssFeed($this->get(route('events.rss'))->assertOk()->getContent())->channel->item;
+    $feed = rssFeed($this->get(route('events.rss'))->assertOk()->getContent());
 
-    expect($items)->toHaveCount(1)
-        ->and((string) $items[0]->title)->toBe('[Cancelled] Raid night')
-        ->and((string) $items[0]->guid)->toBe(route('events.page', $event));
+    expect($feed->channel->item)->toHaveCount(0)
+        ->and((string) $feed->channel->title)->toContain('Events');
 });
 
 it('orders items by start time and escapes markup in text fields', function () {
