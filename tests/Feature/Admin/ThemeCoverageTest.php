@@ -36,6 +36,7 @@ use Filament\Actions\Action;
 use Filament\Actions\DeleteAction;
 use Filament\Actions\EditAction;
 use Filament\Forms\Components\DateTimePicker;
+use Filament\Forms\Components\Hidden;
 use Filament\Forms\Components\Select;
 use Filament\Forms\Components\Textarea;
 use Filament\Forms\Components\TextInput;
@@ -114,6 +115,9 @@ function componentStylesheetMap(): array
     return [
         // Form fields: one file each under filament/forms.
         DateTimePicker::class => 'forms/resources/css/components/date-time-picker.css',
+        // Hidden renders a bare <input type="hidden"> with no stylesheet of
+        // its own (TOG-6805 carriers).
+        Hidden::class => null,
         Select::class => 'forms/resources/css/components/select.css',
         TextInput::class => 'forms/resources/css/components/text-input.css',
         Textarea::class => 'forms/resources/css/components/textarea.css',
