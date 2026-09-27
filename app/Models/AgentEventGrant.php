@@ -2,6 +2,7 @@
 
 namespace App\Models;
 
+use Carbon\CarbonImmutable;
 use Illuminate\Database\Eloquent\Concerns\HasUuids;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\HasMany;
@@ -25,8 +26,8 @@ use Illuminate\Database\Eloquent\Relations\HasMany;
  * @property string $company_id
  * @property string $guild_id
  * @property string $verifier_hash
- * @property \Carbon\CarbonImmutable|null $expires_at
- * @property \Carbon\CarbonImmutable|null $disabled_at
+ * @property CarbonImmutable|null $expires_at
+ * @property CarbonImmutable|null $disabled_at
  * @property int $max_events
  */
 class AgentEventGrant extends Model

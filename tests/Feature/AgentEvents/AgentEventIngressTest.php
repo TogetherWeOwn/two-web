@@ -1,11 +1,13 @@
 <?php
 
+use App\Enums\EventStatus;
 use App\Jobs\SyncEventToDiscord;
 use App\Models\AgentEventAudit;
 use App\Models\AgentEventGrant;
 use App\Models\AgentEventIdempotencyKey;
 use App\Models\Event;
 use App\Services\Bot\InternalActionClient;
+use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Str;
 
@@ -95,7 +97,20 @@ it('answers 404 when the ingress is disabled', function () {
         ->assertNotFound()
         ->assertJsonPath('reason', 'ingress_disabled');
 
-    expect(Event::query()->count())->toBe(0);
+    expect(Event::query()->count())->toBe(0)
+        ->and(AgentEventAudit::query()->where('reason_code', 'ingress_disabled')->count())->toBe(1);
+});
+
+it('audits a malformed envelope that never reaches authentication', function () {
+    agentGrant();
+
+    $this->postJson(route('api.agent-events'), ['op' => 'create'], ['Authorization' => 'Bearer '.AGENT_CREDENTIAL])
+        ->assertStatus(422)
+        ->assertJsonPath('reason', 'validation_failed');
+
+    expect(Event::query()->count())->toBe(0)
+        ->and(AgentEventAudit::query()->where('reason_code', 'validation_failed')->count())->toBe(1)
+        ->and(AgentEventAudit::query()->firstOrFail()->grant_id)->toBeNull();
 });
 
 it('denies an unauthenticated call with no side effects', function () {
@@ -143,11 +158,11 @@ it('denies an expired grant at ingress and at dispatch alike', function () {
     // The second half of the same rule: expiry between enqueue and dispatch
     // must stop the write-back, not just the ingress.
     $owned = Event::factory()->create([
-        'status' => \App\Enums\EventStatus::Published,
+        'status' => EventStatus::Published,
         'title' => 'Proof',
         'location' => 'Voice: General',
-        'starts_at' => \Illuminate\Support\Carbon::parse('2026-10-01T18:00:00Z'),
-        'ends_at' => \Illuminate\Support\Carbon::parse('2026-10-01T20:00:00Z'),
+        'starts_at' => Carbon::parse('2026-10-01T18:00:00Z'),
+        'ends_at' => Carbon::parse('2026-10-01T20:00:00Z'),
         'timezone' => 'Europe/London',
         'agent_grant_id' => $grant->getKey(),
         'proof_marker' => 'agent-proof-dispatch-expiry',
@@ -195,6 +210,36 @@ it('rejects a production-guild override by configured value', function () {
         ->and(AgentEventAudit::query()->where('reason_code', 'wrong_guild')->count())->toBe(1);
 });
 
+it('denies a grant that is not the admitted caller', function () {
+    agentGrant(['agent_id' => '00000000-0000-4000-8000-000000000000']);
+
+    $this->postJson(
+        route('api.agent-events'),
+        agentOp('create', ['fields' => agentFields()]),
+        ['Authorization' => 'Bearer '.AGENT_CREDENTIAL]
+    )
+        ->assertForbidden()
+        ->assertJsonPath('reason', 'wrong_caller');
+
+    expect(Event::query()->count())->toBe(0)
+        ->and(AgentEventAudit::query()->where('reason_code', 'wrong_caller')->count())->toBe(1);
+});
+
+it('denies a production-bound grant before any mutation', function () {
+    agentGrant(['guild_id' => '326474832151838730']);
+
+    $this->postJson(
+        route('api.agent-events'),
+        agentOp('create', ['fields' => agentFields()]),
+        ['Authorization' => 'Bearer '.AGENT_CREDENTIAL]
+    )
+        ->assertForbidden()
+        ->assertJsonPath('reason', 'production_guild');
+
+    expect(Event::query()->count())->toBe(0)
+        ->and(AgentEventAudit::query()->where('reason_code', 'production_guild')->count())->toBe(1);
+});
+
 // ---------------------------------------------------------------------------
 // The quota: one proof event per grant, enforced by the database.
 // ---------------------------------------------------------------------------
@@ -212,7 +257,7 @@ it('creates one draft owned by the grant, with machine attribution and no human'
 
     $event = Event::query()->firstOrFail();
 
-    expect($event->status)->toBe(\App\Enums\EventStatus::Draft)
+    expect($event->status)->toBe(EventStatus::Draft)
         ->and($event->created_by)->toBeNull()
         ->and((string) $event->agent_grant_id)->toBe(AgentEventGrant::query()->firstOrFail()->getKey())
         ->and($event->proof_marker)->toStartWith('agent-proof-');
@@ -349,6 +394,37 @@ it('updates the owned event and bumps the version', function () {
     expect(Event::query()->firstOrFail()->title)->toBe('Agent proof event, revised');
 });
 
+it('audits an update missing its version and answers the corrected retry', function () {
+    agentGrant();
+    $headers = ['Authorization' => 'Bearer '.AGENT_CREDENTIAL];
+
+    $created = $this->postJson(route('api.agent-events'), agentOp('create', ['fields' => agentFields()]), $headers)
+        ->assertCreated();
+
+    $key = $created->json('event_key');
+
+    // No version: audited, 422, and never replay-stored — so the corrected
+    // call under the same key is answered rather than conflicted.
+    $retryKey = (string) Str::uuid();
+
+    $this->postJson(
+        route('api.agent-events'),
+        agentOp('update', ['event_key' => $key, 'fields' => agentFields(['title' => 'Fixed version']), 'idempotency_key' => $retryKey]),
+        $headers
+    )
+        ->assertStatus(422)
+        ->assertJsonPath('reason', 'validation_failed');
+
+    $this->postJson(
+        route('api.agent-events'),
+        agentOp('update', ['event_key' => $key, 'version' => 1, 'fields' => agentFields(['title' => 'Fixed version']), 'idempotency_key' => $retryKey]),
+        $headers
+    )->assertOk();
+
+    expect(Event::query()->firstOrFail()->title)->toBe('Fixed version')
+        ->and(AgentEventAudit::query()->where('operation', 'update')->where('reason_code', 'validation_failed')->count())->toBe(1);
+});
+
 it('rejects a stale version rather than overwriting', function () {
     $grant = agentGrant();
     $headers = ['Authorization' => 'Bearer '.AGENT_CREDENTIAL];
@@ -417,7 +493,7 @@ it('cancels a mirrored event through event.cancel, never upsert', function () {
         ->assertCreated();
 
     $event = Event::query()->where('event_key', $created->json('event_key'))->firstOrFail();
-    $event->forceFill(['status' => \App\Enums\EventStatus::Published, 'discord_event_id' => '1234567890'])->save();
+    $event->forceFill(['status' => EventStatus::Published, 'discord_event_id' => '1234567890'])->save();
 
     $this->postJson(route('api.agent-events'), agentOp('cancel', ['event_key' => $event->event_key]), $headers)
         ->assertOk();
@@ -452,11 +528,11 @@ it('stops a queued publish at dispatch once the event is cancelled', function ()
     agentGrant();
 
     $event = Event::factory()->create([
-        'status' => \App\Enums\EventStatus::Cancelled,
+        'status' => EventStatus::Cancelled,
         'title' => 'Proof',
         'location' => 'Voice: General',
-        'starts_at' => \Illuminate\Support\Carbon::parse('2026-10-01T18:00:00Z'),
-        'ends_at' => \Illuminate\Support\Carbon::parse('2026-10-01T20:00:00Z'),
+        'starts_at' => Carbon::parse('2026-10-01T18:00:00Z'),
+        'ends_at' => Carbon::parse('2026-10-01T20:00:00Z'),
         'timezone' => 'Europe/London',
         'agent_grant_id' => AgentEventGrant::query()->firstOrFail()->getKey(),
         'proof_marker' => 'agent-proof-stale-publish',

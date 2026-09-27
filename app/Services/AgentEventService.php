@@ -32,7 +32,8 @@ use Illuminate\Validation\ValidationException;
  * that spends nothing before the request has earned it:
  *
  *   1. feature enabled, body parses, credential identifies a grant;
- *   2. the operation is one of the five, the grant is live, the guild matches;
+ *   2. the operation is one of the five, the grant is live, the grant is the
+ *      admitted caller on the admitted staging guild, the guild matches;
  *   3. the idempotency store answers replays for free, before rate limits;
  *   4. rate limits, then the operation under a per-event lock.
  *
@@ -60,8 +61,16 @@ class AgentEventService
     public function handle(array $body, ?string $credential): array
     {
         $requestId = (string) Str::ulid();
+        $digest = self::digest($body);
+
+        $rawOp = $body['op'] ?? null;
+        $rawKey = $body['idempotency_key'] ?? null;
+        $auditOp = is_string($rawOp) && $rawOp !== '' ? mb_substr($rawOp, 0, 32) : 'unknown';
+        $auditKey = is_string($rawKey) && $rawKey !== '' && mb_strlen($rawKey) <= 255 ? $rawKey : null;
 
         if (! (bool) config('agent-events.enabled', false)) {
+            $this->audit(null, $auditOp, null, $auditKey, $digest, $requestId, 'denied', 'ingress_disabled', null);
+
             return $this->answer(404, [
                 'reason' => 'ingress_disabled',
                 'message' => 'The agent event ingress is not enabled in this environment.',
@@ -73,14 +82,14 @@ class AgentEventService
         $idempotencyKey = $body['idempotency_key'] ?? null;
 
         if (! is_string($op) || ! is_string($idempotencyKey) || $idempotencyKey === '' || mb_strlen($idempotencyKey) > 255) {
+            $this->audit(null, $auditOp, null, $auditKey, $digest, $requestId, 'denied', 'validation_failed', null);
+
             return $this->answer(422, [
                 'reason' => 'validation_failed',
                 'message' => 'The request needs a string `op` and a non-empty string `idempotency_key` (max 255 characters).',
                 'request_id' => $requestId,
             ]);
         }
-
-        $digest = self::digest($body);
 
         $grant = $credential === null || $credential === ''
             ? null
@@ -122,6 +131,38 @@ class AgentEventService
             return $this->answer(403, [
                 'reason' => 'grant_disabled',
                 'message' => 'The grant has been disabled by its provisioning owner.',
+                'request_id' => $requestId,
+            ]);
+        }
+
+        // The grant itself must be the admitted caller on the admitted guild.
+        // A credential that identifies some other agent, or a grant bound to a
+        // guild that is not staging — production included — is denied here. The
+        // admitted values come from config, so the denial compares against
+        // deployed configuration rather than a constant buried in this file.
+        $admittedCaller = (string) config('agent-events.caller_agent_id', '');
+        $stagingGuild = (string) config('agent-events.staging_guild_id', '');
+        $productionGuild = (string) config('agent-events.production_guild_id', '');
+
+        if ($admittedCaller !== '' && $grant->agent_id !== $admittedCaller) {
+            $this->audit($grant, $op, null, $idempotencyKey, $digest, $requestId, 'denied', 'wrong_caller', null);
+
+            return $this->answer(403, [
+                'reason' => 'wrong_caller',
+                'message' => 'This grant is not the admitted caller for the agent event ingress.',
+                'request_id' => $requestId,
+            ]);
+        }
+
+        if ($stagingGuild !== '' && $grant->guild_id !== $stagingGuild) {
+            $reason = $productionGuild !== '' && $grant->guild_id === $productionGuild ? 'production_guild' : 'wrong_audience';
+            $this->audit($grant, $op, null, $idempotencyKey, $digest, $requestId, 'denied', $reason, null);
+
+            return $this->answer(403, [
+                'reason' => $reason,
+                'message' => $reason === 'production_guild'
+                    ? 'This grant is bound to the production guild, which the agent event ingress never serves.'
+                    : 'This grant is not bound to the admitted staging guild.',
                 'request_id' => $requestId,
             ]);
         }
@@ -444,6 +485,12 @@ class AgentEventService
                     $version = $body['version'] ?? null;
 
                     if (! is_int($version)) {
+                        // Audited like every other denial, but never
+                        // replay-stored: only executions persist a replay, so a
+                        // client that fixes the missing version under the same
+                        // key is answered, not conflicted.
+                        $this->audit($grant, 'update', $event->event_key, $idempotencyKey, $digest, $requestId, 'denied', 'validation_failed', null);
+
                         return ['status' => 422, 'body' => [
                             'reason' => 'validation_failed',
                             'message' => 'An update needs the integer `version` last seen on a read.',
