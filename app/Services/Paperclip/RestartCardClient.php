@@ -27,9 +27,13 @@ use Throwable;
  *
  * ## Fail closed
  *
- * A board-write token is a real credential and today none is provisioned. Every
- * config value is passed in, including the missing ones; file() refuses to send
- * unless all five are present, and a missing one is a PaperclipNotConfigured
+ * The token is a least-privilege Paperclip `task_bridge` agent key: it may only
+ * create children of one parent issue and assign them only to allowlisted
+ * agents, and it cannot assign to board users at all (TOG-3573). So every card
+ * is a child of PAPERCLIP_PARENT_ISSUE_ID, assigned to the agent that runs the
+ * restart. Every config value is passed in, including the missing ones; file()
+ * refuses to send unless all of them are present and the bot environment is a
+ * known one, and a missing one is a PaperclipNotConfigured
  * Exception (terminal). The settings-save action turns that into a rejected
  * save, so an unprovisioned environment keeps cold settings read-only rather
  * than silently accepting a change no card was filed for.
@@ -37,7 +41,7 @@ use Throwable;
  * ## No arbitrary content
  *
  * file() transports a RestartCard, whose title and body ColdSetting built from
- * constants and one validated setting value. This class adds the operator label
+ * constants and one validated setting value. This class adds the parent, label
  * and assignee from server config and sends nothing from any caller string.
  *
  * ## What is not here
@@ -53,7 +57,9 @@ final readonly class RestartCardClient
         private ?string $token,
         private ?string $companyId,
         private ?string $operatorLabelId,
-        private ?string $operatorAssigneeUserId,
+        private ?string $parentIssueId,
+        private ?string $restartAssigneeAgentId,
+        private ?string $botEnvironment,
         private int $timeoutSeconds,
     ) {}
 
@@ -71,6 +77,19 @@ final readonly class RestartCardClient
     public function assertConfigured(): void
     {
         $this->endpoint();
+    }
+
+    /**
+     * The fixed card for a change of $setting to $newValue, targeting the bot
+     * environment this instance is configured for.
+     *
+     * @throws PaperclipNotConfiguredException
+     */
+    public function cardFor(ColdSetting $setting, string $newValue): RestartCard
+    {
+        $this->endpoint();
+
+        return $setting->restartCard($newValue, BotEnvironment::from((string) $this->botEnvironment));
     }
 
     /**
@@ -93,8 +112,9 @@ final readonly class RestartCardClient
         $payload = [
             'title' => $card->title,
             'description' => $card->body,
+            'parentId' => $this->parentIssueId,
             'labelIds' => [$this->operatorLabelId],
-            'assigneeUserId' => $this->operatorAssigneeUserId,
+            'assigneeAgentId' => $this->restartAssigneeAgentId,
             'idempotencyKey' => $idempotencyKey,
         ];
 
@@ -177,8 +197,18 @@ final readonly class RestartCardClient
             throw PaperclipNotConfiguredException::missing('PAPERCLIP_OPERATOR_LABEL_ID');
         }
 
-        if (($this->operatorAssigneeUserId ?? '') === '') {
-            throw PaperclipNotConfiguredException::missing('PAPERCLIP_OPERATOR_ASSIGNEE_USER_ID');
+        if (($this->parentIssueId ?? '') === '') {
+            throw PaperclipNotConfiguredException::missing('PAPERCLIP_PARENT_ISSUE_ID');
+        }
+
+        if (($this->restartAssigneeAgentId ?? '') === '') {
+            throw PaperclipNotConfiguredException::missing('PAPERCLIP_RESTART_ASSIGNEE_AGENT_ID');
+        }
+
+        // Unknown is as good as missing: a typo must not fall through to a
+        // default that restarts the wrong bot.
+        if (BotEnvironment::tryFrom((string) $this->botEnvironment) === null) {
+            throw PaperclipNotConfiguredException::missing('PAPERCLIP_RESTART_BOT_ENVIRONMENT');
         }
 
         return rtrim((string) $this->url, '/')."/api/companies/{$this->companyId}/issues";

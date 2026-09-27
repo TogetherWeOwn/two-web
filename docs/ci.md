@@ -25,9 +25,11 @@ Locally, `composer check` runs the first two.
 
 ### Everything runs on our own runners
 
-Every job in every workflow is `runs-on: [self-hosted, two-selfhosted]` — five
-runners on the Coolify VPS, registered as `coolify-vps-1` … `coolify-vps-5`
-(TOG-2847). There are no GitHub-hosted jobs in this repository and no
+Every job in every workflow is `runs-on: [self-hosted, two-selfhosted]` — the
+org's own runners, on audited hosts only (TOG-2847): `coolify-vps-<n>` on the
+Coolify VPS, `ci-rbx1-<n>` in the LXD CI VM on the rbx1 host, and `ci-w2494-<n>`
+on worker host vps-2494bf63. `ci/attest-runner.sh` holds that prefix list; a job
+on any other runner fails its first step. There are no GitHub-hosted jobs in this repository and no
 `ubuntu-latest` fallback: Actions spend is not available to us, so a job that lands
 on a hosted runner does not cost a little extra, it fails before its first step.
 
