@@ -110,6 +110,29 @@ it('paginates past twenty instead of growing back into the unbounded list', func
         ->assertDontSee('Night 1');
 });
 
+it('announces the archive page politely when pagination swaps the list', function () {
+    // TOG-7332: pagination re-renders the list without reloading, so the page
+    // change has to be announced — role="status", never role="alert".
+    foreach (range(1, 21) as $i) {
+        archivePastEvent([
+            'title' => "Night {$i}",
+            'starts_at' => now()->subDays($i),
+            'ends_at' => now()->subDays($i)->addHours(2),
+        ]);
+    }
+
+    $html = Livewire::test(PastEvents::class)->html();
+
+    expect($html)->toContain('role="status"')
+        ->toContain('data-testid="past-events-page-status"')
+        ->toContain('Showing page 1 of 2.')
+        ->not->toContain('role="alert"');
+
+    Livewire::test(PastEvents::class)
+        ->call('gotoPage', 2)
+        ->assertSee('Showing page 2 of 2.');
+});
+
 it('hides a draft from a member and from a guest but shows it to a moderator', function () {
     archivePastEvent(['title' => 'Unannounced raid', 'status' => EventStatus::Draft]);
 

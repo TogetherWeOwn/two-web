@@ -338,6 +338,37 @@ it('shares the HTTP RSVP allowance and returns Retry-After from a limited Livewi
         ->assertSee("I'm in", false);
 });
 
+it('announces the closed and full states politely, not as alerts', function () {
+    // TOG-7332: a cancellation landing while the member watches, or losing
+    // the last-seat race after clicking, swaps these states in without a
+    // reload — they must announce via role="status", never role="alert".
+    $this->event->update(['status' => EventStatus::Cancelled]);
+
+    $closed = Livewire::actingAs($this->member)
+        ->test(RsvpButton::class, ['event' => $this->event->fresh()])
+        ->html();
+
+    expect($closed)->toContain('role="status"')
+        ->toContain('data-testid="rsvp-closed"')
+        ->not->toContain('role="alert"');
+
+    $full = Event::factory()->create([
+        'starts_at' => now()->addDays(3),
+        'ends_at' => now()->addDays(3)->addHours(2),
+        'status' => EventStatus::Published,
+        'capacity' => 1,
+    ]);
+    Rsvp::factory()->create(['event_id' => $full->id, 'status' => RsvpStatus::Going]);
+
+    $html = Livewire::actingAs($this->member)
+        ->test(RsvpButton::class, ['event' => $full])
+        ->html();
+
+    expect($html)->toContain('role="status"')
+        ->toContain('data-testid="event-full"')
+        ->not->toContain('role="alert"');
+});
+
 /* ---------------------------------------------------------------------------
    Closed events
    --------------------------------------------------------------------------- */

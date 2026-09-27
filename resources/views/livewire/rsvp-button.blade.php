@@ -21,17 +21,21 @@
 
     @auth
         @if (! $open)
-            {{-- Cancelled or over. Says which, in words. --}}
+            {{-- Cancelled or over. Says which, in words. role="status": a
+                 cancellation that lands while the member is looking re-renders
+                 here, and that change has to be announced (TOG-7332). --}}
             <p class="inline-flex items-center gap-1.5 rounded-sm px-2 py-0.5 text-xs font-medium
                       bg-raised text-ink-muted border border-line self-start"
-               data-testid="rsvp-closed">
+               role="status" data-testid="rsvp-closed">
                 {{ $this->event->status === \App\Enums\EventStatus::Cancelled ? 'Cancelled' : ($this->event->status === \App\Enums\EventStatus::Draft ? 'Not published yet' : 'This one has been and gone') }}
             </p>
 
         @elseif ($full || $atCapacity)
             {{-- Colour is not carrying this: there is an icon and there are words,
-                 and the cap is named so the number is not a mystery. --}}
-            <p class="flex items-start gap-1.5 text-sm text-alert" data-testid="event-full">
+                 and the cap is named so the number is not a mystery.
+                 role="status": the race loser lands here after clicking, so the
+                 swap has to be announced politely, not as an alert (TOG-7332). --}}
+            <p class="flex items-start gap-1.5 text-sm text-alert" role="status" data-testid="event-full">
                 <svg class="size-4 shrink-0 mt-0.5" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
                     <path d="M8 1.5 15 14H1L8 1.5Zm0 4a.75.75 0 0 0-.75.75v3a.75.75 0 0 0 1.5 0v-3A.75.75 0 0 0 8 5.5Zm0 6.75a.9.9 0 1 0 0-1.8.9.9 0 0 0 0 1.8Z"/>
                 </svg>
