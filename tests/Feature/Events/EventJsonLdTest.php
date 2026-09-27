@@ -53,12 +53,15 @@ it('embeds valid Event JSON-LD with name, startDate and location on a published 
     ]);
 });
 
-it('maps a cancelled event to EventCancelled', function () {
+it('maps a cancelled event to EventCancelled on its 410 page', function () {
     $event = Event::factory()->create(['status' => EventStatus::Cancelled]);
 
-    $data = jsonLdOnPage($this->get(route('events.page', $event))->assertOk()->getContent());
+    // Cancelled answers 410 Gone (TOG-6781), so the machine-readable status
+    // travels on the gone page, not a 200: same block, same mapping.
+    $response = $this->get(route('events.page', $event))->assertStatus(410);
 
-    expect($data['eventStatus'])->toBe('https://schema.org/EventCancelled');
+    expect(jsonLdOnPage($response->getContent())['eventStatus'])
+        ->toBe('https://schema.org/EventCancelled');
 });
 
 it('omits location rather than emitting null when the event has none', function () {
