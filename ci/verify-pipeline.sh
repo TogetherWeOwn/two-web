@@ -746,6 +746,107 @@ print("trivialAllowlist=%s" % ",".join(trivial))
     fi
   fi
 
+  # 12. The Vite bundle budget is still a budget (TOG-5629).
+  #
+  #    ci/bundle-budget.json caps every built entrypoint in raw and gzip bytes,
+  #    and the `budgets` job fails when ci/check-bundle-budget.mjs finds one
+  #    over its ceiling. Both halves have a quiet way out: relax a number in
+  #    the JSON until the breach goes green, or drop the enforcement step from
+  #    the job while leaving the file in place. Either edit leaves every job
+  #    green while the bundle grows without bound — the TOG-53 axios accident
+  #    (48 KB in the 1-byte app.js) and the TOG-3233 unconditional hallmark
+  #    include (10.9 KB on every public page) would both have merged clean.
+  #
+  #    Parsed, not matched: the ceilings are read out of the JSON with node's
+  #    own JSON.parse — the same values the checker compares against — so a
+  #    second `budgets` key appended lower in the file reads as the effective
+  #    one, exactly as the checker sees it. Same lesson as check 10's four
+  #    spellings of a duplicate key.
+  local bundle_budget_file="./ci/bundle-budget.json"
+  if [ ! -f "$bundle_budget_file" ]; then
+    fail "${bundle_budget_file} not found — the \`budgets\` job has no bundle thresholds to enforce"
+    rc=1
+  elif ! command -v node >/dev/null 2>&1; then
+    # Red, not skipped — same rule as check 10. A budget check that cannot run
+    # is a budget that is not enforced, and it should look like one.
+    fail "node is not on PATH, so ${bundle_budget_file} cannot be read as the checker reads it"
+    rc=1
+  else
+    # One `entry|raw|gzip` line per ceiling. Compared exactly: raising a number
+    # to make a breach go green is a deliberate edit here, in the commit that
+    # says what grew and why — the same standard as the Lighthouse budgets.
+    local bundle_effective bundle_loaded=1
+    bundle_effective=$(node -e '
+      const fs = require("fs");
+      const budget = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+      for (const [entry, ceiling] of Object.entries(budget.budgets || {})) {
+        console.log([entry, String(ceiling.maxRawBytes), String(ceiling.maxGzipBytes)].join("|"));
+      }
+    ' "$bundle_budget_file" 2>&1) || bundle_loaded=0
+
+    if [ "$bundle_loaded" -eq 0 ]; then
+      fail "${bundle_budget_file} could not be parsed as JSON, so the checker cannot load it either and the \`budgets\` job has no bundle thresholds to enforce: ${bundle_effective}"
+      rc=1
+    else
+      local bundle_entry bundle_expected
+      for bundle_entry in \
+        "resources/css/app.css|76800|15360" \
+        "resources/css/filament/admin/theme.css|375000|38000" \
+        "resources/css/hallmark.css|15360|4096" \
+        "resources/js/app.js|5120|2048"; do
+        if grep -qxF -- "$bundle_entry" <<< "$bundle_effective"; then
+          pass "bundle budget \`$(cut -d'|' -f1 <<< "$bundle_entry")\` caps raw and gzip at $(cut -d'|' -f2 <<< "$bundle_entry")/$(cut -d'|' -f3 <<< "$bundle_entry") bytes"
+        else
+          # `|| true`: an absent entry makes grep exit 1, and under
+          # `set -o pipefail` that status would kill the whole lint instead of
+          # reporting the absence. Empty reads as `absent` below, which is the
+          # point — a deleted ceiling must fail loudly, not silently.
+          bundle_expected="$(grep -F -- "$(cut -d'|' -f1 <<< "$bundle_entry")|" <<< "$bundle_effective" | head -1 || true)"
+          fail "bundle budget for \`$(cut -d'|' -f1 <<< "$bundle_entry")\` reads \`${bundle_expected:-absent}\`, not \`$(cut -d'|' -f2 <<< "$bundle_entry")|$(cut -d'|' -f3 <<< "$bundle_entry")\` (entry|raw|gzip). A ceiling quietly raised — or an entry deleted — lets the bundle grow while every job stays green. If the bundle genuinely grew, raise the ceiling in ${bundle_budget_file} in the commit that says what grew and why, and update this pin with it."
+          rc=1
+        fi
+      done
+    fi
+
+    # The enforcement step itself, addressed to the `budgets` job by name rather
+    # than grepped across the file — the same reason check 8's self-test case
+    # addresses `dusk` by name. A `Bundle budget` step added to `static` would
+    # satisfy a file-wide grep while measuring nothing (no manifest there), and
+    # a new job above `budgets` that builds would quietly move the assumption
+    # the Pest half rests on.
+    local budgets_block
+    budgets_block="$(job_block "$WORKFLOW" "budgets")" || budgets_block=''
+
+    if [ -z "$budgets_block" ]; then
+      fail "job \`budgets\` was not found in ${WORKFLOW}. Check 12 expects it to exist and to enforce the bundle budget, because the checker needs the real manifest only a job that builds for real produces. If the job was renamed, rename it here too."
+      rc=1
+    elif has_line "$budgets_block" 'check-bundle-budget.mjs'; then
+      pass "\`budgets\` enforces the bundle budget — the checker still runs where the manifest is real"
+    else
+      fail "job \`budgets\` no longer runs \`check-bundle-budget.mjs\`. ${bundle_budget_file} still caps every entrypoint, but nothing compares the built bundle against it — a budget with no enforcement, silently."
+      rc=1
+    fi
+
+    # The checker's own self-test must still run in `static`: the byte
+    # comparison needs a manifest so it lives in `budgets`, and a checker that
+    # quietly stopped failing is indistinguishable from a fitting bundle unless
+    # something offline proves it still fails. Same argument as check 9's.
+    local budget_selftest_jobs budget_selftest_job budget_selftest_blk
+    budget_selftest_jobs=$(while read -r budget_selftest_job; do
+      [ -n "$budget_selftest_job" ] || continue
+      budget_selftest_blk=$(job_block "$WORKFLOW" "$budget_selftest_job")
+      if has_line "$budget_selftest_blk" 'check-bundle-budget.mjs --selftest'; then
+        job_reported_name "$WORKFLOW" "$budget_selftest_job"
+      fi
+    done <<< "$(job_ids "$WORKFLOW")")
+    if [ -z "$budget_selftest_jobs" ]; then
+      fail "no job in ${WORKFLOW} runs \`check-bundle-budget.mjs --selftest\`. Nothing then catches a checker that has quietly stopped failing: the byte comparison only ever executes in \`budgets\`, against a real manifest, so a neutered checker and a fitting bundle look identical from every job in the pipeline."
+      rc=1
+    else
+      pass "\`$(echo "$budget_selftest_jobs" | tr '\n' ' ' | sed 's/ $//')\` runs the bundle checker's self-test — a checker that stops failing cannot go quiet"
+    fi
+  fi
+
   return "$rc"
 }
 
