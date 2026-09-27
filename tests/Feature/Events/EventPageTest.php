@@ -99,6 +99,7 @@ it('lists attendee display names for a signed-in member', function () {
     Rsvp::factory()->for($event)->for($alice)->create(['status' => RsvpStatus::Going]);
     Rsvp::factory()->for($event)->for($bob)->create(['status' => RsvpStatus::Going]);
     // A maybe is not a seat and must not appear in the list.
+    $this->member->update(['display_name' => 'Maya Maybe']);
     Rsvp::factory()->for($event)->for($this->member)->create(['status' => RsvpStatus::Maybe]);
 
     $this->actingAs($this->member)
@@ -106,7 +107,8 @@ it('lists attendee display names for a signed-in member', function () {
         ->assertOk()
         ->assertSeeHtml('data-testid="event-attendees"')
         ->assertSee('Alice Attendee')
-        ->assertSee('Bob Going');
+        ->assertSee('Bob Going')
+        ->assertDontSee('Maya Maybe');
 });
 
 it('hides attendee names from guests while keeping the count and join pitch', function () {
