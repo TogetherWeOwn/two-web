@@ -20,27 +20,29 @@ use Illuminate\Support\Facades\DB;
  */
 
 /** Point the `bot` connection at something that cannot answer. */
-function breakBotConnectionForLeaves(): void
-{
-    Config::set('database.connections.bot', [
-        'driver' => 'pgsql',
-        'host' => '127.0.0.1',
-        // Nothing listens here. A refused connection comes back immediately,
-        // so this stays a fast test rather than one that waits out a timeout.
-        'port' => 1,
-        'database' => 'nope',
-        'username' => 'nope',
-        'password' => 'nope',
-        'charset' => 'utf8',
-        'prefix' => '',
-        'prefix_indexes' => true,
-        'search_path' => 'public',
-        'options' => [PDO::ATTR_TIMEOUT => 2],
-    ]);
+if (! function_exists('breakBotConnectionForLeaves')) {
+    function breakBotConnectionForLeaves(): void
+    {
+        Config::set('database.connections.bot', [
+            'driver' => 'pgsql',
+            'host' => '127.0.0.1',
+            // Nothing listens here. A refused connection comes back immediately,
+            // so this stays a fast test rather than one that waits out a timeout.
+            'port' => 1,
+            'database' => 'nope',
+            'username' => 'nope',
+            'password' => 'nope',
+            'charset' => 'utf8',
+            'prefix' => '',
+            'prefix_indexes' => true,
+            'search_path' => 'public',
+            'options' => [PDO::ATTR_TIMEOUT => 2],
+        ]);
 
-    // The connection is resolved and cached by the manager, so a config change
-    // alone would not reach a connection an earlier test already opened.
-    DB::purge('bot');
+        // The connection is resolved and cached by the manager, so a config change
+        // alone would not reach a connection an earlier test already opened.
+        DB::purge('bot');
+    }
 }
 
 it('serves the static leaves when the bot database refuses the connection', function () {
@@ -68,6 +70,11 @@ it('keeps the discord fallback redirecting when the bot database is down', funct
 it('keeps the events page rendering when the bot database is down', function () {
     // Events read the app database, not the bot views — a bot outage is not
     // their outage. (App-DB outage honestly 500s; see the file header.)
+    // Same production parity as the other two tests above, so a bot read
+    // sneaking into this path fails here too.
+    config()->set('session.driver', 'database');
+    config()->set('cache.default', 'database');
+
     breakBotConnectionForLeaves();
 
     $this->get('/events')->assertOk();
