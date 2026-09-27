@@ -167,12 +167,13 @@
                                         wire:target="save"
                                         class="inline-flex min-h-11 items-center justify-center gap-2 rounded-md bg-brand px-6 font-semibold text-on-brand transition-colors duration-fast ease-out-quick hover:bg-brand-hover active:bg-brand-active disabled:cursor-not-allowed disabled:border disabled:border-line disabled:bg-surface disabled:text-ink-disabled">
                                     <span class="size-4 shrink-0" aria-hidden="true" wire:loading.remove wire:target="save"></span>
-                                    <svg class="size-4 shrink-0 animate-spin" viewBox="0 0 16 16" fill="none" aria-hidden="true" wire:loading wire:target="save">
+                                    {{-- Hidden up front for the same reason as the RSVP control (TOG-6351). --}}
+                                    <svg class="size-4 shrink-0 animate-spin" viewBox="0 0 16 16" fill="none" aria-hidden="true" wire:loading wire:target="save" style="display: none">
                                         <circle cx="8" cy="8" r="6" stroke="currentColor" stroke-opacity="0.3" stroke-width="2"/>
                                         <path d="M14 8a6 6 0 0 0-6-6" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
                                     </svg>
                                     <span wire:loading.remove wire:target="save">Save</span>
-                                    <span wire:loading wire:target="save" aria-busy="true">Saving…</span>
+                                    <span wire:loading wire:target="save" aria-busy="true" style="display: none">Saving…</span>
                                 </button>
                             </div>
                         </form>

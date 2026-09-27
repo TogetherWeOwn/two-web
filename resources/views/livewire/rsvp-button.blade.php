@@ -80,13 +80,17 @@
                            disabled:opacity-100
                            transition-colors duration-fast ease-out-quick self-start">
                 <span class="size-4 shrink-0" aria-hidden="true" wire:loading.remove wire:target="rsvp"></span>
+                {{-- Hidden up front: Livewire only toggles loading elements during a
+                     request and never at init, so without this the spinner and the
+                     loading copy render beside the default copy (TOG-6351). The
+                     directive sets style.display itself mid-request, overriding this. --}}
                 <svg class="size-4 shrink-0 animate-spin" viewBox="0 0 16 16" fill="none"
-                     aria-hidden="true" wire:loading wire:target="rsvp">
+                     aria-hidden="true" wire:loading wire:target="rsvp" style="display: none">
                     <circle cx="8" cy="8" r="6" stroke="currentColor" stroke-opacity="0.3" stroke-width="2"/>
                     <path d="M14 8a6 6 0 0 0-6-6" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
                 </svg>
                 <span wire:loading.remove wire:target="rsvp">I'm in</span>
-                <span wire:loading wire:target="rsvp" aria-busy="true">Saving…</span>
+                <span wire:loading wire:target="rsvp" aria-busy="true" style="display: none">Saving…</span>
             </button>
         @endif
 
