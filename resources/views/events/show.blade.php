@@ -77,6 +77,31 @@
                 <p class="mt-4 max-w-prose text-ink-muted">{{ $event->description }}</p>
             @endif
 
+            {{-- Calendar export, side by side: the ICS download for every client
+                 and the Google one-click for the member who lives in a browser.
+                 Above the RSVP divider on purpose — saving the date is not RSVPing,
+                 and a guest who cannot RSVP can still add the event. --}}
+            <div class="mt-4 flex flex-wrap items-center gap-2" data-testid="event-calendar-links">
+                <a href="{{ route('events.ics', $event) }}"
+                   data-testid="event-ics"
+                   class="inline-flex items-center justify-center gap-2 min-h-11 px-5 rounded-md
+                          bg-transparent text-ink border border-line-strong
+                          hover:bg-raised hover:border-ink-muted active:bg-surface
+                          transition-colors duration-fast ease-out-quick">
+                    Add to calendar (.ics)
+                </a>
+                <a href="{{ \App\Support\EventGoogleCalendar::url($event) }}"
+                   data-testid="event-google-calendar"
+                   target="_blank"
+                   rel="noopener"
+                   class="inline-flex items-center justify-center gap-2 min-h-11 px-5 rounded-md
+                          bg-transparent text-ink border border-line-strong
+                          hover:bg-raised hover:border-ink-muted active:bg-surface
+                          transition-colors duration-fast ease-out-quick">
+                    Add to Google Calendar
+                </a>
+            </div>
+
             <div class="mt-6 border-t border-line pt-6">
                 @auth
                     <livewire:rsvp-button :event="$event" />
