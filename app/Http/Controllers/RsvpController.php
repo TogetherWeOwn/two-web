@@ -33,7 +33,7 @@ class RsvpController
 
         $rsvp = $this->events->rsvp($event, $user, $request->status());
 
-        return (new RsvpResource($rsvp))->response();
+        return (new RsvpResource($rsvp))->response()->setStatusCode($rsvp->wasRecentlyCreated ? 201 : 200);
     }
 
     public function destroy(Request $request, Event $event): Response
