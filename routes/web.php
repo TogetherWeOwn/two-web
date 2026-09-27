@@ -6,6 +6,7 @@ use App\Http\Controllers\DesignLab\HallmarkController;
 use App\Http\Controllers\EventController;
 use App\Http\Controllers\EventIcsController;
 use App\Http\Controllers\EventPageController;
+use App\Http\Controllers\EventRssController;
 use App\Http\Controllers\EventStatusController;
 use App\Http\Controllers\HomeController;
 use App\Http\Controllers\JoinController;
@@ -94,6 +95,11 @@ Route::get('/e/{event}', EventPageController::class)->name('events.page');
 // implicit binding. Registered before the `auth` group below so `/events/{key}.ics`
 // matches here instead of falling through to the JSON show route.
 Route::get('/events/{event}.ics', EventIcsController::class)->name('events.ics');
+
+// The collection as an RSS 2.0 feed. Same `.suffix` trick as the `.ics`
+// download above: one URL, one media type, public like the page because a
+// feed reader has no session.
+Route::get('/events.rss', EventRssController::class)->name('events.rss');
 
 // Discord is the only way in, so the route Laravel redirects guests to *is* the
 // Discord handoff. There is no login form to design because there is nothing to
