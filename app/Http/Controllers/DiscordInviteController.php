@@ -100,8 +100,12 @@ class DiscordInviteController
                 'configured' => is_string($configured) ? $configured : gettype($configured),
             ]);
         } catch (Throwable $e) {
+            // Class only, never the message: config reads have no member data
+            // in them today, and keeping the invariant costs nothing — the one
+            // day a message quotes something sensitive, the person reading the
+            // log at 3am will not be the one who notices.
             Log::error('Could not read services.discord.invite_url; serving the hardcoded fallback invite.', [
-                'exception' => $e->getMessage(),
+                'exception' => $e::class,
             ]);
         }
 
