@@ -1,5 +1,6 @@
 <?php
 
+use App\Services\Paperclip\ColdSetting;
 use App\Services\Paperclip\Exceptions\PaperclipNotConfiguredException;
 use App\Services\Paperclip\Exceptions\PaperclipTransportException;
 use App\Services\Paperclip\RestartCard;
@@ -16,7 +17,8 @@ const PAPERCLIP_URL = 'https://control.example.test';
 const PAPERCLIP_TOKEN = 'pk-test-token-at-least-32-characters-long';
 const PAPERCLIP_COMPANY = 'company-abc';
 const PAPERCLIP_LABEL = 'label-operator-uuid';
-const PAPERCLIP_ASSIGNEE = 'user-owner-uuid';
+const PAPERCLIP_PARENT = 'parent-issue-uuid';
+const PAPERCLIP_ASSIGNEE = 'agent-devops-uuid';
 const PAPERCLIP_ENDPOINT = 'https://control.example.test/api/companies/company-abc/issues';
 const IDEMPOTENCY_KEY = 'cold-setting:TWO_AUTOMOD:true:rev-7';
 
@@ -25,9 +27,11 @@ function restartClient(
     ?string $token = PAPERCLIP_TOKEN,
     ?string $companyId = PAPERCLIP_COMPANY,
     ?string $labelId = PAPERCLIP_LABEL,
+    ?string $parent = PAPERCLIP_PARENT,
     ?string $assignee = PAPERCLIP_ASSIGNEE,
+    ?string $environment = 'staging',
 ): RestartCardClient {
-    return new RestartCardClient($url, $token, $companyId, $labelId, $assignee, 5);
+    return new RestartCardClient($url, $token, $companyId, $labelId, $parent, $assignee, $environment, 5);
 }
 
 function sampleCard(): RestartCard
@@ -66,7 +70,7 @@ it('tolerates a trailing slash on the configured url', function () {
     Http::assertSent(fn (Request $r) => $r->url() === PAPERCLIP_ENDPOINT);
 });
 
-it('sends the card content plus the configured label, assignee and idempotency key', function () {
+it('sends the card as a child of the parent, assigned to the restart agent, never to a user', function () {
     Http::fake([PAPERCLIP_ENDPOINT => Http::response(createdIssue(), 201)]);
 
     $card = sampleCard();
@@ -74,9 +78,12 @@ it('sends the card content plus the configured label, assignee and idempotency k
 
     Http::assertSent(fn (Request $r) => $r['title'] === $card->title
         && $r['description'] === $card->body
+        && $r['parentId'] === PAPERCLIP_PARENT
         && $r['labelIds'] === [PAPERCLIP_LABEL]
-        && $r['assigneeUserId'] === PAPERCLIP_ASSIGNEE
-        && $r['idempotencyKey'] === IDEMPOTENCY_KEY);
+        && $r['assigneeAgentId'] === PAPERCLIP_ASSIGNEE
+        && $r['idempotencyKey'] === IDEMPOTENCY_KEY
+        // A task_bridge key is refused outright for a user assignee.
+        && ! array_key_exists('assigneeUserId', $r->data()));
 });
 
 it('returns the ids the control-plane assigned the card', function () {
@@ -111,8 +118,26 @@ it('refuses to send and names the variable when a config value is empty', functi
     'token' => fn () => ['PAPERCLIP_API_TOKEN', restartClient(token: '')],
     'company id' => fn () => ['PAPERCLIP_COMPANY_ID', restartClient(companyId: '')],
     'label id' => fn () => ['PAPERCLIP_OPERATOR_LABEL_ID', restartClient(labelId: '')],
-    'assignee' => fn () => ['PAPERCLIP_OPERATOR_ASSIGNEE_USER_ID', restartClient(assignee: '')],
+    'parent' => fn () => ['PAPERCLIP_PARENT_ISSUE_ID', restartClient(parent: '')],
+    'assignee' => fn () => ['PAPERCLIP_RESTART_ASSIGNEE_AGENT_ID', restartClient(assignee: '')],
+    'bot environment' => fn () => ['PAPERCLIP_RESTART_BOT_ENVIRONMENT', restartClient(environment: '')],
+    'unknown bot environment' => fn () => ['PAPERCLIP_RESTART_BOT_ENVIRONMENT', restartClient(environment: 'prod')],
 ]);
+
+it('builds the card for the configured bot environment', function (string $environment, string $uuid) {
+    $card = restartClient(environment: $environment)->cardFor(ColdSetting::TWO_AUTOMOD, 'false');
+
+    expect($card->title)->toContain("({$environment})")
+        ->and($card->body)->toContain("/applications/{$uuid}/restart");
+})->with([
+    'staging' => ['staging', 'uy4d9ndeygjcem6lgayhxgub'],
+    'production' => ['production', 'cangagerae31txrk2vfvzzyq'],
+]);
+
+it('refuses to build a card when the bot environment is not configured', function () {
+    expect(fn () => restartClient(environment: null)->cardFor(ColdSetting::TWO_AUTOMOD, 'true'))
+        ->toThrow(PaperclipNotConfiguredException::class);
+});
 
 it('treats an absent (null) config value the same as an empty one', function () {
     Http::fake();
@@ -207,7 +232,9 @@ it('resolves from the container against the paperclip config', function () {
     config()->set('services.paperclip.token', PAPERCLIP_TOKEN);
     config()->set('services.paperclip.company_id', 'configured-company');
     config()->set('services.paperclip.operator_label_id', 'configured-label');
-    config()->set('services.paperclip.operator_assignee_user_id', 'configured-user');
+    config()->set('services.paperclip.parent_issue_id', 'configured-parent');
+    config()->set('services.paperclip.restart_assignee_agent_id', 'configured-agent');
+    config()->set('services.paperclip.bot_environment', 'staging');
 
     $endpoint = 'https://configured.example.test/api/companies/configured-company/issues';
     Http::fake([$endpoint => Http::response(createdIssue(), 201)]);
@@ -216,5 +243,6 @@ it('resolves from the container against the paperclip config', function () {
 
     Http::assertSent(fn (Request $r) => $r->url() === $endpoint
         && $r['labelIds'] === ['configured-label']
-        && $r['assigneeUserId'] === 'configured-user');
+        && $r['parentId'] === 'configured-parent'
+        && $r['assigneeAgentId'] === 'configured-agent');
 });
