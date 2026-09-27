@@ -44,7 +44,11 @@
             </p>
 
         @elseif ($going)
-            <p class="flex items-center gap-1.5 text-sm text-ink" role="status" data-testid="rsvp-confirmed">
+            {{-- tabindex="-1": not in the tab order, but focusable so a successful
+                 RSVP can move keyboard focus here after the re-render replaces
+                 the button (TOG-6956). Focusing the role="status" node also
+                 announces the confirmation to screen readers. --}}
+            <p class="flex items-center gap-1.5 text-sm text-ink" role="status" tabindex="-1" data-testid="rsvp-confirmed">
                 {{-- The check, so the confirmation is not colour alone (COPY.md). --}}
                 <svg class="size-4 shrink-0 text-online" viewBox="0 0 16 16" fill="currentColor"
                      aria-hidden="true" data-testid="rsvp-check">
@@ -116,4 +120,29 @@
             </p>
         @endif
     @endauth
+
+    @script
+        {{-- TOG-6956: after a successful RSVP/withdraw the re-render swaps the
+             focused control for its replacement, dropping focus to <body>.
+             The component dispatches `rsvp-state-changed` to itself only on a
+             successful write, which fires after the morph, so the new state is
+             already in the DOM: focus the confirmation, falling back to the
+             restored "I'm in" button after a withdraw. `$wire.on` runs once
+             per component lifecycle, never on re-render, so this cannot stack. --}}
+        <script>
+            $wire.on('rsvp-state-changed', () => {
+                const root = $wire.el;
+                const confirmed = root.querySelector('[data-testid="rsvp-confirmed"]');
+                if (confirmed) {
+                    confirmed.focus({ preventScroll: true });
+                    return;
+                }
+
+                const going = root.querySelector('[data-testid="rsvp-going"]');
+                if (going) {
+                    going.focus({ preventScroll: true });
+                }
+            });
+        </script>
+    @endscript
 </div>
