@@ -56,20 +56,37 @@ test('a moderator signs out of the panel through the account widget and stays ou
             ->waitForText('TWO Moderation')
             ->waitForText('Sign out')
             ->waitForReload(fn (Browser $page) => $page->press('Sign out'))
-            // Signed out of a panel with no login page, the panel sends the
-            // browser back to /admin, which as a guest redirects into the
-            // Discord login. The Dusk OAuth stub auto-approves there, so the
-            // path alone cannot tell "signed out" from "never signed in" —
-            // the proof is who the app thinks the browser is. The stub's
-            // Discord identity is a plain member (`wren`, member role only),
-            // so a browser the panel still recognised as staff would fail
-            // both halves: the admin link would still render, and /admin
-            // would answer the dashboard instead of leaving it.
-            ->waitForText('Your profile')
+            // The panel has no login page, so Filament's LogoutResponse sends
+            // the browser back to /admin — which, as a guest, 302s into the
+            // site login, where the Dusk OAuth stub auto-approves and the
+            // callback's `intended` sends the browser right back to /admin.
+            // The stub's Discord identity is a plain member (`wren`, member
+            // role only), so the chain settles on the 403 page, not the
+            // dashboard: that is the proof the moderator session died. If the
+            // POST had never happened, the browser would still be staff and
+            // /admin would still answer the dashboard with 'TWO Moderation'.
+            //
+            // Waited for with waitUsing, not waitForText: the chain crosses
+            // four navigations and no single text marks the end of it. The
+            // condition is true only at the settled state — path back on
+            // /admin with the dashboard gone — so a broken sign-out times out
+            // here instead of passing vacuously. No-arg closure: Dusk's
+            // waitUsing calls it with no arguments (see the focus-indicator
+            // journey below for the same shape).
+            ->waitUsing(15, 250, function () use ($browser): bool {
+                $path = (string) parse_url((string) $browser->driver->getCurrentURL(), PHP_URL_PATH);
+
+                return $path === '/admin'
+                    && ! str_contains((string) $browser->driver->getPageSource(), 'TWO Moderation');
+            })
+            ->assertPathIs('/admin')
+            ->assertDontSee('TWO Moderation')
+            // And the browser is no longer the moderator: the profile page —
+            // reached as whoever the stub made of the chain — shows the stub
+            // member with no path back into the panel.
+            ->visit('/profile')
             ->assertSee('WREN')
-            ->assertMissing('[data-testid="admin-link"]')
-            ->visit('/admin')
-            ->assertPathIs('/auth/discord/redirect');
+            ->assertMissing('[data-testid="admin-link"]');
     });
 });
 
