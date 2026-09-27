@@ -78,11 +78,26 @@ it('renders nothing, not an error, when the bot database is unreachable', functi
     $cache = Mockery::mock(CacheRepository::class);
     $cache->shouldNotReceive('remember');
 
-    expect((new DiscordEventsReader($db, $cache))->upcoming())->toBe([]);
+    $reader = new DiscordEventsReader($db, $cache);
+
+    expect($reader->upcoming())->toBe([])
+        // The R9 empty-vs-failure branch (TOG-5318): `[]` alone cannot tell
+        // "no events" from "no answer", so the reader records which it was.
+        ->and($reader->lastReadFailed())->toBeTrue();
 
     Log::shouldHaveReceived('warning')
         ->once()
         ->with('Discord events unavailable; rendering the calendar without them.', [
             'exception' => RuntimeException::class,
         ]);
+});
+
+it('reports a clean read as not failed', function () {
+    $connection = Mockery::mock(Connection::class);
+    $connection->shouldReceive('select')->once()->andReturn([sundaySquadRow()]);
+
+    $reader = discordReader($connection);
+
+    expect($reader->upcoming())->toHaveCount(1)
+        ->and($reader->lastReadFailed())->toBeFalse();
 });

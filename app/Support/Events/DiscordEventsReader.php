@@ -50,6 +50,8 @@ final readonly class DiscordEventsReader implements DiscordEventsSource
         private CacheRepository $cache,
     ) {}
 
+    private bool $failed = false;
+
     /**
      * @return list<Event> Transient models (`exists === false`): safe to render,
      *                     never to save or hand to the write-back.
@@ -57,7 +59,7 @@ final readonly class DiscordEventsReader implements DiscordEventsSource
     public function upcoming(): array
     {
         try {
-            return $this->cache->remember(self::UPCOMING_KEY, self::CACHE_SECONDS, function (): array {
+            $events = $this->cache->remember(self::UPCOMING_KEY, self::CACHE_SECONDS, function (): array {
                 $rows = $this->db->connection('bot')
                     ->select('select event_id, name, starts_at, channel_id, description from web_v1.upcoming_events order by starts_at');
 
@@ -66,6 +68,10 @@ final readonly class DiscordEventsReader implements DiscordEventsSource
                     $rows,
                 )));
             });
+
+            $this->failed = false;
+
+            return $events;
         } catch (Throwable $e) {
             // Never the exception message: a PDO failure can carry the DSN.
             // The class name says which kind of failure it was.
@@ -73,8 +79,18 @@ final readonly class DiscordEventsReader implements DiscordEventsSource
                 'exception' => $e::class,
             ]);
 
+            // Recorded, not rethrown: the component asks through
+            // `lastReadFailed()` whether this `[]` is "no events" or "no
+            // answer", which is the branch the error empty state hangs on.
+            $this->failed = true;
+
             return [];
         }
+    }
+
+    public function lastReadFailed(): bool
+    {
+        return $this->failed;
     }
 
     private function toEvent(object $row): ?Event

@@ -22,6 +22,13 @@ use Livewire\Livewire;
 beforeEach(function () {
     $this->moderator = User::factory()->create(['is_moderator' => true]);
     $this->member = User::factory()->create(['is_moderator' => false]);
+
+    // The Discord source is stubbed clean by default (no events, no failure)
+    // so no test touches the real bot connection: without this every render
+    // would attempt it, and an unreachable bot database would flip the page
+    // into the error empty state. Tests that need rows or a failure say so
+    // through `mockDiscordEvents`.
+    mockDiscordEvents([]);
 });
 
 /** An event that has not happened yet, published, so a guest can see it. */
@@ -102,32 +109,132 @@ it('says the next one is being planned when nothing has ever been scheduled', fu
 
 it('never renders the never-scheduled empty state as a broken or errored page', function () {
     // The brief's actual requirement, stated as the thing that must NOT happen.
+    // The Discord source is stubbed clean (no events, no failure) so the real
+    // bot connection is never touched and the error state cannot leak in.
+    mockDiscordEvents([]);
+
     $html = Livewire::test(EventsCalendar::class)->html();
 
     expect($html)
         ->not->toContain('role="alert"')
+        ->not->toContain('data-testid="events-empty-error"')
         ->not->toContain('Couldn\'t load the events.')
         // "Never the word empty, nothing, no results alone" — COMPONENTS.md §8.
         ->not->toContain('No results')
         ->not->toContain('No events found');
 });
 
+/* ---------------------------------------------------------------------------
+   Gap state (TOG-5318). No upcoming events, but there were some: the page
+   reads as "between game nights", with the recent history inline.
+   --------------------------------------------------------------------------- */
+
 it('admits that past events exist rather than showing a bare empty upcoming list', function () {
     pastEvent();
 
     Livewire::test(EventsCalendar::class)
-        ->assertSeeHtml('data-testid="events-empty-no-upcoming"')
-        ->assertSee('Nothing scheduled right now.')
-        ->assertSee('See past events')
+        ->assertSeeHtml('data-testid="events-empty-gap"')
+        ->assertSee('No upcoming events — check back soon.')
+        ->assertSee('Join the Discord')
         // The wrong empty state here is the whole point of this test.
         ->assertDontSeeHtml('data-testid="events-empty-never"');
 });
 
-it('tells the member how long ago the last one was', function () {
-    pastEvent(['ends_at' => now()->subDays(9), 'starts_at' => now()->subDays(9)->subHours(2)]);
+it('names the most recent past event with its date in the gap state', function () {
+    $event = pastEvent([
+        'title' => 'Last week s Valorant night',
+        'starts_at' => now()->subDays(9)->subHours(2),
+        'ends_at' => now()->subDays(9),
+    ]);
 
     Livewire::test(EventsCalendar::class)
-        ->assertSee('The last one was 1 week ago.');
+        ->assertSee('Last time:', escape: false)
+        ->assertSee('Last week s Valorant night')
+        ->assertSee($event->startsAtLocal()->format('D j M, H:i'), escape: false);
+});
+
+it('lists recent past events name-and-date in the gap state, newest first, capped at five', function () {
+    // Seven older rows plus the newest: 8 past rows, so an uncapped list
+    // would render 8 items inside the gap list. Each gap-list row carries
+    // `data-testid="events-empty-gap-item"`, counted directly.
+    Event::factory()->count(7)->create([
+        'title' => 'Older night',
+        'starts_at' => now()->subDays(30),
+        'ends_at' => now()->subDays(30)->addHours(2),
+        'status' => EventStatus::Published,
+    ]);
+    $latest = pastEvent(['title' => 'Most recent night']);
+
+    $html = Livewire::test(EventsCalendar::class)->html();
+
+    expect($html)->toContain('data-testid="events-empty-gap-list"')
+        ->and($html)->toContain('Most recent night')
+        ->and($html)->toContain($latest->startsAtLocal()->format('D j M, H:i'))
+        ->and(substr_count($html, 'data-testid="events-empty-gap-item"'))->toBe(5)
+        // Newest first: the most recent night opens the list.
+        ->and(strpos($html, 'Most recent night'))
+        ->toBeLessThan(strpos($html, 'Older night'));
+});
+
+it('keeps the List/Calendar toggle visible in the gap state', function () {
+    pastEvent();
+
+    Livewire::test(EventsCalendar::class)
+        ->assertSeeHtml('data-testid="events-view-list"')
+        ->assertSeeHtml('data-testid="events-view-calendar"')
+        ->call('setView', 'calendar')
+        ->assertSeeHtml('data-testid="events-empty-gap"')
+        ->assertSeeHtml('data-testid="events-calendar-grid"');
+});
+
+/* ---------------------------------------------------------------------------
+   Error state (TOG-5318). A failed read must render the error, never the
+   never-scheduled state — an unreadable calendar is not an empty one.
+   --------------------------------------------------------------------------- */
+
+it('renders the error state, never the never-scheduled one, when the Discord read fails', function () {
+    mockDiscordEvents([], failed: true);
+
+    Livewire::test(EventsCalendar::class)
+        ->assertSeeHtml('data-testid="events-empty-error"')
+        ->assertSee("We couldn't load the calendar.")
+        ->assertSee('The Discord always has the latest — come ask there.')
+        ->assertSee('Retry')
+        ->assertSee('Join the Discord')
+        ->assertDontSeeHtml('data-testid="events-empty-never"')
+        ->assertDontSeeHtml('data-testid="events-empty-gap"');
+});
+
+it('keeps the List/Calendar toggle visible in the error state', function () {
+    mockDiscordEvents([], failed: true);
+
+    Livewire::test(EventsCalendar::class)
+        ->assertSeeHtml('data-testid="events-view-list"')
+        ->assertSeeHtml('data-testid="events-view-calendar"')
+        ->call('setView', 'calendar')
+        ->assertSeeHtml('data-testid="events-empty-error"');
+});
+
+it('retries the read when asked, showing the calendar if the bot is back', function () {
+    $source = Mockery::mock(App\Support\Events\DiscordEventsSource::class);
+    $source->shouldReceive('upcoming')->andReturn([], [sundaySquadEvent()]);
+    $source->shouldReceive('lastReadFailed')->andReturn(true, false);
+    app()->instance(App\Support\Events\DiscordEventsSource::class, $source);
+
+    Livewire::test(EventsCalendar::class)
+        ->assertSeeHtml('data-testid="events-empty-error"')
+        ->call('retryLoad')
+        ->assertSee('Sunday Squad')
+        ->assertDontSeeHtml('data-testid="events-empty-error"');
+});
+
+it('hides a failed Discord read behind visible events rather than erroring the page', function () {
+    upcomingEvent();
+    mockDiscordEvents([], failed: true);
+
+    Livewire::test(EventsCalendar::class)
+        ->assertSee('Friday night Helldivers')
+        ->assertDontSeeHtml('data-testid="events-empty-error"');
 });
 
 it('shows the past events once they are asked for', function () {
@@ -336,10 +443,11 @@ function sundaySquadEvent(): Event
     return $event;
 }
 
-function mockDiscordEvents(array $events): void
+function mockDiscordEvents(array $events, bool $failed = false): void
 {
     $source = Mockery::mock(App\Support\Events\DiscordEventsSource::class);
     $source->shouldReceive('upcoming')->andReturn($events);
+    $source->shouldReceive('lastReadFailed')->andReturn($failed);
     app()->instance(App\Support\Events\DiscordEventsSource::class, $source);
 }
 
@@ -384,13 +492,17 @@ it('orders Discord rows with local rows by start time', function () {
         ->and(strpos($html, 'Friday night Helldivers'))->toBeLessThan(strpos($html, 'Sunday Squad'));
 });
 
-it('degrades to the local calendar when the bot database is unreachable', function () {
+it('renders the error state, not the never-scheduled one, when the bot database is unreachable', function () {
+    // TOG-5318 supersedes the old degrade-to-empty contract: a failed read is
+    // the error empty state, never E1.
     $source = Mockery::mock(App\Support\Events\DiscordEventsSource::class);
     $source->shouldReceive('upcoming')->andReturn([]);
+    $source->shouldReceive('lastReadFailed')->andReturn(true);
     app()->instance(App\Support\Events\DiscordEventsSource::class, $source);
 
     Livewire::test(EventsCalendar::class)
-        ->assertSeeHtml('data-testid="events-empty-never"')
+        ->assertSeeHtml('data-testid="events-empty-error"')
+        ->assertDontSeeHtml('data-testid="events-empty-never"')
         ->assertOk();
 });
 

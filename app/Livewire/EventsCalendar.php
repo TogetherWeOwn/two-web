@@ -65,6 +65,20 @@ class EventsCalendar extends Component
         $this->showingPast = true;
     }
 
+    /**
+     * The error empty state's Retry (TOG-5318): re-fires the read rather than
+     * re-rendering the failure. The outcome is decided fresh on the next
+     * render — a recovered bot database shows events, a still-dark one shows
+     * the error again — so there is nothing here to set beyond letting the
+     * component render again.
+     */
+    public function retryLoad(): void
+    {
+        // Intentionally empty: the Livewire round trip re-runs `render()`,
+        // which re-reads both sources. A method with a body would imply the
+        // retry needs local state; it does not.
+    }
+
     public function nextMonth(): void
     {
         $this->month = $this->monthStart()->addMonth()->format('Y-m');
@@ -85,10 +99,18 @@ class EventsCalendar extends Component
             'past' => $past,
             'weeks' => $this->weeks($upcoming->concat($past)),
             'monthLabel' => $this->monthStart()->format('F Y'),
-            // Which of the two empty states applies. They are different messages:
-            // one is "we are new", the other is "there was a last one".
-            'emptyState' => $upcoming->isEmpty() ? ($past->isEmpty() ? 'never' : 'no-upcoming') : null,
-            'lastEventAgo' => $past->first()?->endsAtLocal()->diffForHumans(),
+            // Which of the three empty states applies (TOG-5318). A failed
+            // Discord read must render the error state, never the
+            // never-scheduled one — an unreadable calendar is not an empty
+            // one. The flag only matters when nothing upcoming is shown: a
+            // failure beside visible events is invisible by design.
+            'emptyState' => $upcoming->isEmpty()
+                ? (app(DiscordEventsSource::class)->lastReadFailed() ? 'error' : ($past->isEmpty() ? 'never' : 'gap'))
+                : null,
+            // The gap state's "Last time:" line: the most recent past event.
+            // Past rows are newest first, so this is the head of the same
+            // collection the list below renders.
+            'lastPastEvent' => $past->first(),
         ]);
     }
 

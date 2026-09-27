@@ -36,8 +36,9 @@
     </header>
 
     {{-- ------------------------------------------------------------------
-         Empty states. Two of them, and they say different things. Neither
-         reads as a broken page: that is the requirement this card names.
+         Empty states. Three of them, and they say different things. The
+         never-scheduled and the gap states are invitations; the error state
+         is the only one that reads as broken, because it is.
          ------------------------------------------------------------------ --}}
     @if ($emptyState === 'never')
         <div class="u-hatch mt-8 rounded-lg border border-line p-8 text-center"
@@ -59,26 +60,67 @@
             </div>
         </div>
 
-    @elseif ($emptyState === 'no-upcoming')
+    @elseif ($emptyState === 'gap')
+        {{-- No upcoming events, but there were some: name the last one and show
+             the recent history inline, so the page reads as "between game
+             nights" rather than abandoned. --}}
         <div class="u-hatch mt-8 rounded-lg border border-line p-8 text-center"
-             data-testid="events-empty-no-upcoming">
-            <h2 class="text-lg font-semibold text-ink">Nothing scheduled right now.</h2>
+             data-testid="events-empty-gap">
+            <h2 class="text-lg font-semibold text-ink">No upcoming events — check back soon.</h2>
             <p class="mx-auto mt-1.5 max-w-prose text-sm text-ink-muted">
-                The last one was {{ $lastEventAgo }}. They usually go up about a week ahead.
+                Last time: {{ $lastPastEvent->title }} &middot; {{ $lastPastEvent->startsAtLocal()->format('D j M, H:i') }}.
             </p>
-            @unless ($showingPast)
-                <div class="mt-5">
-                    <button type="button"
-                            wire:click="showPast"
-                            data-testid="events-show-past"
-                            class="inline-flex items-center justify-center gap-2 min-h-11 px-5 rounded-md
-                                   bg-transparent text-ink border border-line-strong
-                                   hover:bg-raised hover:border-ink-muted active:bg-surface
-                                   transition-colors duration-fast ease-out-quick">
-                        See past events
-                    </button>
-                </div>
-            @endunless
+            <h3 class="mt-6 text-sm font-semibold text-ink">Past events</h3>
+            <ul class="mx-auto mt-2 flex max-w-prose flex-col gap-1.5 text-left" role="list"
+                data-testid="events-empty-gap-list">
+                @foreach ($past->take(5) as $event)
+                    <li data-testid="events-empty-gap-item"
+                        class="flex items-baseline justify-between gap-4 rounded-md border border-line bg-surface px-4 py-2">
+                        <span class="truncate text-sm text-ink">{{ $event->title }}</span>
+                        <span class="u-numeric shrink-0 text-xs text-ink-muted">{{ $event->startsAtLocal()->format('D j M, H:i') }}</span>
+                    </li>
+                @endforeach
+            </ul>
+            <div class="mt-5">
+                <a href="{{ route('discord') }}"
+                   data-testid="discord-join"
+                   class="inline-flex items-center justify-center gap-2 min-h-11 px-5 rounded-md
+                          bg-transparent text-ink border border-line-strong
+                          hover:bg-raised hover:border-ink-muted active:bg-surface
+                          transition-colors duration-fast ease-out-quick">
+                    Join the Discord
+                </a>
+            </div>
+        </div>
+
+    @elseif ($emptyState === 'error')
+        {{-- The read failed: say so, offer the retry, and point at the Discord
+             that always has the latest. This must never read as "no events". --}}
+        <div class="u-hatch mt-8 rounded-lg border border-line p-8 text-center"
+             data-testid="events-empty-error" role="alert">
+            <h2 class="text-lg font-semibold text-ink">We couldn't load the calendar.</h2>
+            <p class="mx-auto mt-1.5 max-w-prose text-sm text-ink-muted">
+                The Discord always has the latest — come ask there.
+            </p>
+            <div class="mt-5 flex items-center justify-center gap-3">
+                <button type="button"
+                        wire:click="retryLoad"
+                        data-testid="events-retry"
+                        class="inline-flex items-center justify-center gap-2 min-h-11 px-6 rounded-md
+                               bg-brand text-on-brand font-semibold
+                               hover:bg-brand-hover active:bg-brand-active
+                               transition-colors duration-fast ease-out-quick">
+                    Retry
+                </button>
+                <a href="{{ route('discord') }}"
+                   data-testid="discord-join"
+                   class="inline-flex items-center justify-center gap-2 min-h-11 px-5 rounded-md
+                          bg-transparent text-ink border border-line-strong
+                          hover:bg-raised hover:border-ink-muted active:bg-surface
+                          transition-colors duration-fast ease-out-quick">
+                    Join the Discord
+                </a>
+            </div>
         </div>
     @endif
 
