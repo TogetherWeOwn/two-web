@@ -5,6 +5,7 @@ namespace App\Http\Requests;
 use App\Models\Event;
 use App\Rules\IanaTimeZone;
 use App\Rules\NaiveWallTime;
+use App\Rules\RealWallTime;
 use App\Support\EventInput;
 use Illuminate\Support\Facades\Gate;
 
@@ -35,9 +36,12 @@ class StoreEventRequest extends AuthenticatedRequest
             // "8pm London" mean the same thing in July and in December.
             // NaiveWallTime: an embedded offset would silently win over
             // `timezone` (TOG-6804), so offset-bearing strings are a 422 here
-            // rather than a stored wrong instant.
-            'starts_at' => ['required', 'date', new NaiveWallTime],
-            'ends_at' => ['required', 'date', 'after:starts_at', new NaiveWallTime],
+            // rather than a stored wrong instant. RealWallTime: a wall time
+            // inside a spring-forward gap never occurred and resolves to the
+            // same instant as a different wall time (TOG-6803), so gap times
+            // are a 422 naming the gap rather than a stored wrong instant.
+            'starts_at' => ['required', 'date', new NaiveWallTime, new RealWallTime],
+            'ends_at' => ['required', 'date', 'after:starts_at', new NaiveWallTime, new RealWallTime],
             'timezone' => ['required', 'string', new IanaTimeZone],
 
             'location' => ['required', 'string', 'max:255'],

@@ -157,6 +157,148 @@ it('still accepts a naive wall time at the domain edge', function () {
         ->toBe('2026-07-15 19:00:00');
 });
 
+// TOG-6803: a wall time inside the spring-forward gap never occurred, and
+// Carbon resolves it to the same instant as a different, real wall time —
+// 01:30 and 02:30 Europe/London on 2026-03-29 both stored 01:30Z, so two
+// hosts typing different times got the same event with no error. The fix is
+// on the reject side: a gap time is a 422 naming the gap, never a silently
+// stored wrong instant. Clocks jump 01:00Z (01:00 GMT) to 03:00 BST, i.e. the
+// wall hour 01:00–01:59 never occurs; the rendered wall is 02:xx, so the
+// round-trip check catches exactly 01:xx and nothing else.
+
+it('rejects a create whose wall time never occurred in the spring-forward gap', function (string $startsAt) {
+    $host = User::factory()->create(['is_moderator' => true]);
+    $this->actingAs($host);
+
+    $response = $this->postJson(route('events.store'), [
+        'title' => 'Gap trap',
+        'starts_at' => $startsAt,
+        'ends_at' => '2026-03-29 03:30',
+        'timezone' => 'Europe/London',
+        'location' => 'Voice: General',
+    ]);
+
+    $response->assertStatus(422)->assertJsonValidationErrors('starts_at');
+
+    expect(Event::query()->count())->toBe(0);
+})->with([
+    'gap start' => '2026-03-29 01:00',
+    'gap middle (silent twin of the 201 below)' => '2026-03-29 01:30',
+    'gap end' => '2026-03-29 01:59',
+]);
+
+it('rejects an end time inside the spring-forward gap', function () {
+    $host = User::factory()->create(['is_moderator' => true]);
+    $this->actingAs($host);
+
+    $response = $this->postJson(route('events.store'), [
+        'title' => 'Gap end trap',
+        'starts_at' => '2026-03-29 00:30',
+        'ends_at' => '2026-03-29 01:30',
+        'timezone' => 'Europe/London',
+        'location' => 'Voice: General',
+    ]);
+
+    $response->assertStatus(422)->assertJsonValidationErrors('ends_at');
+
+    expect(Event::query()->count())->toBe(0);
+});
+
+it('names the gap in the rejection so the host can fix it', function () {
+    $host = User::factory()->create(['is_moderator' => true]);
+    $this->actingAs($host);
+
+    $response = $this->postJson(route('events.store'), [
+        'title' => 'Gap copy',
+        'starts_at' => '2026-03-29 01:30',
+        'ends_at' => '2026-03-29 03:30',
+        'timezone' => 'Europe/London',
+        'location' => 'Voice: General',
+    ]);
+
+    $response->assertStatus(422);
+
+    // json_encode escapes the slash (Europe\/London), so implode the raw
+    // messages rather than matching against the encoded envelope.
+    $message = implode(' ', (array) $response->json('errors.starts_at'));
+
+    expect($message)->toContain('never occurred')
+        ->and($message)->toContain('Europe/London');
+});
+
+it('accepts the same wall instant in a zone with no transition', function () {
+    $host = User::factory()->create(['is_moderator' => true]);
+    $this->actingAs($host);
+
+    $response = $this->postJson(route('events.store'), [
+        'title' => 'No DST here',
+        'starts_at' => '2026-03-29 01:30',
+        'ends_at' => '2026-03-29 03:30',
+        'timezone' => 'UTC',
+        'location' => 'Voice: General',
+    ]);
+
+    $response->assertStatus(201);
+
+    expect(Event::query()->firstOrFail()->starts_at->utc()->format('Y-m-d H:i:s'))
+        ->toBe('2026-03-29 01:30:00');
+});
+
+it('accepts the gap shoulders and the wall time that used to collide silently', function (string $startsAt, string $utc) {
+    $host = User::factory()->create(['is_moderator' => true]);
+    $this->actingAs($host);
+
+    $response = $this->postJson(route('events.store'), [
+        'title' => 'Gap shoulder',
+        'starts_at' => $startsAt,
+        'ends_at' => '2026-03-29 03:30',
+        'timezone' => 'Europe/London',
+        'location' => 'Voice: General',
+    ]);
+
+    $response->assertStatus(201);
+
+    expect(Event::query()->latest('id')->firstOrFail()->starts_at->utc()->format('Y-m-d H:i:s'))
+        ->toBe($utc);
+})->with([
+    'minute before the gap' => ['2026-03-29 00:59', '2026-03-29 00:59:00'],
+    'formerly silent twin (02:30, now stored distinctly)' => ['2026-03-29 02:30', '2026-03-29 01:30:00'],
+    'minute after the gap wall' => ['2026-03-29 03:00', '2026-03-29 02:00:00'],
+]);
+
+it('rejects an update whose wall time never occurred in the spring-forward gap', function () {
+    $host = User::factory()->create(['is_moderator' => true]);
+    $event = Event::factory()->create(['timezone' => 'Europe/London']);
+    $original = $event->starts_at->utc()->format('Y-m-d H:i:s');
+    $this->actingAs($host);
+
+    $response = $this->patchJson(route('events.update', $event), [
+        'title' => $event->title,
+        'starts_at' => '2026-03-29 01:30',
+        'ends_at' => '2026-03-29 03:30',
+        'timezone' => 'Europe/London',
+        'location' => $event->location ?? 'Voice: General',
+    ]);
+
+    $response->assertStatus(422)->assertJsonValidationErrors('starts_at');
+
+    expect($event->fresh()?->starts_at->utc()->format('Y-m-d H:i:s'))->toBe($original);
+});
+
+it('refuses a spring-gap wall time at the domain edge, not just in HTTP validation', function () {
+    // The Filament panel calls fromValidated() directly and never sees the
+    // RealWallTime rule, so EventInput::instant is the backstop for that path.
+    expect(fn () => EventInput::instant('2026-03-29 01:30', 'Europe/London'))
+        ->toThrow(InvalidArgumentException::class);
+});
+
+it('still accepts gap-shoulder and autumn-overlap wall times at the domain edge', function (string $local, string $utc) {
+    expect(EventInput::instant($local, 'Europe/London')->format('Y-m-d H:i:s'))->toBe($utc);
+})->with([
+    'gap shoulder' => ['2026-03-29 02:30', '2026-03-29 01:30:00'],
+    'autumn overlap' => ['2026-10-25 01:30', '2026-10-25 01:30:00'],
+]);
+
 it('keeps a real IANA identifier', function () {
     $host = User::factory()->create(['is_moderator' => true]);
     $this->actingAs($host);
