@@ -170,6 +170,23 @@ jobs:
       - name: PHP runtime config self-test
         run: ./ci/php-runtime-config-selftest.sh
 
+      # `.env.example` is the source of truth for the file layout; `docs/env.md`
+      # is the reference for what each key means. Before TOG-7282 nothing
+      # watched the gap between them, so a var landed in one file and stayed
+      # missing from the other until a fresh checkout or deploy broke on it.
+      # Fails in both directions: an undocumented example key, or a documented
+      # key that lives in neither the example nor the deliberate-absence
+      # allowlist. Under a second, no network.
+      - name: Env docs match .env.example
+        run: ./ci/check-env-docs.sh
+
+      # The check on the check. A drift script that always passes and one that
+      # works look identical from here, so this throws drift at it in both
+      # directions — plus the parser-failure shapes — and asserts it goes red
+      # for the stated reason. Same half second, still no network.
+      - name: Env docs check self-test
+        run: ./ci/check-env-docs-selftest.sh
+
       # The `budgets` verdict, which had no test until it shipped a defect. lhci
       # runs there under `continue-on-error: true`, so its exit code is discarded
       # and `ci/lh-annotate.mjs` is what actually turns the job red — the whole
