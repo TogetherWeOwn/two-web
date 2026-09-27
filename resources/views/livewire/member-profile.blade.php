@@ -79,9 +79,21 @@
             @endif
 
             @if ($editing)
-                <section class="rounded-lg border border-line bg-surface p-5 md:p-8" aria-labelledby="edit-profile-heading">
+                {{-- Focus contract (TOG-5634): opening the form moves focus to its
+                     heading — the trigger unmounts, so without this a keyboard user
+                     lands on <body> — and closing it returns focus to the button
+                     that reopens it. Alpine rides along with Livewire 3, no new
+                     dependency; $nextTick waits out the morph. --}}
+                <section class="rounded-lg border border-line bg-surface p-5 md:p-8" aria-labelledby="edit-profile-heading"
+                         x-data
+                         x-init="$nextTick(() => $el.querySelector('#edit-profile-heading').focus());
+                                 Livewire.hook('morphed', () => {
+                                     if (!document.querySelector('[data-testid=profile-edit-form]')) {
+                                         document.querySelector('[data-testid=profile-edit]')?.focus();
+                                     }
+                                 });">
                     <div class="max-w-2xl">
-                        <h2 id="edit-profile-heading" class="text-2xl font-semibold text-ink">Edit your profile</h2>
+                        <h2 id="edit-profile-heading" tabindex="-1" class="text-2xl font-semibold text-ink">Edit your profile</h2>
                         <p class="mt-2 text-base text-ink-muted">Your name, avatar, join date and rank come from Discord.</p>
 
                         @if ($errors->any() || $saveFailed)
