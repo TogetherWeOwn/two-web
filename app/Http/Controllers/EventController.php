@@ -62,7 +62,28 @@ class EventController
     {
         Gate::forUser($request->user())->authorize('view', $event);
 
-        return (new EventResource($event))->response();
+        // Gone, not missing: same rule as the shareable page (TOG-6781) — a
+        // cancelled `event_key` answers 410 so clients can tell "called off"
+        // apart from "never existed". The machine-readable reason mirrors the
+        // EventNotOpenException shape (`reason` + `event_key`).
+        if ($event->status === EventStatus::Cancelled) {
+            return response()->json([
+                'reason' => 'event_cancelled',
+                'message' => 'This event was cancelled.',
+                'event_key' => $event->event_key,
+                'status' => $event->status->value,
+            ], 410);
+        }
+
+        $response = (new EventResource($event))->response();
+
+        // Moderator-only preview: keep it out of the index. Published rows send
+        // no robots signal at all — see EventGoneTest.
+        if ($event->status === EventStatus::Draft) {
+            $response->header('X-Robots-Tag', 'noindex, nofollow');
+        }
+
+        return $response;
     }
 
     public function store(StoreEventRequest $request): JsonResponse
