@@ -226,7 +226,7 @@ class CheckDiscordModerators extends Command
      * Surrounding quotes are *not* a case this needs to catch, which was worth
      * measuring rather than assuming: `env()` runs values through phpdotenv,
      * which strips a matched pair of single or double quotes, so
-     * `DISCORD_MODERATOR_ROLE_IDS="508654771276873729"` resolves to the bare
+     * `DISCORD_MODERATOR_ROLE_IDS="100000000000000001"` resolves to the bare
      * snowflake and works. Whitespace is handled too — config/services.php trims
      * each entry. Verified on 2026-08-30 against both, not inferred.
      *
