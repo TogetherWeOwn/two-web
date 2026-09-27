@@ -46,12 +46,12 @@ permissions:
 
 jobs:
   owners-resolve:
-    runs-on: [self-hosted, two-selfhosted]
+    runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@v5
 
-      # Every job attests where it ran. See ci/attest-runner.sh (TOG-2847).
+      # Every job attests where it ran. See ci/attest-runner.sh (TOG-4025).
       - name: Attest the runner
         run: ./ci/attest-runner.sh
 

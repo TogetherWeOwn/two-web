@@ -30,15 +30,16 @@ jobs:
   # ---------------------------------------------------------------------------
   static:
     name: static
-    runs-on: [self-hosted, two-selfhosted]
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v5
 
       # Where did this job actually run? `runs-on:` asks; only the job can
-      # answer. Fails on a GitHub-hosted runner (which bills) and publishes its
-      # runner_name as an annotation. First, so a misrouted job burns seconds
-      # rather than a full suite. See ci/attest-runner.sh (TOG-2847).
+      # answer. Fails on a self-hosted runner — pull-request code must never
+      # execute on our own hardware — and publishes its runner_name as an
+      # annotation. First, so a misrouted job burns seconds rather than a full
+      # suite. See ci/attest-runner.sh (TOG-4025).
       - name: Attest the runner
         run: ./ci/attest-runner.sh
 
@@ -54,19 +55,21 @@ jobs:
       # And the attestation itself, which is the one check in this repository that
       # cannot be proved by the run it is part of: on a correctly-routed job it
       # passes, and so does a version that returns 0 unconditionally. This drives
-      # it through a synthetic hosted runner, a spoofed name and an unaudited host
-      # and pins the exit code and reason for each, then asserts every job in every
-      # workflow still carries the step. Under a second, no network.
+      # it through a synthetic self-hosted runner and pins the exit code and
+      # reason, then asserts every job in every workflow still carries the step.
+      # Under a second, no network.
       - name: Runner attestation self-test
         run: ./ci/attest-runner-selftest.sh
 
-      # The runners are persistent, which makes a leaked server a *cross-run*
-      # failure: the first post-merge `main` run after the migration failed on a
+      # A leaked server used to be a *cross-run* failure on the old persistent
+      # runners: the first post-merge `main` run after the migration failed on a
       # tree that was green on the pull request, because `budgets` had left an
       # `artisan serve` bound to a port it gets handed again on that same runner
-      # (TOG-2847). This pins the reclaim-and-teardown that fixes it, including
-      # that the budgets job still calls both halves. Binds two high ports on
-      # the runner for a moment; no network.
+      # (TOG-2847). Hosted runners are fresh VMs, so a leak dies with the job —
+      # but this still pins the reclaim-and-teardown, including that the budgets
+      # job calls both halves, so the jobs stay portable and a leak fails loudly
+      # rather than flaking. Binds two high ports on the runner for a moment;
+      # no network.
       - name: Port reclaim self-test
         run: ./ci/reclaim-ports-selftest.sh
 
@@ -269,7 +272,7 @@ jobs:
   # ---------------------------------------------------------------------------
   pest:
     name: pest
-    runs-on: [self-hosted, two-selfhosted]
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
 
     services:
@@ -279,8 +282,8 @@ jobs:
           POSTGRES_USER: two_web
           POSTGRES_PASSWORD: two_web
           POSTGRES_DB: two_web_test
-        # Let Docker choose a free host port. Five runners share one host, so a
-        # fixed 5432 binding makes parallel jobs race before their first step.
+        # Let Docker choose a free host port rather than binding 5432 fixed,
+        # so parallel jobs can never race for the same port.
         ports:
           - 5432
         options: >-
@@ -293,7 +296,7 @@ jobs:
       - uses: actions/checkout@v5
 
       # See the note in `static`. Every job attests; a job that does not could be
-      # moved onto a billable runner with nothing going red (TOG-2847).
+      # moved onto a self-hosted runner with nothing going red (TOG-4025).
       - name: Attest the runner
         run: ./ci/attest-runner.sh
 
@@ -348,7 +351,7 @@ jobs:
   # ---------------------------------------------------------------------------
   dusk:
     name: dusk
-    runs-on: [self-hosted, two-selfhosted]
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
 
     services:
@@ -358,8 +361,8 @@ jobs:
           POSTGRES_USER: two_web
           POSTGRES_PASSWORD: two_web
           POSTGRES_DB: two_web
-        # Let Docker choose a free host port. Five runners share one host, so a
-        # fixed 5432 binding makes parallel jobs race before their first step.
+        # Let Docker choose a free host port rather than binding 5432 fixed,
+        # so parallel jobs can never race for the same port.
         ports:
           - 5432
         options: >-
@@ -372,7 +375,7 @@ jobs:
       - uses: actions/checkout@v5
 
       # See the note in `static`. Every job attests; a job that does not could be
-      # moved onto a billable runner with nothing going red (TOG-2847).
+      # moved onto a self-hosted runner with nothing going red (TOG-4025).
       - name: Attest the runner
         run: ./ci/attest-runner.sh
 
@@ -402,15 +405,15 @@ jobs:
       - run: npm ci --include=dev
       - run: npm run build
 
-      # Five runner processes share one host network namespace. Derive stable
-      # per-runner ports so parallel Dusk/budgets jobs never bind the same socket.
+      # Derive stable per-runner ports so parallel Dusk/budgets jobs never bind
+      # the same socket.
       - name: Select runner-local ports
         run: ./ci/runner-ports.sh >> "$GITHUB_ENV"
 
-      # The private runner is deliberately lean. Install a browser per job instead
-      # of making an unversioned host package part of the runner contract. Ubuntu's
-      # chromium-browser package is a snap transitional package, and snap is not a
-      # reliable dependency inside an Actions job, so use Google's apt package.
+      # Install a browser per job instead of relying on whatever the runner
+      # image carries. Ubuntu's chromium-browser package is a snap
+      # transitional package, and snap is not a reliable dependency inside an
+      # Actions job, so use Google's apt package.
       - name: Install Chrome
         run: |
           curl -fsSLo "$RUNNER_TEMP/google-chrome.deb" \
@@ -541,7 +544,7 @@ jobs:
   # ---------------------------------------------------------------------------
   budgets:
     name: budgets
-    runs-on: [self-hosted, two-selfhosted]
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
 
     services:
@@ -551,8 +554,8 @@ jobs:
           POSTGRES_USER: two_web
           POSTGRES_PASSWORD: two_web
           POSTGRES_DB: two_web
-        # Let Docker choose a free host port. Five runners share one host, so a
-        # fixed 5432 binding makes parallel jobs race before their first step.
+        # Let Docker choose a free host port rather than binding 5432 fixed,
+        # so parallel jobs can never race for the same port.
         ports:
           - 5432
         options: >-
@@ -565,7 +568,7 @@ jobs:
       - uses: actions/checkout@v5
 
       # See the note in `static`. Every job attests; a job that does not could be
-      # moved onto a billable runner with nothing going red (TOG-2847).
+      # moved onto a self-hosted runner with nothing going red (TOG-4025).
       - name: Attest the runner
         run: ./ci/attest-runner.sh
 
@@ -585,19 +588,17 @@ jobs:
           tools: composer:v2
           ini-values: opcache.enable=1, opcache.enable_cli=1, opcache.validate_timestamps=0
 
-      # setup-php's ini-values above land in the SHARED system PHP ini. On the
-      # persistent self-hosted host up to five runner processes share that one
-      # PHP install (see the port note near the top of this file), and a
-      # concurrent pest/dusk/static job's setup-php — none of which ask for
-      # opcache — rewrites that same shared cli ini and resets enable_cli to its
-      # 0 default. The guard below then reads a fresh `php -i` off the clobbered
-      # ini and hard-fails budgets for a race, not a regression: on TOG-3224 the
+      # setup-php's ini-values above land in the system PHP ini. A concurrent
+      # job's setup-php — none of which ask for opcache — can rewrite that
+      # same shared cli ini and reset enable_cli to its 0 default, and the
+      # guard below then reads a fresh `php -i` off the clobbered ini and
+      # hard-fails budgets for a race, not a regression: on TOG-3224 the
       # identical main tree went red on 305bf47 and green on 33c17eb minutes
-      # apart. Re-pin the setting in a JOB-LOCAL scan dir the race cannot reach:
-      # $RUNNER_TEMP is private to this runner process, a leading ':' keeps the
-      # default conf.d (so setup-php's extensions still load), PHP scans our dir
-      # last so it wins, and the child `php -S` that `artisan serve` spawns
-      # inherits PHP_INI_SCAN_DIR from the env and reads it too.
+      # apart. Re-pin the setting in a JOB-LOCAL scan dir the race cannot
+      # reach: $RUNNER_TEMP is private to this job, a leading ':' keeps the
+      # default conf.d (so setup-php's extensions still load), PHP scans our
+      # dir last so it wins, and the child `php -S` that `artisan serve`
+      # spawns inherits PHP_INI_SCAN_DIR from the env and reads it too.
       - name: Pin opcache in a job-local ini scan dir (TOG-3224)
         run: |
           dir="$RUNNER_TEMP/php-budgets-conf.d"
@@ -624,8 +625,8 @@ jobs:
       - run: npm ci --include=dev
       - run: npm run build
 
-      # Five runner processes share one host network namespace. Derive stable
-      # per-runner ports so parallel Dusk/budgets jobs never bind the same socket.
+      # Derive stable per-runner ports so parallel Dusk/budgets jobs never bind
+      # the same socket.
       - name: Select runner-local ports
         run: ./ci/runner-ports.sh >> "$GITHUB_ENV"
 
@@ -655,10 +656,12 @@ jobs:
       # compressed truth is 2.74s. See the header of that file.
       - name: Start the application server
         run: |
-          # The runners are persistent and these ports are stable per runner, so
-          # a server an earlier run leaked is still bound and would answer the
-          # readiness probe below while the real server silently failed to bind.
-          # See ci/reclaim-ports.sh (TOG-2847).
+          # Reclaim the port block before binding: on the old persistent
+          # runners a server an earlier run leaked was still bound and would
+          # answer the readiness probe below while the real server silently
+          # failed to bind (TOG-2847). Hosted runners are fresh VMs, so this
+          # is normally a no-op — kept so the jobs stay portable and a leak
+          # fails loudly rather than flaking.
           ./ci/reclaim-ports.sh "$PROXY_UPSTREAM_PORT" "$PROXY_LISTEN_PORT"
 
           php artisan serve --host=127.0.0.1 --port="$PROXY_UPSTREAM_PORT" --no-reload > storage/logs/serve.log 2>&1 &
@@ -800,12 +803,12 @@ jobs:
           CHROME_BIN="$CHROME_BIN" node ci/browser/cta-breakpoints.mjs \
             --url "${CI_BASE_URL}/" --navigate --shots ci/cta-shots
 
-      # The runners are persistent, so a process this job leaks outlives it and
-      # breaks the *next* run on this host rather than this one — which is how
-      # the first post-merge `main` run failed while the identical tree was
-      # green on the pull request (TOG-2847). `dusk` has always stopped its
-      # services; this job never did, because on a throwaway VM it did not have
-      # to. `if: always()` so a red budget still cleans up after itself.
+      # A process this job leaks used to outlive it on the old persistent
+      # runners and break the *next* run on that host — which is how the first
+      # post-merge `main` run failed while the identical tree was green on the
+      # pull request (TOG-2847). Hosted runners are fresh VMs, so a leak dies
+      # with the job; the teardown stays anyway, so the jobs stay portable.
+      # `if: always()` so a red budget still cleans up after itself.
       - name: Stop the application server
         if: always()
         run: |
@@ -849,14 +852,14 @@ jobs:
   # ---------------------------------------------------------------------------
   tests:
     name: tests
-    runs-on: [self-hosted, two-selfhosted]
+    runs-on: ubuntu-24.04
     timeout-minutes: 5
     if: always()
     needs: [static, pest, dusk, budgets]
     steps:
       # This job had no checkout: it only reads `needs` results. It needs one now
-      # so it can attest its own runner — the aggregate bills like any other job,
-      # and being cheap is not the same as being free (TOG-2847).
+      # so it can attest its own runner — the aggregate runs on a runner like
+      # any other job, and must prove it is a hosted one (TOG-4025).
       - uses: actions/checkout@v5
 
       - name: Attest the runner
