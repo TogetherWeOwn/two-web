@@ -9,6 +9,10 @@ export default defineConfig({
                 'resources/css/app.css',
                 'resources/css/hallmark.css',
                 'resources/js/app.js',
+                // TOG-6926: copy-link on member profiles. Its own entry so the
+                // global bundle stays import-free (see AssetCompressionTest) and
+                // only profile pages download it.
+                'resources/js/profile-copy-link.js',
                 'resources/css/filament/admin/theme.css',
             ],
             refresh: true,

@@ -57,14 +57,33 @@
                         </div>
                     </div>
 
-                    @if ($isOwner && ! $editing)
+                    <div class="flex shrink-0 flex-col gap-2 sm:flex-row sm:items-center">
+                        {{--
+                            Copy-link (TOG-6926). Always the canonical member URL, even on
+                            /profile, so the copied link is the shareable one — the same
+                            rule as the share tags (TOG-6793). `data-copy-link` is the
+                            contract with resources/js/profile-copy-link.js, which listens
+                            at document level so a Livewire re-render cannot drop it.
+                        --}}
                         <button type="button"
-                                wire:click="edit"
-                                data-testid="profile-edit"
-                                class="inline-flex min-h-11 shrink-0 items-center justify-center gap-2 rounded-md border border-line-strong bg-transparent px-5 text-ink transition-colors duration-fast ease-out-quick hover:border-ink-muted hover:bg-raised active:bg-surface">
-                            Edit profile
+                                data-copy-link="{{ route('profiles.show', $member) }}"
+                                data-testid="profile-copy-link"
+                                class="inline-flex min-h-11 items-center justify-center gap-2 rounded-md border border-line-strong bg-transparent px-5 text-ink transition-colors duration-fast ease-out-quick hover:border-ink-muted hover:bg-raised active:bg-surface">
+                            <svg class="size-4 shrink-0" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" aria-hidden="true">
+                                <path d="M6.5 9.5a3 3 0 0 0 4.2 0l2-2a3 3 0 0 0-4.2-4.2l-1 1M9.5 6.5a3 3 0 0 0-4.2 0l-2 2a3 3 0 0 0 4.2 4.2l1-1"/>
+                            </svg>
+                            Copy link
                         </button>
-                    @endif
+
+                        @if ($isOwner && ! $editing)
+                            <button type="button"
+                                    wire:click="edit"
+                                    data-testid="profile-edit"
+                                    class="inline-flex min-h-11 items-center justify-center gap-2 rounded-md border border-line-strong bg-transparent px-5 text-ink transition-colors duration-fast ease-out-quick hover:border-ink-muted hover:bg-raised active:bg-surface">
+                                Edit profile
+                            </button>
+                        @endif
+                    </div>
                 </div>
             </header>
 

@@ -14,4 +14,9 @@
  *
  * If a page ever genuinely needs an HTTP client, use `fetch` — it is built in
  * and costs nothing — rather than restoring this dependency.
+ *
+ * Page-specific JavaScript does NOT live here. `AssetCompressionTest` pins this
+ * file import-free so the bundle stays tiny on every page; a page that needs
+ * behaviour gets its own Vite entry loaded only there (see profile-copy-link.js
+ * on the member profile, TOG-6926).
  */
