@@ -61,8 +61,8 @@ return Application::configure(basePath: dirname(__DIR__))
         // If that ever stops being true, name the proxy address here instead.
         $middleware->trustProxies(at: '*');
 
-        // Goes on the admin panel's stack, not on `web`. Every screen that reads
-        // member data must carry it — see docs/member-data-access-log.md.
+        // Goes on the admin panel and member-profile routes, not on `web`.
+        // Every member-data screen must carry it — see docs/member-data-access-log.md.
         $middleware->alias([
             'member-access-log' => RecordMemberDataAccess::class,
         ]);

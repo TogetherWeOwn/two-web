@@ -155,9 +155,12 @@ Route::middleware('auth')->group(function () {
     // The singular URL remains the post-login destination. Canonical member
     // profile URLs carry the user id so any signed-in member can share one with
     // another member without exposing the directory to logged-out visitors.
-    Route::get('/profile', [ProfileController::class, 'mine'])->name('profile');
-    Route::get('/members/{user}', [ProfileController::class, 'show'])->name('profiles.show');
-    Route::patch('/members/{user}', [ProfileController::class, 'update'])->name('profiles.update');
+    Route::get('/profile', [ProfileController::class, 'mine'])
+        ->middleware('member-access-log:member,view')->name('profile');
+    Route::get('/members/{user}', [ProfileController::class, 'show'])
+        ->middleware('member-access-log:member,view')->name('profiles.show');
+    Route::patch('/members/{user}', [ProfileController::class, 'update'])
+        ->middleware('member-access-log:member,update')->name('profiles.update');
 
     // Events. The wildcard binds on `event_key`, not the autoincrement id — see
     // Event::getRouteKeyName(). That is the same string the bot keys its Discord
