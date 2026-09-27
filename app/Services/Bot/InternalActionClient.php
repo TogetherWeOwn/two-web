@@ -223,6 +223,60 @@ final readonly class InternalActionClient
     }
 
     /**
+     * Cancel the Discord scheduled event for one `event_key`.
+     *
+     * A distinct action from `upsertEvent`, not a flag on it. The bot moves the
+     * event to CANCELED (Discord `status: 4`, never a delete) and only answers
+     * `event.cancel` that way — sending a cancelled event through
+     * `event.upsert` re-receives what looks like a live event, so the Discord
+     * mirror stays live after the cancel. That is TOG-5863.
+     *
+     * The bot keys on its own `event_key -> discord_event_id` map: unknown keys
+     * come back `action_not_allowed` without a Discord request, and the mapping
+     * is retained on success so a delayed upsert cannot resurrect the event. A
+     * replacement takes a new `event_key`.
+     *
+     * @param  string  $idempotencyKey  From newIdempotencyKey(), stored against
+     *                                  the operation and identical on every
+     *                                  attempt at it.
+     *
+     * @throws BotNotConfiguredException when there is no url, secret or key id
+     * @throws BotTransportException when the bot did not answer the contract
+     * @throws InvalidActionRequestException when the idempotency key is not a UUID
+     */
+    public function cancelEvent(EventCancel $event, string $idempotencyKey): EventCancelResult|InternalActionFailure
+    {
+        $answer = $this->send($event->toPayload(), $idempotencyKey);
+
+        if ($answer instanceof InternalActionFailure) {
+            return $answer;
+        }
+
+        [$body, $status, $replayed] = $answer;
+
+        $result = $this->resultObject($body, $status);
+
+        $outcome = EventCancelOutcome::tryFrom(is_string($result['outcome'] ?? null) ? $result['outcome'] : '');
+
+        if ($outcome === null) {
+            throw BotTransportException::unreadable('an event.cancel outcome this release does not know', $status);
+        }
+
+        // The event id is the proof the cancel landed on the mirror we meant:
+        // a success without one cannot be matched to anything.
+        if (! isset($result['event_id']) || ! is_scalar($result['event_id'])) {
+            throw BotTransportException::unreadable('an event.cancel success with no event_id', $status);
+        }
+
+        return new EventCancelResult(
+            requestId: $this->requestId($body),
+            outcome: $outcome,
+            discordEventId: (string) $result['event_id'],
+            replayed: $replayed,
+        );
+    }
+
+    /**
      * Create or update the Discord scheduled event for one `event_key`.
      *
      * @param  string  $idempotencyKey  From newIdempotencyKey(), stored against
