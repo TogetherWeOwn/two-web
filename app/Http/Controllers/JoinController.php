@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers;
 
+use App\Enums\JoinOutcome;
 use App\Models\User;
 use App\Services\Bot\Exceptions\BotException;
 use App\Services\Bot\InternalActionClient;
@@ -14,6 +15,7 @@ use Laravel\Socialite\Facades\Socialite;
 use Laravel\Socialite\Two\AbstractProvider;
 use Laravel\Socialite\Two\User as DiscordUser;
 use RuntimeException;
+use Symfony\Component\HttpFoundation\Response as SymfonyResponse;
 use Throwable;
 
 /** The one-click web-to-Discord join journey. */
@@ -42,7 +44,7 @@ final class JoinController
             ->redirect();
     }
 
-    public function callback(Request $request): RedirectResponse|View
+    public function callback(Request $request): RedirectResponse|SymfonyResponse
     {
         if ($request->filled('error')) {
             // They pressed Cancel on the Discord consent screen
@@ -56,7 +58,7 @@ final class JoinController
             // third-party string and not ours to echo.
             $denied = $request->query('error') === 'access_denied';
 
-            return view('oauth.recovery', [
+            return response()->view('oauth.recovery', [
                 'title' => __('join.recovery_title'),
                 'message' => $denied ? __('join.recovery_denied') : __('join.recovery_error'),
                 'retryUrl' => route('join.redirect'),
@@ -69,15 +71,34 @@ final class JoinController
                 ->redirectUrl($this->callbackUrl())
                 ->user();
         } catch (Throwable $exception) {
+            // Discord did not answer the token exchange: down, slow, or a
+            // stale/replayed code. The member did nothing wrong, so this is
+            // the same recovery page as the deny path — one button to try
+            // again — at 503 because the failure is on Discord's side and a
+            // proxy or client may want to know this is worth retrying.
+            //
+            // Never log the message: it can quote the request the exchange
+            // failed on. Class name only, plus the outcome for the funnel.
             Log::warning('Discord token exchange failed on the join journey.', [
                 'exception' => $exception::class,
+                'source' => $request->session()->pull('join_source'),
+                'outcome' => JoinOutcome::Error->value,
             ]);
 
-            return $this->done('expired');
+            return $this->discordDown();
         }
 
         if (! $discordUser instanceof DiscordUser) {
-            throw new RuntimeException('The Discord driver returned an unexpected user object.');
+            // The driver answered but not with a Discord user — a miswired
+            // driver or a payload this release cannot read. Same page as a
+            // Discord outage: the member cannot act on the difference.
+            Log::warning('Discord driver returned an unexpected user object on the join journey.', [
+                'exception' => get_debug_type($discordUser),
+                'source' => $request->session()->pull('join_source'),
+                'outcome' => JoinOutcome::Error->value,
+            ]);
+
+            return $this->discordDown();
         }
 
         try {
@@ -177,5 +198,20 @@ final class JoinController
     private function done(string $result): RedirectResponse
     {
         return redirect()->route('join')->with('join_result', $result);
+    }
+
+    /**
+     * Discord did not hold up its end of the exchange. A page, not a flash
+     * banner like the bot-down `unavailable` path, because the member just
+     * came back from Discord and a redirect would read as a second failure.
+     */
+    private function discordDown(): SymfonyResponse
+    {
+        return response()->view('oauth.recovery', [
+            'title' => __('join.recovery_discord_down_title'),
+            'message' => __('join.recovery_discord_down'),
+            'retryUrl' => route('join.redirect'),
+            'retryLabel' => __('join.recovery_retry'),
+        ], 503);
     }
 }
