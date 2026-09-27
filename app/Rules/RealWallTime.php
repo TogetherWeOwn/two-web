@@ -34,6 +34,7 @@ class RealWallTime implements DataAwareRule, ValidationRule
     /** @var array<string, mixed> */
     protected array $data = [];
 
+    /** @param array<string, mixed> $data */
     public function setData($data)
     {
         $this->data = $data;
