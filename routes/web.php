@@ -171,6 +171,16 @@ Route::middleware('auth')->group(function () {
 
     // One answer per member per event, so the RSVP is a singular sub-resource:
     // there is no collection to list and no id to hand back.
-    Route::put('/events/{event}/rsvp', [RsvpController::class, 'update'])->name('events.rsvp.update');
-    Route::delete('/events/{event}/rsvp', [RsvpController::class, 'destroy'])->name('events.rsvp.destroy');
+    //
+    // TOG-7301: a route-level throttle in front of RsvpRateLimit's
+    // in-controller per-member limiter. Same 12/min budget so the two agree;
+    // the middleware refuses a hammering run before validation, policy and
+    // the database run, keyed per member like the controller limiter. Both
+    // verbs share the one bucket, so switching PUT/DELETE cannot multiply it.
+    Route::put('/events/{event}/rsvp', [RsvpController::class, 'update'])
+        ->middleware('throttle:12,1')
+        ->name('events.rsvp.update');
+    Route::delete('/events/{event}/rsvp', [RsvpController::class, 'destroy'])
+        ->middleware('throttle:12,1')
+        ->name('events.rsvp.destroy');
 });
