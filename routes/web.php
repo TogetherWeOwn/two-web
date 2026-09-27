@@ -44,6 +44,16 @@ Route::get('/sitemap_index.xml', function () {
         ->header('Content-Type', 'application/xml; charset=UTF-8');
 })->name('sitemap');
 
+// robots.txt is dynamic, not a static file in public/: the Sitemap line must
+// name this environment's APP_URL host (TOG-7071 — staging advertised the apex
+// host because public/robots.txt hardcoded it and nginx served it verbatim).
+// route('sitemap') carries the app host, so each environment advertises itself.
+Route::get('/robots.txt', function () {
+    $body = "User-agent: *\nDisallow:\nSitemap: ".route('sitemap')."\n";
+
+    return response($body)->header('Content-Type', 'text/plain; charset=UTF-8');
+})->name('robots');
+
 // Static about page. Dependency-free leaf (TOG-5310): no controller, no
 // database, no Livewire — Route::view only, so it renders even when the bot's
 // database is down.
