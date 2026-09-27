@@ -3,6 +3,7 @@
 namespace Tests;
 
 use Illuminate\Foundation\Testing\TestCase as BaseTestCase;
+use Illuminate\Http\Request;
 
 abstract class TestCase extends BaseTestCase
 {
@@ -28,6 +29,8 @@ abstract class TestCase extends BaseTestCase
      *     assumption this method rests on.
      *   - an entrypoint that does not exist is caught with no build at all by
      *     tests/Unit/ViteEntrypointsTest.php.
+     *   - a missing or broken build fails `dusk` and `budgets`, which both build
+     *     for real and render the layout in real Chrome.
      *
      * Dusk does not come through here — DuskTestCase extends Laravel\Dusk\TestCase
      * — so the browser suite still gets the real, built assets.
@@ -37,5 +40,17 @@ abstract class TestCase extends BaseTestCase
         parent::setUp();
 
         $this->withoutVite();
+    }
+
+    protected function tearDown(): void
+    {
+        try {
+            parent::tearDown();
+        } finally {
+            // Production-mode tests populate Symfony's static host allowlist.
+            // Laravel resets TrustHosts config, but not this request state;
+            // otherwise a later testing-mode request inherits the old hosts.
+            Request::setTrustedHosts([]);
+        }
     }
 }

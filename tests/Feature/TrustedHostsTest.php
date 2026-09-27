@@ -1,6 +1,5 @@
 <?php
 
-use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Route;
 
 beforeEach(function () {
@@ -9,10 +8,6 @@ beforeEach(function () {
     $this->app['env'] = 'production';
     config()->set('app.url', 'https://community.example.test');
     config()->set('app.debug', false);
-});
-
-afterEach(function () {
-    Request::setTrustedHosts([]);
 });
 
 it('rejects forged hosts before rendering canonical URLs or issuing redirects', function (string $path, array $headers) {
