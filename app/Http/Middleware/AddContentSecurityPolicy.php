@@ -45,8 +45,11 @@ use Symfony\Component\HttpFoundation\Response;
  * `frame-ancestors 'none'` mirrors the `X-Frame-Options: DENY` nginx already
  * sends (nothing frames this site); `form-action 'self'` keeps the logout and
  * profile forms same-origin (Discord OAuth leaves via 302 redirects, not form
- * posts, so it is unaffected); `upgrade-insecure-requests` is a no-op on the
- * local http origin and hardens staging/production subresources.
+ * posts, so it is unaffected). `upgrade-insecure-requests` is emitted on https
+ * requests only: on an http origin it is NOT a no-op — it upgrades the page
+ * while the form still targets the http origin, and `form-action 'self'` then
+ * blocks the POST (Dusk caught this on the admin logout, TOG-7095). HSTS
+ * already forces https on staging/production, so nothing is lost there.
  *
  * Registered on the `web` group and on the Filament admin stack (which does
  * not use `web`), so every HTML page in both stacks carries it. Anything that
@@ -69,12 +72,12 @@ class AddContentSecurityPolicy
             return $response;
         }
 
-        $response->headers->set('Content-Security-Policy', $this->policy());
+        $response->headers->set('Content-Security-Policy', $this->policy($request));
 
         return $response;
     }
 
-    private function policy(): string
+    private function policy(Request $request): string
     {
         $script = ["'self'", "'unsafe-inline'", "'unsafe-eval'"];
         $connect = ["'self'"];
@@ -95,7 +98,7 @@ class AddContentSecurityPolicy
             $connect[] = 'ws://[::1]:5173';
         }
 
-        return implode('; ', [
+        $directives = [
             "default-src 'self'",
             'script-src '.implode(' ', $script),
             "style-src 'self' 'unsafe-inline'",
@@ -106,7 +109,17 @@ class AddContentSecurityPolicy
             "frame-ancestors 'none'",
             "base-uri 'self'",
             "object-src 'none'",
-            'upgrade-insecure-requests',
-        ]);
+        ];
+
+        // https only (see the class docblock): on an http origin this
+        // directive upgrades the page while forms still target http, and
+        // `form-action 'self'` then blocks the POST. `$request->isSecure()`
+        // honours the trusted-proxy `X-Forwarded-Proto` nginx sets, so this
+        // fires on staging/production where TLS terminates at the proxy.
+        if ($request->isSecure()) {
+            $directives[] = 'upgrade-insecure-requests';
+        }
+
+        return implode('; ', $directives);
     }
 }

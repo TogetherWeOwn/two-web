@@ -38,10 +38,17 @@ function cspDirectives(string $header): array
     return $directives;
 }
 
-/** The strict production policy this suite pins. */
-function strictCsp(): string
+/**
+ * The strict policy this suite pins. It is scheme-dependent by design
+ * (TOG-7095): `upgrade-insecure-requests` is emitted on https requests only,
+ * because on an http origin it upgrades the page while forms still target
+ * http and `form-action 'self'` then blocks the POST — Dusk caught this on
+ * the admin logout. Feature tests run over http, so the default expectation
+ * carries no upgrade directive; pass `true` for the https variant.
+ */
+function strictCsp(bool $secure = false): string
 {
-    return "default-src 'self'; "
+    $policy = "default-src 'self'; "
         ."script-src 'self' 'unsafe-inline' 'unsafe-eval'; "
         ."style-src 'self' 'unsafe-inline'; "
         ."img-src 'self' data: https:; "
@@ -50,8 +57,9 @@ function strictCsp(): string
         ."form-action 'self'; "
         ."frame-ancestors 'none'; "
         ."base-uri 'self'; "
-        ."object-src 'none'; "
-        .'upgrade-insecure-requests';
+        ."object-src 'none'";
+
+    return $secure ? $policy.'; upgrade-insecure-requests' : $policy;
 }
 
 it('serves the strict CSP on the guest homepage', function () {
@@ -118,12 +126,16 @@ it('does not put a CSP on non-HTML responses', function () {
     $member = User::factory()->create(['is_moderator' => false]);
 
     // A JSON collection carrying a document policy protects nothing and only
-    // confuses caches; a redirect carries no body at all.
+    // confuses caches; a redirect carries no body at all. The HTML funnel
+    // path (`/about`) is pinned separately in AboutPageTest, which owns the
+    // funnel-served document — this test owns the negative.
     $this->actingAs($member)->getJson(route('events.json'))
         ->assertOk()
         ->assertHeaderMissing('Content-Security-Policy');
 
-    $this->get('/discord')->assertHeaderMissing('Content-Security-Policy');
+    $this->get('/discord')
+        ->assertRedirect()
+        ->assertHeaderMissing('Content-Security-Policy');
 });
 
 it('serves the CSP on the admin panel too', function () {
@@ -132,4 +144,23 @@ it('serves the CSP on the admin panel too', function () {
     $this->actingAs($moderator)->get('/admin')
         ->assertOk()
         ->assertHeader('Content-Security-Policy', strictCsp());
+});
+
+it('emits upgrade-insecure-requests on https and omits it on http', function () {
+    // The Dusk regression this pins (TOG-7095): on an http origin the
+    // directive upgrades the page while the logout form still targets http,
+    // and `form-action 'self'` blocks the POST — so http responses must not
+    // carry it. Staging terminates TLS at nginx, so PHP sees an http request
+    // and the forwarded proto is the only way `isSecure()` can know — same
+    // posture as RobotsTxtTest.
+    $this->get('/')
+        ->assertOk()
+        ->assertHeader('Content-Security-Policy', strictCsp());
+
+    $header = $this
+        ->get('http://staging.togetherweown.com/', ['X-Forwarded-Proto' => 'https'])
+        ->assertOk()
+        ->headers->get('Content-Security-Policy');
+
+    expect($header)->toBe(strictCsp(secure: true));
 });
