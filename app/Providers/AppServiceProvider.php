@@ -136,7 +136,7 @@ class AppServiceProvider extends ServiceProvider
         // Discord roles on every login — see DiscordLoginController — so removing
         // somebody's moderator role in Discord removes it here at their next
         // sign-in. There is no way to grant it from inside the website.
-        Gate::define('access-admin', fn (User $user): bool => $user->is_moderator);
+        Gate::define('access-admin', fn (User $user): bool => $user->is_moderator === true);
 
         // Reading member data through the admin panel gets recorded, and the
         // recording hangs off model hydration rather than off each screen
