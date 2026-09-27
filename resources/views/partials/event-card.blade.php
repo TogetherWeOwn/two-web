@@ -11,6 +11,13 @@
     already has a `$past` holding the *collection* of past events. A collection is
     truthy, so `$past ?? false` silently resolved to it and every card in the
     upcoming list rendered with no RSVP button at all.
+
+    A Discord-native row (TOG-5168) is a transient the reader built from the
+    bot's `web_v1.upcoming_events`: no local answers exist, so `going_count`
+    is null and the card omits the badge rather than publishing "0 going";
+    and there is no local row to answer on, so the RSVP control is replaced by
+    the Discord invite. `$event->exists` is the discriminator — it is false
+    only for those transients, never for a persisted row.
 --}}
 @php($isPast = $isPast ?? false)
 <article id="event-{{ $event->event_key }}"
@@ -43,16 +50,20 @@
                 </span>
             @endif
 
-            {{-- The count, in tabular figures so it does not jitter as it ticks. --}}
-            <span class="u-numeric inline-flex items-center gap-1.5 rounded-sm px-2 py-0.5 text-xs font-medium
-                         bg-raised text-ink-muted border border-line"
-                  data-testid="event-going-count">
-                @if ($event->capacity !== null)
-                    {{ $event->going_count }} of {{ $event->capacity }} going
-                @else
-                    {{ $event->going_count }} going
-                @endif
-            </span>
+            {{-- The count, in tabular figures so it does not jitter as it ticks.
+                 Omitted when unknown: a Discord-native row has no local answers,
+                 and "0 going" would be a number we do not know. --}}
+            @if ($event->going_count !== null)
+                <span class="u-numeric inline-flex items-center gap-1.5 rounded-sm px-2 py-0.5 text-xs font-medium
+                             bg-raised text-ink-muted border border-line"
+                      data-testid="event-going-count">
+                    @if ($event->capacity !== null)
+                        {{ $event->going_count }} of {{ $event->capacity }} going
+                    @else
+                        {{ $event->going_count }} going
+                    @endif
+                </span>
+            @endif
         </div>
     </div>
 
@@ -78,7 +89,21 @@
 
     @unless ($isPast)
         <div class="mt-4">
-            @livewire('rsvp-button', ['event' => $event], key($event->event_key))
+            @if ($event->exists)
+                @livewire('rsvp-button', ['event' => $event], key($event->event_key))
+            @else
+                {{-- A Discord-native row has no local answers to record — the
+                     answer happens in Discord, so the card links there instead
+                     of rendering a control that cannot work. --}}
+                <a href="{{ route('discord') }}"
+                   data-testid="event-discord-rsvp"
+                   class="inline-flex items-center justify-center gap-2 min-h-11 px-5 rounded-md
+                          bg-transparent text-ink border border-line-strong
+                          hover:bg-raised hover:border-ink-muted active:bg-surface
+                          transition-colors duration-fast ease-out-quick">
+                    RSVP in Discord
+                </a>
+            @endif
         </div>
     @endunless
 </article>

@@ -8,6 +8,8 @@ use App\Services\Bot\InternalActionClient;
 use App\Services\Paperclip\RestartCardClient;
 use App\Support\Counts\CountsReader;
 use App\Support\Counts\CountsSource;
+use App\Support\Events\DiscordEventsReader;
+use App\Support\Events\DiscordEventsSource;
 use App\Support\MemberDataAccess\AccessRecorder;
 use App\Support\Profiles\MemberStatsReader;
 use App\Support\Profiles\MemberStatsSource;
@@ -41,6 +43,13 @@ class AppServiceProvider extends ServiceProvider
         // only this non-throwing contract, so an unavailable bot database cannot
         // take the member-owned half of the profile down with it.
         $this->app->bind(MemberStatsSource::class, MemberStatsReader::class);
+
+        // The calendar's Discord-native rows (TOG-5168): one cached read of
+        // `web_v1.upcoming_events`, merged into the local rows by the
+        // component. Bound, not shared, for the same reason as the counts
+        // reader — the cache inside already deduplicates, and a singleton
+        // would only keep a stale bot connection alive on a worker.
+        $this->app->bind(DiscordEventsSource::class, DiscordEventsReader::class);
 
         // Bound rather than shared: it reads config at resolve time and holds no
         // state between calls, so a singleton would only buy the chance of a

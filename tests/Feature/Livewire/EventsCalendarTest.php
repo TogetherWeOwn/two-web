@@ -6,6 +6,7 @@ use App\Livewire\EventsCalendar;
 use App\Models\Event;
 use App\Models\Rsvp;
 use App\Models\User;
+use App\Support\Events\DiscordEventsSource;
 use Livewire\Livewire;
 
 /**
@@ -454,4 +455,96 @@ it('does not run a query per event card', function () {
 
     // Twelve cards. A per-card count would put this well past twenty.
     expect($queries)->toBeLessThan(12);
+});
+
+/* ---------------------------------------------------------------------------
+   Discord-native rows (TOG-5168). The guild's recurring event lives in the
+   bot's database, not in ours — these pin that the page shows it anyway.
+   --------------------------------------------------------------------------- */
+
+function sundaySquadEvent(): Event
+{
+    $event = new Event([
+        'title' => 'Sunday Squad',
+        'description' => 'Fall Guys for about an hour.',
+        'starts_at' => now()->addDays(4),
+        'ends_at' => now()->addDays(4)->addHour(),
+        'timezone' => 'UTC',
+        'location' => 'Discord',
+        'capacity' => null,
+        'status' => EventStatus::Published,
+        'discord_event_id' => '1545955994972987422',
+    ]);
+    $event->setAttribute('event_key', 'discord:1545955994972987422');
+    $event->setAttribute('going_count', null);
+    $event->exists = false;
+
+    return $event;
+}
+
+function mockDiscordEvents(array $events): void
+{
+    $source = Mockery::mock(DiscordEventsSource::class);
+    $source->shouldReceive('upcoming')->andReturn($events);
+    app()->instance(DiscordEventsSource::class, $source);
+}
+
+it('lists the guild Sunday Squad event even when our own table is empty', function () {
+    mockDiscordEvents([sundaySquadEvent()]);
+
+    Livewire::test(EventsCalendar::class)
+        ->assertSee('Sunday Squad')
+        ->assertSeeHtml('data-testid="event-card"')
+        ->assertSeeHtml('data-event-key="discord:1545955994972987422"')
+        // The empty state must not render alongside a live event.
+        ->assertDontSeeHtml('data-testid="events-empty-never"');
+});
+
+it('renders the Sunday Squad start in the same visitor format as local cards', function () {
+    $event = sundaySquadEvent();
+    mockDiscordEvents([$event]);
+
+    Livewire::test(EventsCalendar::class)
+        ->assertSee($event->startsAtLocal()->format('D j M, H:i'), escape: false)
+        ->assertSeeHtml('datetime="'.$event->starts_at->toIso8601String().'"');
+});
+
+it('points the Sunday Squad card at Discord instead of a broken RSVP', function () {
+    mockDiscordEvents([sundaySquadEvent()]);
+
+    Livewire::actingAs($this->member)
+        ->test(EventsCalendar::class)
+        ->assertSeeHtml('data-testid="event-discord-rsvp"')
+        ->assertSee('RSVP in Discord')
+        // The going count is unknown, not zero — no badge, not "0 going".
+        ->assertDontSeeHtml('data-testid="event-going-count"');
+});
+
+it('orders Discord rows with local rows by start time', function () {
+    upcomingEvent(['title' => 'Friday night Helldivers', 'starts_at' => now()->addDays(1), 'ends_at' => now()->addDays(1)->addHours(2)]);
+    mockDiscordEvents([sundaySquadEvent()]);
+
+    $html = Livewire::test(EventsCalendar::class)->html();
+
+    expect($html)->toContain('Friday night Helldivers')
+        ->and(strpos($html, 'Friday night Helldivers'))->toBeLessThan(strpos($html, 'Sunday Squad'));
+});
+
+it('degrades to the local calendar when the bot database is unreachable', function () {
+    $source = Mockery::mock(DiscordEventsSource::class);
+    $source->shouldReceive('upcoming')->andReturn([]);
+    app()->instance(DiscordEventsSource::class, $source);
+
+    Livewire::test(EventsCalendar::class)
+        ->assertSeeHtml('data-testid="events-empty-never"')
+        ->assertOk();
+});
+
+it('still offers RSVP on local cards when a Discord row is present', function () {
+    upcomingEvent();
+    mockDiscordEvents([sundaySquadEvent()]);
+
+    Livewire::actingAs($this->member)
+        ->test(EventsCalendar::class)
+        ->assertSeeHtml('data-testid="rsvp-going"');
 });
