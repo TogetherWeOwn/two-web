@@ -19,7 +19,8 @@
                                  height="96"
                                  decoding="async"
                                  class="size-24 rounded-full bg-raised object-cover"
-                                 onerror="this.hidden=true;this.nextElementSibling.hidden=false">
+                                 data-testid="profile-avatar-img"
+                                 onerror="this.onerror=null;this.hidden=true;this.nextElementSibling.hidden=false">
                         @endif
 
                         <div @if ($member->avatar) hidden @endif
