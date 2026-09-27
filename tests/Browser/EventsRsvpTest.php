@@ -267,7 +267,7 @@ test('the gap calendar shows five past names and keeps the selected view', funct
                 ->waitFor('[data-testid="events-empty-gap"]')
                 ->assertSeeIn('[data-testid="events-empty-gap"]', 'No upcoming events — check back soon.')
                 ->assertSeeIn('[data-testid="events-empty-gap"]', 'Last time: Past game night 1')
-                ->assertElementsCount('[data-testid="events-empty-gap-item"]', 5)
+                ->assertCount('[data-testid="events-empty-gap-item"]', 5)
                 ->assertDontSee('Past game night 6')
                 ->assertMissing('[data-testid="events-empty-never"]')
                 ->click('[data-testid="events-view-calendar"]')

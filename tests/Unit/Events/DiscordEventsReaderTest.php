@@ -100,6 +100,18 @@ it('renders nothing, not an error, when the bot database is unreachable', functi
         ]);
 });
 
+it('reports an invalid cached result as a failed read without contacting the bot', function () {
+    Log::spy();
+    $db = Mockery::mock(DatabaseManager::class);
+    $db->shouldNotReceive('connection');
+    $cache = Mockery::mock(CacheRepository::class);
+    $cache->shouldReceive('remember')->once()->andReturn('invalid-event-result');
+    $reader = new DiscordEventsReader($db, $cache);
+
+    expect($reader->upcoming())->toBe([])
+        ->and($reader->lastReadFailed())->toBeTrue();
+});
+
 it('clears a previous failure after a successful empty read', function () {
     Log::spy();
     $connection = Mockery::mock(Connection::class);
