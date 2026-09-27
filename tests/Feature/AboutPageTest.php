@@ -126,6 +126,11 @@ it('keeps the strict CSP on the funnel-served about page', function () {
     // the same strict policy as the guest homepage. The expected value is
     // pinned in full, like tests/Feature/ContentSecurityPolicyTest.php pins
     // it — a widening has to edit an assertion, not slip past one.
+    //
+    // TOG-7095 follow-up: `upgrade-insecure-requests` is https-only (it broke
+    // form POST on http origins), and feature tests run over http — so the
+    // http expectation carries no upgrade directive. The https variant is
+    // pinned in ContentSecurityPolicyTest.
     $this->get('/about')
         ->assertOk()
         ->assertHeader('Content-Security-Policy', "default-src 'self'; "
@@ -137,6 +142,5 @@ it('keeps the strict CSP on the funnel-served about page', function () {
             ."form-action 'self'; "
             ."frame-ancestors 'none'; "
             ."base-uri 'self'; "
-            ."object-src 'none'; "
-            .'upgrade-insecure-requests');
+            ."object-src 'none'");
 });
