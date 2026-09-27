@@ -4,6 +4,7 @@ use App\Http\Controllers\Auth\DiscordLoginController;
 use App\Http\Controllers\Auth\StagingQaLoginController;
 use App\Http\Controllers\DesignLab\HallmarkController;
 use App\Http\Controllers\EventController;
+use App\Http\Controllers\EventPageController;
 use App\Http\Controllers\EventStatusController;
 use App\Http\Controllers\HomeController;
 use App\Http\Controllers\JoinController;
@@ -74,6 +75,15 @@ Route::get('/join/callback', [JoinController::class, 'callback'])
 // crawlers and curl different answers, which is a trap this repo has already been
 // bitten by once on the apex.
 Route::get('/events', EventsCalendar::class)->name('events.index');
+
+// The shareable event page. A link passed around Discord lands here, so it is
+// public: a guest sees the event plus a join pitch, never the OAuth handoff.
+// `/e/{event}`, not `/events/{event}` — that path is the JSON show route in the
+// `auth` group below, and one URL must not serve two media types (see the
+// comment on `/events` above). The wildcard binds on `event_key`, same as the
+// JSON route (Event::getRouteKeyName()); an unknown key is a 404 from the
+// implicit binding, and a draft 403s for non-moderators via the policy.
+Route::get('/e/{event}', EventPageController::class)->name('events.page');
 
 // Discord is the only way in, so the route Laravel redirects guests to *is* the
 // Discord handoff. There is no login form to design because there is nothing to
