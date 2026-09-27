@@ -29,7 +29,12 @@ abstract class DuskTestCase extends BaseTestCase
      */
     protected function driver(): RemoteWebDriver
     {
-        $options = (new ChromeOptions)->addArguments(collect([
+        // DUSK_CHROME_ARGS: extra flags for environments where Chrome cannot use
+        // its sandbox (this agent sandbox disables unprivileged user namespaces,
+        // so Chrome exits with "No usable sandbox!"). CI runners do not need it.
+        $extraArgs = preg_split('/\s+/', trim((string) ($_ENV['DUSK_CHROME_ARGS'] ?? getenv('DUSK_CHROME_ARGS') ?: '')), flags: PREG_SPLIT_NO_EMPTY) ?: [];
+
+        $options = (new ChromeOptions)->addArguments(array_merge(collect([
             $this->shouldStartMaximized() ? '--start-maximized' : '--window-size=1920,1080',
             '--disable-search-engine-choice-screen',
             '--disable-smooth-scrolling',
@@ -38,7 +43,7 @@ abstract class DuskTestCase extends BaseTestCase
                 '--disable-gpu',
                 '--headless=new',
             ]);
-        })->all());
+        })->all(), $extraArgs));
 
         $chromeBinary = $_ENV['CHROME_BIN'] ?? getenv('CHROME_BIN') ?: null;
 
