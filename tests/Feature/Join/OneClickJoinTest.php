@@ -97,6 +97,32 @@ it('adds and signs in the member before landing on the profile', function () {
     });
 });
 
+it('shows the join confirmation on the profile after a successful join', function () {
+    // TOG-6229: the callback flashes `join_result` onto the profile redirect,
+    // but nothing in the rendered chain read it — the new member landed back
+    // from Discord with no "you are in". This follows the redirect and pins
+    // the copy on the page, then pins that it shows exactly once.
+    stubJoinProvider();
+    Http::fake([JOIN_ENDPOINT => Http::response([
+        'ok' => true,
+        'result' => ['outcome' => 'added'],
+        'request_id' => '01JPROFILEFLASH',
+    ], 200)]);
+
+    $this->get('/join/callback?code=good&state=x')
+        ->assertRedirect(route('profile'));
+
+    $this->get(route('profile'))
+        ->assertOk()
+        ->assertSeeHtml('data-testid="join-result"')
+        ->assertSeeHtml('role="status"')
+        ->assertSee(__('join.result.added'), escape: false);
+
+    $this->get(route('profile'))
+        ->assertOk()
+        ->assertDontSee('data-testid="join-result"', escape: false);
+});
+
 it('does not demote a returning moderator on re-join', function () {
     $existing = User::factory()->moderator()->create(['discord_id' => JOIN_ID]);
 
