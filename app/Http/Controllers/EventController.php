@@ -3,6 +3,7 @@
 namespace App\Http\Controllers;
 
 use App\Enums\EventStatus;
+use App\Enums\RsvpStatus;
 use App\Http\Requests\StoreEventRequest;
 use App\Http\Requests\UpdateEventRequest;
 use App\Http\Resources\EventResource;
@@ -29,6 +30,9 @@ class EventController
                 Gate::forUser($request->user())->allows('viewDrafts', Event::class),
                 fn (Builder $query): Builder => $query->where('status', '!=', EventStatus::Draft->value),
             )
+            // The resource renders `going_count` on every row, so aggregate it
+            // once: without this the collection is a count query per event.
+            ->withCount(['rsvps as going_count' => fn ($query) => $query->where('status', RsvpStatus::Going)])
             // The calendar always asks the same question, and the shipped migration
             // already put an index on (status, starts_at) to answer it.
             ->orderBy('starts_at')
