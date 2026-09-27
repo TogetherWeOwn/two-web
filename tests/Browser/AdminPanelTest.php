@@ -36,6 +36,43 @@ test('a moderator reaches the panel and sees both resources', function () {
     });
 });
 
+test('a moderator signs out of the panel through the account widget and stays out', function () {
+    // The CISO session-handling bar (TOG-5469), violation V4: the /admin sign-out
+    // must be the site sign-out end to end, through the real browser cookie jar.
+    // The Pest test proves the route's wiring; this proves the screen actually
+    // performs it — the account widget form POSTs to /admin/logout, the session
+    // dies, and the signed-out browser is back outside the members-only pages
+    // instead of looking at a panel it can still use.
+    //
+    // waitForReload, not press-then-assert: the same StaleElementReference flake
+    // the site sign-out journey documents applies here, and the assertion that
+    // matters is the page we ended up on. See the 'a member can sign out again'
+    // journey in DiscordLoginTest for the full rationale.
+    $moderator = User::factory()->moderator()->create();
+
+    $this->browse(function (Browser $browser) use ($moderator) {
+        $browser->loginAs($moderator)
+            ->visit('/admin')
+            ->waitForText('TWO Moderation')
+            ->waitForText('Sign out')
+            ->waitForReload(fn (Browser $page) => $page->press('Sign out'))
+            // Signed out of a panel with no login page, the panel sends the
+            // browser back to /admin, which as a guest redirects into the
+            // Discord login. The Dusk OAuth stub auto-approves there, so the
+            // path alone cannot tell "signed out" from "never signed in" —
+            // the proof is who the app thinks the browser is. The stub's
+            // Discord identity is a plain member (`wren`, member role only),
+            // so a browser the panel still recognised as staff would fail
+            // both halves: the admin link would still render, and /admin
+            // would answer the dashboard instead of leaving it.
+            ->waitForText('Your profile')
+            ->assertSee('WREN')
+            ->assertMissing('[data-testid="admin-link"]')
+            ->visit('/admin')
+            ->assertPathIs('/auth/discord/redirect');
+    });
+});
+
 test('a plain member is refused the panel and is not bounced into a login loop', function () {
     // The card names this explicitly: a 403, not a login loop. In a real browser
     // a login loop shows up as the URL leaving /admin; a 403 keeps it there and
