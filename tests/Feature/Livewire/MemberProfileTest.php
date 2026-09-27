@@ -185,3 +185,92 @@ it('saves an empty games list without errors', function () {
 
     expect($member->profile()->first()->games)->toBe([]);
 });
+
+/* ---------------------------------------------------------------------------
+   Focus after the re-render (TOG-6957). Every profile state change unmounts
+   the focused control — opening the form removes the Edit button, saving or
+   cancelling removes the form — which drops keyboard focus to <body>. The
+   component dispatches to itself so the view's listener can move focus to
+   the new state: the form heading on open, the saved confirmation on a valid
+   save, the error alert on an invalid save, the Edit button on cancel.
+   --------------------------------------------------------------------------- */
+
+it('dispatches a focus event to itself when the edit form opens', function () {
+    $member = User::factory()->create();
+
+    Livewire::actingAs($member)
+        ->test(MemberProfile::class, ['member' => $member, 'stats' => profileStats($member->discord_id)])
+        ->call('edit')
+        ->assertDispatched('profile-state-changed');
+});
+
+it('dispatches a focus event to itself when the edit is cancelled', function () {
+    $member = User::factory()->create();
+
+    Livewire::actingAs($member)
+        ->test(MemberProfile::class, ['member' => $member, 'stats' => profileStats($member->discord_id)])
+        ->call('edit')
+        ->call('cancel')
+        ->assertSet('editing', false)
+        ->assertDispatched('profile-state-changed');
+});
+
+it('dispatches a focus event to itself on a valid save', function () {
+    $member = User::factory()->create();
+
+    Livewire::actingAs($member)
+        ->test(MemberProfile::class, ['member' => $member, 'stats' => profileStats($member->discord_id)])
+        ->call('edit')
+        ->set('bio', 'Usually on after work.')
+        ->call('save')
+        ->assertSet('editing', false)
+        ->assertDispatched('profile-state-changed');
+});
+
+it('dispatches a focus event to itself even when validation fails', function () {
+    // The dispatch runs BEFORE $this->validate(), because a failed validate
+    // throws ValidationException and aborts the method — anything dispatched
+    // after it would never run. The listener moves focus to the error alert.
+    $member = User::factory()->create();
+
+    Livewire::actingAs($member)
+        ->test(MemberProfile::class, ['member' => $member, 'stats' => profileStats($member->discord_id)])
+        ->call('edit')
+        ->set('bio', str_repeat('a', 1001))
+        ->call('save')
+        ->assertSet('editing', true)
+        ->assertHasErrors(['bio'])
+        ->assertDispatched('profile-state-changed');
+});
+
+it('makes the focus targets focusable so keyboard focus can move there', function () {
+    // tabindex="-1": out of the tab order, but focus() works after the swap.
+    $member = User::factory()->create();
+
+    $open = Livewire::actingAs($member)
+        ->test(MemberProfile::class, ['member' => $member, 'stats' => profileStats($member->discord_id)])
+        ->call('edit')
+        ->html();
+
+    expect($open)->toContain('id="edit-profile-heading" tabindex="-1"');
+
+    $failed = Livewire::actingAs($member)
+        ->test(MemberProfile::class, ['member' => $member, 'stats' => profileStats($member->discord_id)])
+        ->call('edit')
+        ->set('bio', str_repeat('a', 1001))
+        ->call('save')
+        ->html();
+
+    expect($failed)->toContain('tabindex="-1"')
+        ->toContain('data-testid="profile-edit-failed"');
+
+    $saved = Livewire::actingAs($member)
+        ->test(MemberProfile::class, ['member' => $member, 'stats' => profileStats($member->discord_id)])
+        ->call('edit')
+        ->set('bio', 'Usually on after work.')
+        ->call('save')
+        ->html();
+
+    expect($saved)->toContain('tabindex="-1"')
+        ->toContain('data-testid="profile-saved"');
+});
