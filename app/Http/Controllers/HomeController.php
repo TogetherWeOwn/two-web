@@ -33,6 +33,11 @@ final class HomeController
 
     public function taste(CountsSource $counts): View
     {
+        // The route is not registered in production, but a cached or manually
+        // registered route must still fail closed — same pattern as the
+        // staging QA login.
+        abort_unless(! app()->environment('production'), 404);
+
         return $this->render('design-lab.taste', $counts);
     }
 

@@ -21,8 +21,13 @@ Route::get('/', HomeController::class)->name('home');
 
 // Non-production visual experiments. These routes share the homepage's real
 // counts, featured content and join flow, but never replace the production page.
-Route::get('/design-lab/hallmark', HallmarkController::class)->name('design-lab.hallmark');
-Route::get('/design-lab/taste', [HomeController::class, 'taste'])->name('design-lab.taste');
+// They are not registered in production at all. The controllers repeat the
+// check so a cached or manually registered route still fails closed (the same
+// pattern as the staging QA login below).
+if (! app()->environment('production')) {
+    Route::get('/design-lab/hallmark', HallmarkController::class)->name('design-lab.hallmark');
+    Route::get('/design-lab/taste', [HomeController::class, 'taste'])->name('design-lab.taste');
+}
 
 // Public pages only. Keep this explicit: auth callbacks, signed-in profiles and
 // event-detail URLs do not belong in the index, while the event collection does.

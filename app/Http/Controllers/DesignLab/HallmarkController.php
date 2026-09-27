@@ -18,6 +18,11 @@ final class HallmarkController
 {
     public function __invoke(CountsSource $counts): View
     {
+        // The route is not registered in production, but a cached or manually
+        // registered route must still fail closed — same pattern as the
+        // staging QA login.
+        abort_unless(! app()->environment('production'), 404);
+
         return view('design-lab.hallmark', [
             'content' => HomePageContent::lobbyLedger(),
             'counts' => $counts->liveCounts(),
