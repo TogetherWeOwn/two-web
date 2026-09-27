@@ -5,10 +5,19 @@
                 <div class="flex flex-col gap-5 sm:flex-row sm:items-start">
                     <div class="shrink-0">
                         @if ($member->avatar)
+                            {{-- Eager on purpose: this is the page header, above the fold and a
+                                 likely LCP candidate, so `loading="lazy"` would delay it.
+                                 `width`/`height` reserve the 96px box (no CLS); the 2x
+                                 srcset serves retina via the Discord CDN `size` param
+                                 (powers of two only, so 256 covers the 192px 2x need). --}}
+                            @php($avatarSrcsetSeparator = str_contains((string) $member->avatar, '?') ? '&' : '?')
                             <img src="{{ $member->avatar }}"
+                                 srcset="{{ $member->avatar }}{{ $avatarSrcsetSeparator }}size=256 2x"
+                                 sizes="96px"
                                  alt=""
                                  width="96"
                                  height="96"
+                                 decoding="async"
                                  class="size-24 rounded-full bg-raised object-cover"
                                  onerror="this.hidden=true;this.nextElementSibling.hidden=false">
                         @endif
