@@ -63,7 +63,11 @@ class DiscordLoginController
         } catch (Throwable $e) {
             // A stale or replayed callback, a bad state token, a refused code
             // exchange. From the member's side these are all "start again".
-            Log::warning('Discord token exchange failed.', ['exception' => $e->getMessage()]);
+            //
+            // Class only, never the message: the exchange talks to Discord with
+            // a code that becomes a token, and client messages can quote the
+            // request that carried them. Same rule as JoinController.
+            Log::warning('Discord token exchange failed.', ['exception' => $e::class]);
 
             return $this->failed('expired');
         }
@@ -177,7 +181,10 @@ class DiscordLoginController
                     $guildId,
                 ));
         } catch (Throwable $e) {
-            Log::warning('Discord guild member lookup did not answer.', ['exception' => $e->getMessage()]);
+            // Class only, never the message: the request carries the member's
+            // own bearer token in the Authorization header, and client
+            // messages can quote the request that carried them.
+            Log::warning('Discord guild member lookup did not answer.', ['exception' => $e::class]);
 
             return 'unavailable';
         }
