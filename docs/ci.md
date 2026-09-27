@@ -410,6 +410,17 @@ There is deliberately **no default for this in `config/services.php`**, unlike
 everyone with no deploy — and a default in code would take that away and hand the
 admin panel to SySOp holders on every checkout that never decided to.
 
+The reference the grant is compared *against* does live in config, and unlike
+the grant it has a default: `services.discord.sysop_role_id` (env
+`DISCORD_SYSOP_ROLE_ID`, falling back to the TOG-106 value above) and the
+code-owned `services.discord.retired_moderator_role_ids` (the five deleted
+ban/kick roles, no environment override — the set only changes with a reviewed
+server redesign). Leave `DISCORD_SYSOP_ROLE_ID` blank unless the box points at
+a different server; a blank line falls back to the signed-off value rather than
+beating it. The wiring — default, blank-fallback, override, and both consumers
+(`discord:check-moderators` and the staging QA moderator fixture) following the
+config — is pinned by `tests/Feature/Auth/DiscordModeratorReferenceConfigTest.php`.
+
 The parsing is pinned by `tests/Feature/Auth/DiscordModeratorRoleIdsTest.php`; what
 a moderator and a member actually see is pinned by
 `tests/Browser/DiscordLoginTest.php`. Neither can tell you the variable is set on a

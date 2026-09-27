@@ -104,6 +104,64 @@ return [
             explode(',', (string) env('DISCORD_MODERATOR_ROLE_IDS', '')),
         ))),
 
+        /*
+         | The signed-off moderator and the roles that must never be granted.
+         |
+         | `sysop_role_id` is `SySOp` in the TWO guild — one holder,
+         | administrator class, signed off on TOG-106 as the entire website
+         | staff list. Matched by ID and never by name: SySOp is `KEEP (renamed
+         | Owner)` in Wave 6 of the approved server-redesign, and the rename
+         | preserves the snowflake, so a name match would break on a cosmetic
+         | rename while an ID match rides straight through it.
+         |
+         | This is reference data, not a grant: nothing here grants the panel by
+         | itself. The grant is `moderator_role_ids` above, read from the
+         | environment with deliberately no default — blanking the variable is
+         | the revocation path, and a default in code would take that away.
+         | `discord:check-moderators` compares the grant against this value.
+         |
+         | `?:` and not `??`: a blank `DISCORD_SYSOP_ROLE_ID=` line must fall
+         | back to the signed-off value rather than beating it, the same reason
+         | `guild_id` above uses `?:`. Set it only to point a box at a different
+         | server, e.g. QA's own.
+         */
+        'sysop_role_id' => env('DISCORD_SYSOP_ROLE_ID') ?: '508654771276873729',
+
+        /*
+         | The five other roles that carry ban or kick, each with the holder
+         | count recorded by the 2026-08-19 audit.
+         |
+         | These are here because they are the *plausible* wrong answer. "Discord
+         | already trusts this role to ban or kick" is a reasonable-sounding way
+         | to derive a moderator list, it was in fact approved at
+         | 2026-08-19T20:40Z, and the CEO narrowed it to SySOp alone three
+         | minutes later (two-bot/audit/IDENTIFIERS.md:56-62). Somebody widening
+         | the grant back out is not a hypothetical — it is a decision that was
+         | already made once and then reversed, and the reversal is only written
+         | down in another repository.
+         |
+         | Adding any of them is worse than merely wrong. All five are deleted:
+         | Officer, Game Master and Staff in Wave 6 of the server-redesign
+         | (two-bot/scripts/wave0-export.ts:74-77), Captain and Lieutenant by
+         | role-consolidation (two-bot/scripts/role-consolidation.ts:81-84). A
+         | deleted snowflake matches nobody, forever, without erroring — so a
+         | list containing them dark-fails exactly like a blank one while
+         | looking configured. `discord:check-moderators` fails any grant
+         | containing them.
+         |
+         | Code-owned reference data with no environment override: the set only
+         | changes with a reviewed server redesign. Keys are snowflake strings
+         | (PHP stores digit-only keys as ints; the command compares string
+         | forms, exactly as the constants it replaces did).
+         */
+        'retired_moderator_role_ids' => [
+            '1078757544169848933' => 'Officer (3 holders, DELETE in wave 6)',
+            '1087192823767515219' => 'Staff (6 holders, DELETE in wave 6)',
+            '1078757266469175386' => 'Game Master (1 holder, DELETE in wave 6)',
+            '1078757184021733426' => 'Captain (0 holders, DELETE in role-consolidation)',
+            '1078756990710452365' => 'Lieutenant (0 holders, DELETE in role-consolidation)',
+        ],
+
         'api_base' => env('DISCORD_API_BASE', 'https://discord.com/api/v10'),
         'timeout' => (int) env('DISCORD_TIMEOUT_SECONDS', 5),
         'test_provider_url' => env('DUSK_DISCORD_PROVIDER_URL'),
