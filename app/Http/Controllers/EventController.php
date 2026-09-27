@@ -3,6 +3,7 @@
 namespace App\Http\Controllers;
 
 use App\Enums\EventStatus;
+use App\Enums\RsvpStatus;
 use App\Http\Requests\StoreEventRequest;
 use App\Http\Requests\UpdateEventRequest;
 use App\Http\Resources\EventResource;
@@ -22,17 +23,37 @@ class EventController
 {
     public function __construct(private readonly EventService $events) {}
 
+    /**
+     * The default page size for `GET /events.json`: 20 rows, enough for a
+     * month of game nights without turning the response into the whole
+     * archive. `MAX_PER_PAGE` caps `?per_page` at 100 — a larger ask is
+     * clamped, not rejected, so a client typo cannot turn the listing back
+     * into the unbounded query this replaced.
+     */
+    private const DEFAULT_PER_PAGE = 20;
+
+    private const MAX_PER_PAGE = 100;
+
     public function index(Request $request): JsonResponse
     {
+        $perPage = max(1, min(self::MAX_PER_PAGE, $request->integer('per_page', self::DEFAULT_PER_PAGE)));
+        $page = max(1, $request->integer('page', 1));
+
         $events = Event::query()
             ->unless(
                 Gate::forUser($request->user())->allows('viewDrafts', Event::class),
                 fn (Builder $query): Builder => $query->where('status', '!=', EventStatus::Draft->value),
             )
+            // The resource renders `going_count` on every row, so aggregate it
+            // once: without this the collection is a count query per event.
+            ->withCount(['rsvps as going_count' => fn ($query) => $query->where('status', RsvpStatus::Going)])
             // The calendar always asks the same question, and the shipped migration
             // already put an index on (status, starts_at) to answer it.
             ->orderBy('starts_at')
-            ->get();
+            // Ties are real — a double-header starts two events at once — and
+            // without a tiebreak those rows can drift between pages.
+            ->orderBy('id')
+            ->paginate($perPage, page: $page);
 
         return EventResource::collection($events)->response();
     }
@@ -41,7 +62,28 @@ class EventController
     {
         Gate::forUser($request->user())->authorize('view', $event);
 
-        return (new EventResource($event))->response();
+        // Gone, not missing: same rule as the shareable page (TOG-6781) — a
+        // cancelled `event_key` answers 410 so clients can tell "called off"
+        // apart from "never existed". The machine-readable reason mirrors the
+        // EventNotOpenException shape (`reason` + `event_key`).
+        if ($event->status === EventStatus::Cancelled) {
+            return response()->json([
+                'reason' => 'event_cancelled',
+                'message' => 'This event was cancelled.',
+                'event_key' => $event->event_key,
+                'status' => $event->status->value,
+            ], 410);
+        }
+
+        $response = (new EventResource($event))->response();
+
+        // Moderator-only preview: keep it out of the index. Published rows send
+        // no robots signal at all — see EventGoneTest.
+        if ($event->status === EventStatus::Draft) {
+            $response->header('X-Robots-Tag', 'noindex, nofollow');
+        }
+
+        return $response;
     }
 
     public function store(StoreEventRequest $request): JsonResponse

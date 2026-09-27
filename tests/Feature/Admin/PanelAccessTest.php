@@ -31,6 +31,35 @@ it('lets a moderator load the panel dashboard', function () {
     $this->actingAs($moderator)->get('/admin')->assertOk();
 });
 
+// The CISO session-handling bar (TOG-5469), violation V4: the /admin logout
+// must be the site logout — Auth::logout + session invalidate() +
+// regenerateToken() — not a thinner vendor default. Filament v4.12.8's
+// LogoutController performs all three (verified against pinned vendor source),
+// and this test pins the wiring from our side: POST-only, session contents
+// gone, members-only pages back behind login, exactly like the site /logout
+// journey in DiscordLoginTest.
+it('signs a moderator out of the panel the way the site signs them out', function () {
+    $moderator = User::factory()->create(['is_moderator' => true]);
+
+    $response = $this->actingAs($moderator)
+        ->withSession(['cart_of_secrets' => 'still here'])
+        ->post(route('filament.admin.auth.logout'));
+
+    $this->assertGuest();
+
+    // Not just "logged out" — the session contents are gone too, the same
+    // assertion the site logout test makes.
+    $response->assertSessionMissing('cart_of_secrets');
+
+    // And the signed-out visitor is back outside the members-only pages.
+    $this->get(route('profile'))->assertRedirect(route('login'));
+    $this->get('/admin')->assertRedirect(route('login'));
+});
+
+it('will not sign anyone out of the panel over GET', function () {
+    $this->get('/admin/logout')->assertMethodNotAllowed();
+});
+
 it('drops panel access mid-session when the moderator role is revoked', function () {
     // is_moderator is recomputed at login, but a session can outlive the role.
     // canAccessPanel() reads the current row, so a revoked moderator is out on

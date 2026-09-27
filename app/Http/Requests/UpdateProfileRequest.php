@@ -32,7 +32,7 @@ class UpdateProfileRequest extends AuthenticatedRequest
     {
         return [
             'bio' => ['nullable', 'string', 'max:1000'],
-            'games' => ['present', 'array', 'max:20'],
+            'games' => ['sometimes', 'nullable', 'array', 'max:20'],
             'games.*' => ['string', 'max:80'],
             'games_text' => ['sometimes', 'nullable', 'string', 'max:1700'],
             'timezone' => ['nullable', 'string', new IanaTimeZone],

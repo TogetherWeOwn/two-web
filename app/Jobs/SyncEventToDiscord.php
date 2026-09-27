@@ -2,7 +2,9 @@
 
 namespace App\Jobs;
 
+use App\Enums\EventStatus;
 use App\Models\Event;
+use App\Services\Bot\EventCancel;
 use App\Services\Bot\EventUpsert;
 use App\Services\Bot\Exceptions\BotNotConfiguredException;
 use App\Services\Bot\Exceptions\BotTransportException;
@@ -101,9 +103,17 @@ class SyncEventToDiscord implements ShouldBeUnique, ShouldQueue
         }
 
         // A draft has never been announced, so there is no Discord event to update and
-        // creating one would publish it early. Cancelled and past are equally not ours
-        // to upsert — Discord manages its own past.
+        // creating one would publish it early. Past is Discord's to forget.
         if (! $event->isMirroredInDiscord()) {
+            return;
+        }
+
+        // A cancelled event must never go through event.upsert: the bot would
+        // re-receive what looks like a live event and the Discord mirror would
+        // stay live after the cancel (TOG-5863). Cancelling is a distinct action.
+        if ($event->status === EventStatus::Cancelled) {
+            $this->handleCancelled($event, $bot);
+
             return;
         }
 
@@ -130,19 +140,89 @@ class SyncEventToDiscord implements ShouldBeUnique, ShouldQueue
         }
 
         if ($answer instanceof InternalActionFailure) {
-            $this->handleRefusal($answer);
+            $this->handleRefusal($answer, 'event.upsert');
 
             return;
         }
 
-        $this->recordSuccess($event, $answer->discordEventId);
+        $this->recordSuccess($event, $answer->discordEventId, 'event.upsert');
+    }
+
+    /**
+     * A cancelled event leaves Discord through `event.cancel`, never `event.upsert`.
+     *
+     * The bot moves its mapped event to CANCELED and keeps the mapping, so a
+     * delayed upsert cannot resurrect it — but only `event.cancel` moves it at
+     * all. Sending the cancelled row through the upsert re-receives what looks
+     * like a live event, which is exactly the bug this branch exists to close.
+     */
+    private function handleCancelled(Event $event, InternalActionClient $bot): void
+    {
+        // No proven mirror, nothing to cancel. The bot only knows keys a
+        // successful upsert mapped, and this row records that mapping only on
+        // success — so a null here means Discord holds nothing for this key
+        // (publish-then-cancel inside the debounce window, usually). Cancelling
+        // it would earn a terminal `action_not_allowed` for an end state that
+        // already holds: a failure nobody can act on.
+        if ($event->discord_event_id === null) {
+            $this->markCancelledWithoutMirror($event);
+
+            return;
+        }
+
+        try {
+            $answer = $bot->cancelEvent(new EventCancel($event->event_key), $this->idempotencyKey);
+        } catch (BotTransportException $e) {
+            // Same as the upsert path: we could not ask, so wait rather than fail.
+            Log::warning('Event cancel could not reach the bot; will retry.', [
+                'event_key' => $this->eventKey,
+                'attempt' => $this->attempts(),
+                'reason' => $e->getMessage(),
+            ]);
+
+            $this->release($this->nextDelay());
+
+            return;
+        } catch (BotNotConfiguredException|InvalidActionRequestException $e) {
+            $this->failWith($e->getMessage(), $e);
+
+            return;
+        }
+
+        if ($answer instanceof InternalActionFailure) {
+            $this->handleRefusal($answer, 'event.cancel');
+
+            return;
+        }
+
+        $this->recordSuccess($event, $answer->discordEventId, 'event.cancel');
+    }
+
+    /**
+     * The event was called off before Discord ever saw it. There is no mirror
+     * to disagree with us, so the answers are marked synced rather than left
+     * reading "Syncing to Discord" forever under a "Cancelled" banner.
+     */
+    private function markCancelledWithoutMirror(Event $event): void
+    {
+        $syncedAt = now();
+
+        $event->rsvps()
+            ->whereNull('synced_to_discord_at')
+            ->where('updated_at', '<=', $syncedAt)
+            ->update(['synced_to_discord_at' => $syncedAt]);
+
+        Log::info('Event cancelled before it was ever mirrored; nothing to tell Discord.', [
+            'event_key' => $this->eventKey,
+        ]);
     }
 
     /** The bot answered, and the answer was no. */
-    private function handleRefusal(InternalActionFailure $failure): void
+    private function handleRefusal(InternalActionFailure $failure, string $action): void
     {
         $context = [
             'event_key' => $this->eventKey,
+            'action' => $action,
             // The join key between our logs and the bot's. Without it, a failure here
             // and its cause over there cannot be lined up.
             'request_id' => $failure->requestId,
@@ -157,7 +237,7 @@ class SyncEventToDiscord implements ShouldBeUnique, ShouldQueue
             ]);
 
             $this->fail(new RuntimeException(
-                "The bot refused event.upsert for {$this->eventKey} with `{$failure->code}`: {$failure->message}"
+                "The bot refused {$action} for {$this->eventKey} with `{$failure->code}`: {$failure->message}"
             ));
 
             return;
@@ -169,7 +249,7 @@ class SyncEventToDiscord implements ShouldBeUnique, ShouldQueue
         $this->release($failure->retryAfterSeconds ?? $this->nextDelay());
     }
 
-    private function recordSuccess(Event $event, string $discordEventId): void
+    private function recordSuccess(Event $event, string $discordEventId, string $action): void
     {
         $mirroredAt = now();
 
@@ -186,8 +266,9 @@ class SyncEventToDiscord implements ShouldBeUnique, ShouldQueue
                 ->update(['synced_to_discord_at' => $mirroredAt]);
         });
 
-        Log::info('Event mirrored to Discord.', [
+        Log::info($action === 'event.cancel' ? 'Event cancellation mirrored to Discord.' : 'Event mirrored to Discord.', [
             'event_key' => $this->eventKey,
+            'action' => $action,
             'discord_event_id' => $discordEventId,
         ]);
     }

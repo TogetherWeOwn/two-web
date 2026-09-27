@@ -100,6 +100,19 @@ it('renders nothing, not an error, when the bot database is unreachable', functi
         ]);
 });
 
+it('clears a previous failure after a successful empty read', function () {
+    Log::spy();
+    $connection = Mockery::mock(Connection::class);
+    $connection->shouldReceive('select')->once()->ordered()->andThrow(new RuntimeException('unavailable'));
+    $connection->shouldReceive('select')->once()->ordered()->andReturn([]);
+    $reader = discordReader($connection);
+
+    expect($reader->upcoming())->toBe([])
+        ->and($reader->lastReadFailed())->toBeTrue();
+    expect($reader->upcoming())->toBe([])
+        ->and($reader->lastReadFailed())->toBeFalse();
+});
+
 it('reports a clean read as not failed', function () {
     $connection = Mockery::mock(Connection::class);
     $connection->shouldReceive('select')->once()->andReturn([sundaySquadRow()]);

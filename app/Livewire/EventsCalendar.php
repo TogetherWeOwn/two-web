@@ -8,12 +8,14 @@ use App\Models\Event;
 use App\Support\Events\DiscordEventsSource;
 use Carbon\CarbonImmutable;
 use Carbon\Exceptions\InvalidFormatException;
+use DateTimeZone;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Collection as EloquentCollection;
 use Illuminate\Support\Collection as SupportCollection;
 use Illuminate\Support\Facades\Gate;
 use Illuminate\View\View;
 use Livewire\Attributes\Layout;
+use Livewire\Attributes\Url;
 use Livewire\Component;
 
 /**
@@ -41,23 +43,21 @@ class EventsCalendar extends Component
     /** Whether the member has asked to see events that have already happened. */
     public bool $showingPast = false;
 
-    private const VIEWS = ['list', 'calendar'];
+    /**
+     * The search query, from `?q=`. Bound to the URL so a search is a link a
+     * member can share, and so back/forward works. `except: ''` keeps the URL
+     * clean when there is no search — `?q=` with nothing in it is noise.
+     *
+     * This is user input twice over: it arrives in the URL and it becomes SQL.
+     * It is never interpolated — it goes through bindings via `whereLike` — and
+     * the LIKE wildcards in it are escaped so `%` searches for a percent sign,
+     * not for everything. Blade escapes it again on the way out, so echoing it
+     * back in the results heading cannot become markup.
+     */
+    #[Url(as: 'q', except: '')]
+    public string $search = '';
 
-    public function mount(): void
-    {
-        // Open on the month the next event is actually in. Defaulting to today
-        // shows an empty grid whenever the next game night is three weeks out,
-        // which reads as "nothing is planned" while an event sits one click away.
-        //
-        // Only local rows are read here, deliberately. A Discord fetch in
-        // `mount()` would consume the mock's scripted read before `render()`
-        // ever runs — the error state would never render in tests, and a
-        // retry could never show the recovered event. The month may lag the
-        // Discord rows by one render on first paint; correctness of the
-        // empty-vs-failure branch matters more than the grid's opening month.
-        $this->month = ($this->upcoming(collect())->first()?->startsAtLocal() ?? CarbonImmutable::now())
-            ->format('Y-m');
-    }
+    private const VIEWS = ['list', 'calendar'];
 
     public function setView(string $view): void
     {
@@ -85,6 +85,21 @@ class EventsCalendar extends Component
         // Intentionally empty: the Livewire round trip re-runs `render()`,
         // which re-reads both sources. A method with a body would imply the
         // retry needs local state; it does not.
+    }
+
+    /**
+     * A new search starts from the list, not from wherever the member was.
+     * Search results are a list; landing on a month grid that may not contain
+     * them would read as "no results" while matches sit one click away.
+     */
+    public function updatedSearch(): void
+    {
+        $this->view = 'list';
+    }
+
+    public function clearSearch(): void
+    {
+        $this->search = '';
     }
 
     public function nextMonth(): void
@@ -117,23 +132,40 @@ class EventsCalendar extends Component
         $upcoming = $this->upcoming($discordRows);
         $past = $this->past();
 
+        // Open on the next event's month using the same read as the list,
+        // including Discord-only calendars. Later renders preserve navigation.
+        if ($this->month === '') {
+            $this->month = ($upcoming->first()?->startsAtLocal() ?? CarbonImmutable::now())->format('Y-m');
+        }
+        // A blank search is no search: spaces alone must not narrow the page to
+        // nothing, and must not swap the empty states for the search one.
+        $searching = trim($this->search) !== '';
+        // While searching, matching past events show without opening the drawer:
+        // a match hidden behind a closed drawer reads as "no results".
+        $showPast = $this->showingPast || $searching;
+
         return view('livewire.events-calendar', [
             'upcoming' => $upcoming,
             'past' => $past,
             'weeks' => $this->weeks($upcoming->concat($past)),
             'monthLabel' => $this->monthStart()->format('F Y'),
-            // Which of the three empty states applies (TOG-5318). A failed
-            // Discord read must render the error state, never the
-            // never-scheduled one — an unreadable calendar is not an empty
-            // one. The flag only matters when nothing upcoming is shown: a
-            // failure beside visible events is invisible by design.
-            'emptyState' => $upcoming->isEmpty()
-                ? ($discordFailed ? 'error' : ($past->isEmpty() ? 'never' : 'gap'))
-                : null,
-            // The gap state's "Last time:" line: the most recent past event.
-            // Past rows are newest first, so this is the head of the same
-            // collection the list below renders.
+            // Failed reads take precedence over an empty result, including search.
+            'emptyState' => $upcoming->isEmpty() && $discordFailed
+                ? 'error'
+                : ($searching ? null : ($upcoming->isEmpty() ? ($past->isEmpty() ? 'never' : 'gap') : null)),
             'lastPastEvent' => $past->first(),
+            // Whether the member currently sees anything. The past list only
+            // counts once asked for — an unopened drawer is not results.
+            'hasVisibleResults' => $upcoming->isNotEmpty() || ($showPast && $past->isNotEmpty()),
+            'showPast' => $showPast,
+            'searching' => $searching,
+            // Share tags (TOG-5624). `layoutData` merges into the `#[Layout]`
+            // params above — the attribute params win on conflict, but these keys
+            // are new, so there is no conflict. `route()` builds from APP_URL,
+            // never a hardcoded hostname.
+        ])->layoutData([
+            'canonical' => route('events.index'),
+            'shareDescription' => 'Game nights, tournaments and whatever else the community puts on.',
         ]);
     }
 
@@ -184,9 +216,25 @@ class EventsCalendar extends Component
             ->with('viewerRsvps')
             // A draft has not been announced to anybody. Moderators see them so they
             // can check a card before publishing it; nobody else knows it exists.
+            // This applies inside a search too: a member searching for a draft's
+            // title learns nothing, not even that it exists.
             ->unless(
                 Gate::allows('viewDrafts', Event::class),
                 fn (Builder $query): Builder => $query->where('status', '!=', EventStatus::Draft->value),
+            )
+            ->when(
+                trim($this->search) !== '',
+                function (Builder $query): void {
+                    // `whereLike` binds the value (never interpolated) and is
+                    // `ilike` on Postgres, so casing is the database's problem,
+                    // not the member's. The escape is ours, though: `%` and `_`
+                    // in the query must match themselves, not act as wildcards.
+                    $term = '%'.addcslashes(trim($this->search), '%_\\').'%';
+
+                    $query->where(fn (Builder $nested): Builder => $nested
+                        ->whereLike('title', $term)
+                        ->orWhereLike('description', $term));
+                },
             );
     }
 
@@ -213,7 +261,13 @@ class EventsCalendar extends Component
 
         $cursor = $start->startOfWeek(CarbonImmutable::MONDAY);
         $end = $start->endOfMonth()->endOfWeek(CarbonImmutable::SUNDAY);
-        $today = CarbonImmutable::now()->format('Y-m-d');
+        // The buckets above are keyed by each event's host-zone date, so today
+        // has to be a host-zone date too. A server-zone Y-m-d lights the wrong
+        // cell whenever the two zones disagree about what day it is — for a
+        // London community on UTC servers, the small hours of every summer
+        // morning. See calendarZone() for why this is the hosts' zone and not
+        // the viewer's.
+        $today = CarbonImmutable::now($this->calendarZone($events))->format('Y-m-d');
 
         $weeks = [];
         $week = [];
@@ -237,6 +291,51 @@ class EventsCalendar extends Component
         }
 
         return $weeks;
+    }
+
+    /**
+     * The zone the grid's "today" is evaluated in: the hosts' zone, not the
+     * server's and not the viewer's.
+     *
+     * Times on this page are the wall clock in the zone the host chose — the
+     * card partial, the share page, the JSON `starts_at_local` and the ICS all
+     * contract that, and the `<time datetime>` instant beside each one lets any
+     * viewer reinterpret it. A guest has no profile timezone, so per-viewer
+     * rendering would fork this public page into two display modes anyway; and
+     * `profiles.timezone` is collected so people know when to find each other
+     * ("Add yours so people know when you are around"), not for rendering.
+     *
+     * Each event carries its own zone, but the highlight is one cell: the most
+     * common zone among the events shown, which is the community's zone in
+     * practice. No events, no hosts — the app zone, which is what an empty
+     * grid has always used. An unknown identifier there falls back the same
+     * way rather than fataling on a row written before validation existed.
+     *
+     * @param  SupportCollection<int, Event>  $events
+     */
+    private function calendarZone(SupportCollection $events): string
+    {
+        $counts = [];
+
+        foreach ($events as $event) {
+            // The column is a non-nullable string, so the only unusable value
+            // is an empty one; anything else is validated against the IANA
+            // list below rather than trusted.
+            if ($event->timezone !== '') {
+                $counts[$event->timezone] = ($counts[$event->timezone] ?? 0) + 1;
+            }
+        }
+
+        if ($counts !== []) {
+            arsort($counts);
+            $zone = (string) array_key_first($counts);
+
+            if (in_array($zone, DateTimeZone::listIdentifiers(), true)) {
+                return $zone;
+            }
+        }
+
+        return config('app.timezone', 'UTC');
     }
 
     /**

@@ -231,6 +231,54 @@ it('retries the read when asked, showing the calendar if the bot is back', funct
         ->assertDontSeeHtml('data-testid="events-empty-error"');
 });
 
+it('keeps the calendar selection as the read moves through all three empty states', function () {
+    $component = Livewire::test(EventsCalendar::class)
+        ->call('setView', 'calendar')
+        ->assertSet('view', 'calendar')
+        ->assertSeeHtml('data-testid="events-empty-never"');
+
+    pastEvent();
+    $component->call('retryLoad')
+        ->assertSet('view', 'calendar')
+        ->assertSeeHtml('data-testid="events-empty-gap"');
+
+    mockDiscordEvents([], failed: true);
+    $component->call('retryLoad')
+        ->assertSet('view', 'calendar')
+        ->assertSeeHtml('data-testid="events-empty-error"')
+        ->assertDontSeeHtml('data-testid="events-empty-gap"');
+
+    mockDiscordEvents([]);
+    $component->call('retryLoad')
+        ->assertSet('view', 'calendar')
+        ->assertSeeHtml('data-testid="events-empty-gap"')
+        ->assertDontSeeHtml('data-testid="events-empty-error"');
+});
+
+it('does not describe a failed read as a search with no matches', function () {
+    mockDiscordEvents([], failed: true);
+
+    Livewire::test(EventsCalendar::class)
+        ->set('search', 'squad')
+        ->assertSeeHtml('data-testid="events-empty-error"')
+        ->assertDontSeeHtml('data-testid="events-empty-search"')
+        ->assertDontSeeHtml('data-testid="events-search-status"');
+});
+
+it('opens on a Discord-only event month without reading the source twice', function () {
+    $event = sundaySquadEvent();
+    $event->starts_at = now()->addMonths(2);
+    $event->ends_at = now()->addMonths(2)->addHour();
+    $source = Mockery::mock(DiscordEventsSource::class);
+    $source->shouldReceive('upcoming')->once()->andReturn([$event]);
+    $source->shouldReceive('lastReadFailed')->once()->andReturn(false);
+    app()->instance(DiscordEventsSource::class, $source);
+
+    Livewire::test(EventsCalendar::class)
+        ->assertSet('month', $event->startsAtLocal()->format('Y-m'))
+        ->assertSee('Sunday Squad');
+});
+
 it('hides a failed Discord read behind visible events rather than erroring the page', function () {
     upcomingEvent();
     mockDiscordEvents([], failed: true);
@@ -398,6 +446,151 @@ it('moves between months', function () {
         ->call('previousMonth')
         ->call('previousMonth')
         ->assertSet('month', $start->copy()->subMonth()->format('Y-m'));
+});
+
+/* ---------------------------------------------------------------------------
+   Search. `?q=` narrows the same rows the list renders, over title and
+   description. Descriptions are pinned explicitly here: the factory fills
+   them with faker paragraphs, and a random paragraph containing the search
+   word would turn these assertions into flakes.
+   --------------------------------------------------------------------------- */
+
+it('finds an event by a title fragment', function () {
+    upcomingEvent(['title' => 'Friday night Helldivers', 'description' => 'Weekly co-op chaos.']);
+    upcomingEvent(['title' => 'Sunday Valorant scrims', 'description' => 'Tactical practice.']);
+
+    Livewire::test(EventsCalendar::class)
+        ->set('search', 'helldiv')
+        ->assertSee('Friday night Helldivers')
+        ->assertDontSee('Sunday Valorant scrims');
+});
+
+it('matches case-insensitively', function () {
+    upcomingEvent(['title' => 'Friday night Helldivers', 'description' => 'Weekly co-op chaos.']);
+
+    Livewire::test(EventsCalendar::class)
+        ->set('search', 'HELLDIVERS')
+        ->assertSee('Friday night Helldivers');
+});
+
+it('finds an event by a description word', function () {
+    upcomingEvent(['title' => 'Game night', 'description' => 'Bring spare ammo for the tournament.']);
+    upcomingEvent(['title' => 'Other night', 'description' => 'Just chatting over voice.']);
+
+    Livewire::test(EventsCalendar::class)
+        ->set('search', 'ammo')
+        ->assertSee('Game night')
+        ->assertDontSee('Other night');
+});
+
+it('reads the initial query from ?q= so a search is a shareable link', function () {
+    upcomingEvent(['title' => 'Friday night Helldivers', 'description' => 'Weekly co-op chaos.']);
+    upcomingEvent(['title' => 'Sunday Valorant scrims', 'description' => 'Tactical practice.']);
+
+    Livewire::withQueryParams(['q' => 'helldiv'])
+        ->test(EventsCalendar::class)
+        ->assertSee('Friday night Helldivers')
+        ->assertDontSee('Sunday Valorant scrims');
+});
+
+it('shows its own empty state when nothing matches, not the never-scheduled one', function () {
+    upcomingEvent(['title' => 'Friday night Helldivers', 'description' => 'Weekly co-op chaos.']);
+
+    Livewire::test(EventsCalendar::class)
+        ->set('search', 'zzz-no-such-event-zzz')
+        ->assertSeeHtml('data-testid="events-empty-search"')
+        ->assertSee('Nothing matches that search.')
+        ->assertSeeHtml('data-testid="events-search-status"')
+        ->assertDontSee('Friday night Helldivers')
+        // Neither of the no-search empty states applies to a query with no
+        // matches — "nothing is planned" would be a lie with an event aboard.
+        ->assertDontSeeHtml('data-testid="events-empty-never"')
+        ->assertDontSeeHtml('data-testid="events-empty-no-upcoming"');
+});
+
+it('echoes the query back escaped, not as markup', function () {
+    upcomingEvent(['title' => 'Friday night Helldivers', 'description' => 'Weekly co-op chaos.']);
+
+    $html = Livewire::test(EventsCalendar::class)
+        ->set('search', '<script>alert("xss")</script>')
+        ->html();
+
+    expect($html)
+        ->not->toContain('<script>alert')
+        ->toContain('&lt;script&gt;');
+});
+
+it('treats a blank search as no search', function () {
+    upcomingEvent(['title' => 'Friday night Helldivers', 'description' => 'Weekly co-op chaos.']);
+
+    Livewire::test(EventsCalendar::class)
+        ->set('search', '   ')
+        ->assertSee('Friday night Helldivers')
+        ->assertDontSeeHtml('data-testid="events-empty-search"')
+        ->assertDontSeeHtml('data-testid="events-search-status"');
+});
+
+it('searches for a percent sign literally rather than matching everything', function () {
+    upcomingEvent(['title' => 'Friday night Helldivers', 'description' => 'Weekly co-op chaos.']);
+    upcomingEvent(['title' => 'Sunday Valorant scrims', 'description' => 'Tactical practice.']);
+
+    Livewire::test(EventsCalendar::class)
+        ->set('search', '%')
+        ->assertSeeHtml('data-testid="events-empty-search"');
+});
+
+it('does not leak a draft title through search', function () {
+    upcomingEvent(['title' => 'Unannounced raid night', 'description' => 'Secret plans.', 'status' => EventStatus::Draft]);
+    upcomingEvent(['title' => 'Friday night Helldivers', 'description' => 'Weekly co-op chaos.']);
+
+    Livewire::actingAs($this->member)
+        ->test(EventsCalendar::class)
+        ->set('search', 'raid')
+        ->assertDontSee('Unannounced raid night')
+        ->assertSeeHtml('data-testid="events-empty-search"');
+});
+
+it('shows matching past events without asking the member to open the drawer', function () {
+    pastEvent(['title' => 'Old Helldivers night', 'description' => 'Last season co-op.']);
+
+    Livewire::test(EventsCalendar::class)
+        ->set('search', 'helldiv')
+        ->assertSee('Old Helldivers night');
+});
+
+it('returns to the list view when a search starts', function () {
+    upcomingEvent(['title' => 'Friday night Helldivers', 'description' => 'Weekly co-op chaos.']);
+
+    Livewire::test(EventsCalendar::class)
+        ->call('setView', 'calendar')
+        ->assertSet('view', 'calendar')
+        ->set('search', 'helldiv')
+        ->assertSet('view', 'list');
+});
+
+it('keeps the open month when a search starts', function () {
+    $event = upcomingEvent([
+        'title' => 'Friday night Helldivers',
+        'description' => 'Weekly co-op chaos.',
+        'starts_at' => now()->addMonths(2),
+        'ends_at' => now()->addMonths(2)->addHour(),
+    ]);
+
+    Livewire::test(EventsCalendar::class)
+        ->set('search', 'helldiv')
+        ->assertSet('month', $event->startsAtLocal()->format('Y-m'));
+});
+
+it('clears the search and brings the full list back', function () {
+    upcomingEvent(['title' => 'Friday night Helldivers', 'description' => 'Weekly co-op chaos.']);
+    upcomingEvent(['title' => 'Sunday Valorant scrims', 'description' => 'Tactical practice.']);
+
+    Livewire::test(EventsCalendar::class)
+        ->set('search', 'helldiv')
+        ->assertDontSee('Sunday Valorant scrims')
+        ->call('clearSearch')
+        ->assertSet('search', '')
+        ->assertSee('Sunday Valorant scrims');
 });
 
 /* ---------------------------------------------------------------------------

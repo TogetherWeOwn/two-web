@@ -49,11 +49,13 @@ The token lives in `config('services.paperclip')`, read from environment:
 
 | Env var | Purpose |
 |---|---|
-| `PAPERCLIP_API_TOKEN` | Bearer token. **Secret.** Server-only; never rendered, never logged. |
+| `PAPERCLIP_API_TOKEN` | Paperclip agent API key with scope `task_bridge`. **Secret.** Server-only; never rendered, never logged. |
 | `PAPERCLIP_API_URL` | Control-plane base URL. |
 | `PAPERCLIP_COMPANY_ID` | Company the card is filed under (path-scoped). |
 | `PAPERCLIP_OPERATOR_LABEL_ID` | UUID of the `operator` label (the API takes `labelIds`, not names). |
-| `PAPERCLIP_OPERATOR_ASSIGNEE_USER_ID` | Owner/operator user id the card is assigned to. |
+| `PAPERCLIP_PARENT_ISSUE_ID` | The fixed parent issue every restart card is filed under (the key's `parentIssueIds`). |
+| `PAPERCLIP_RESTART_ASSIGNEE_AGENT_ID` | The agent each card is assigned to (in the key's `allowedAssigneeAgentIds`) — DevOps & Reliability Engineer, who holds a Coolify deploy-scope token. |
+| `PAPERCLIP_RESTART_BOT_ENVIRONMENT` | `staging` or `production`: which two-bot the restart command targets. No default. |
 
 The token follows the same rules as `BOT_SHARED_SECRET`: it is never committed,
 never sent to the browser, never written to a queue payload, failed-jobs row, or
@@ -63,7 +65,7 @@ front-end code would be readable by every visitor.
 
 ## Decision 3 — fail closed
 
-If **any** of the five config values is missing, `RestartCardClient` throws
+If **any** config value is missing, or the bot environment is not a known one, `RestartCardClient` throws
 `PaperclipNotConfiguredException` (mirroring `BotNotConfiguredException`), and the
 settings-save action that called it **rejects the save**. The cold setting is
 never written when the card cannot be filed.
@@ -87,16 +89,26 @@ at all.
 
 Filed card shape (fixed):
 
-- **title:** `Operator: restart TWO bot to apply <SETTING>=<new value>`
+- **title:** `Operator: restart TWO bot (<environment>) to apply <SETTING>=<new value>`
+- **parent:** `PAPERCLIP_PARENT_ISSUE_ID`
 - **label:** `operator` (by `PAPERCLIP_OPERATOR_LABEL_ID`)
-- **assignee:** `PAPERCLIP_OPERATOR_ASSIGNEE_USER_ID` (the owner)
-- **body:** the exact restart command for that setting **and** its rollback
+- **assignee:** agent `PAPERCLIP_RESTART_ASSIGNEE_AGENT_ID` (never a user — a
+  `task_bridge` key is refused for `assigneeUserId`)
+- **body:** the exact restart command for that setting and environment, **and** its rollback
 
-> **Open item for the operator card:** the *exact* canonical restart/rollback
-> command for the two-bot Coolify app is host-ops knowledge and is **not**
-> fabricated here. It is pinned in the same operator handoff that provisions the
-> token, then encoded as the `ColdSetting::TWO_AUTOMOD` constant. Until it is
-> pinned, the template constant is the single place it must be edited.
+The restart command was pinned by the operator card (TOG-3573), from the Coolify
+API on the controller. It restarts the two-bot Coolify application for the
+configured environment (`App\Services\Paperclip\BotEnvironment`: staging
+`uy4d9ndeygjcem6lgayhxgub`, production `cangagerae31txrk2vfvzzyq`):
+
+```
+curl -fsS -X POST -H "Authorization: Bearer $COOLIFY_TOKEN" "$COOLIFY_URL/api/v1/applications/<uuid>/restart"
+```
+
+`$COOLIFY_URL` and `$COOLIFY_TOKEN` are the runner's own shell variables; no
+secret is written on the card. Rollback: set the setting back to its previous
+value in two-web, then run the same restart again. No image or deploy change is
+involved.
 
 ## Decision 5 — idempotency
 
@@ -113,9 +125,13 @@ client already documents.
 Granting two-web a board-write credential widens what the public-facing server
 can do. It is authorised by the TOG-3093 owner directive, which mandates that a
 cold-setting save files an operator card — the directive *is* the authorisation.
-The token is scoped least-privilege: **create-issue only, this company only**,
-and its only use is this one fixed-template call. That scope is specified in the
-operator provisioning card and should be confirmed at mint time.
+The token is scoped least-privilege: a Paperclip `task_bridge` agent key with
+`parentIssueIds=[PAPERCLIP_PARENT_ISSUE_ID]` and
+`allowedAssigneeAgentIds=[PAPERCLIP_RESTART_ASSIGNEE_AGENT_ID]`. Paperclip
+enforces that it can only create children of that parent, assign them only to
+that agent, and read or change only the issues it created; it cannot list the
+company, read agents or projects, wake agents, or touch secrets, and it cannot
+assign to board users. Its only use here is this one fixed-template call.
 
 ## Not in scope here
 

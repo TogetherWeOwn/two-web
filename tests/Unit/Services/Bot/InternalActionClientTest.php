@@ -1,5 +1,8 @@
 <?php
 
+use App\Services\Bot\EventCancel;
+use App\Services\Bot\EventCancelOutcome;
+use App\Services\Bot\EventCancelResult;
 use App\Services\Bot\EventUpsert;
 use App\Services\Bot\EventUpsertOutcome;
 use App\Services\Bot\EventUpsertResult;
@@ -633,6 +636,76 @@ it('never logs the shared secret, the signature or the canonical string', functi
         ->and($logged)->not->toContain($signature)
         // No fragment of a canonical string either.
         ->and($logged)->not->toContain('sha256=');
+});
+
+// ---------------------------------------------------------------------------
+// event.cancel. The action that closes TOG-5863: a cancelled event must leave
+// Discord through this, never through event.upsert.
+// ---------------------------------------------------------------------------
+
+/** The bot's success envelope for `event.cancel` (docs/INTERNAL_ACTIONS.md §3). */
+function botCancelled(string $requestId = '01JCANCEL0123456789'): array
+{
+    return ['ok' => true, 'result' => ['outcome' => 'cancelled', 'event_id' => '1234567890'], 'request_id' => $requestId];
+}
+
+it('sends exactly the cancel json body it means to send', function () {
+    // Pinned byte for byte, like the upsert: the body is what gets hashed into
+    // the signature. And note what is absent — no name, no times, no location.
+    // A cancelled event that carries live-event fields is the bug (TOG-5863).
+    Http::fake([BOT_ENDPOINT => Http::response(botCancelled())]);
+
+    botClient()->cancelEvent(new EventCancel('movie-night-2026-09-01'), Str::uuid()->toString());
+
+    Http::assertSent(fn (Request $r) => $r->body() === '{"action":"event.cancel","event_key":"movie-night-2026-09-01"}');
+});
+
+it('returns a typed cancel result carrying the outcome, the discord event id and the request id', function () {
+    Http::fake([BOT_ENDPOINT => Http::response(botCancelled('01JHAPPY0123456789'))]);
+
+    $result = botClient()->cancelEvent(new EventCancel('movie-night-2026-09-01'), Str::uuid()->toString());
+
+    expect($result)->toBeInstanceOf(EventCancelResult::class)
+        ->and($result->outcome)->toBe(EventCancelOutcome::Cancelled)
+        ->and($result->discordEventId)->toBe('1234567890')
+        ->and($result->requestId)->toBe('01JHAPPY0123456789')
+        ->and($result->replayed)->toBeFalse();
+});
+
+it('rejects a cancel with a blank event key, before sending anything', function () {
+    Http::fake();
+
+    expect(fn () => new EventCancel('   '))
+        ->toThrow(InvalidActionRequestException::class);
+
+    Http::assertNothingSent();
+});
+
+it('throws a transport exception on a cancel outcome it does not recognise', function () {
+    Http::fake([BOT_ENDPOINT => Http::response([
+        'ok' => true,
+        'result' => ['outcome' => 'resurrected', 'event_id' => '1'],
+        'request_id' => '01J',
+    ])]);
+
+    expect(fn () => botClient()->cancelEvent(new EventCancel('k'), Str::uuid()->toString()))
+        ->toThrow(BotTransportException::class);
+});
+
+it('throws a transport exception when a cancel success is missing the discord event id', function () {
+    Http::fake([BOT_ENDPOINT => Http::response(['ok' => true, 'result' => ['outcome' => 'cancelled'], 'request_id' => '01J'])]);
+
+    expect(fn () => botClient()->cancelEvent(new EventCancel('k'), Str::uuid()->toString()))
+        ->toThrow(BotTransportException::class);
+});
+
+it('refuses a cancel idempotency key that is not a uuid, without calling the bot', function () {
+    Http::fake();
+
+    expect(fn () => botClient()->cancelEvent(new EventCancel('k'), 'not-a-uuid'))
+        ->toThrow(InvalidActionRequestException::class);
+
+    Http::assertNothingSent();
 });
 
 // ---------------------------------------------------------------------------

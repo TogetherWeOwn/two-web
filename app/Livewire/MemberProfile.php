@@ -71,6 +71,11 @@ class MemberProfile extends Component
         $this->saveFailed = false;
         $this->editing = true;
         $this->fillForm();
+        // TOG-6957: opening the form unmounts the focused trigger, dropping
+        // keyboard focus to <body>. The self-dispatch fires after Livewire
+        // has morphed the form in, and the view's listener moves focus to
+        // the form heading.
+        $this->dispatch('profile-state-changed')->self();
     }
 
     public function cancel(): void
@@ -80,11 +85,23 @@ class MemberProfile extends Component
         $this->resetValidation();
         $this->editing = false;
         $this->fillForm();
+        // TOG-6957: closing the form unmounts the focused Cancel control.
+        // Refocus the Edit profile button after the round trip.
+        $this->dispatch('profile-state-changed')->self();
     }
 
     public function save(): void
     {
         Gate::authorize('updateProfile', $this->member);
+
+        // TOG-6957: dispatched BEFORE validation on purpose. A failed
+        // `$this->validate()` throws ValidationException, which aborts this
+        // method — anything dispatched after it would never run. The dispatch
+        // is stored on the request and still reaches the client with the
+        // error response, so the view's listener can move focus to the alert.
+        // On success the same event refocuses the saved confirmation instead;
+        // the listener picks its target from the morphed DOM.
+        $this->dispatch('profile-state-changed')->self();
 
         $validated = $this->validate([
             'bio' => ['nullable', 'string', 'max:1000'],

@@ -36,6 +36,10 @@ const allPages = [
   // in-app browser, and the largest element is the first event card, so anything
   // that pushes the card down after paint spends the CLS budget.
   { path: '/events', name: 'Events calendar — list view, the default' },
+  // Static leaf (TOG-5310): Route::view, no database, no Livewire.
+  { path: '/about', name: 'About — static community introduction' },
+  // Static leaf (TOG-5147): Route::view, no database, no Livewire.
+  { path: '/rules', name: 'House rules — static community rules' },
   {
     path: '/admin',
     name: 'Moderator panel — the dashboard a moderator lands on',

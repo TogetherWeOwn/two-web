@@ -151,10 +151,18 @@ return [
         'company_id' => env('PAPERCLIP_COMPANY_ID'),
 
         // The API takes labelIds, not names, so this is the UUID of the `operator`
-        // label, and the owner/operator user the card is assigned to. Both are
-        // pinned by the provisioning card (TOG-3573).
+        // label. The token is a task_bridge key scoped to one parent issue and an
+        // agent allowlist, and it cannot assign to users, so every card is a child
+        // of the parent and assigned to the agent that runs the restart (DevOps).
+        // All pinned by the provisioning card (TOG-3573).
         'operator_label_id' => env('PAPERCLIP_OPERATOR_LABEL_ID'),
-        'operator_assignee_user_id' => env('PAPERCLIP_OPERATOR_ASSIGNEE_USER_ID'),
+        'parent_issue_id' => env('PAPERCLIP_PARENT_ISSUE_ID'),
+        'restart_assignee_agent_id' => env('PAPERCLIP_RESTART_ASSIGNEE_AGENT_ID'),
+
+        // Which two-bot the restart command targets: `staging` or `production`
+        // (App\Services\Paperclip\BotEnvironment). No default, so an unset or
+        // mistyped value fails closed instead of restarting the wrong bot.
+        'bot_environment' => env('PAPERCLIP_RESTART_BOT_ENVIRONMENT'),
 
         'timeout' => (int) env('PAPERCLIP_API_TIMEOUT_SECONDS', 5),
     ],
