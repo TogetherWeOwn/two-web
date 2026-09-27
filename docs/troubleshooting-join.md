@@ -20,13 +20,13 @@ exactly against this table:
 
 | Member saw (exact sentence) | Meaning | Tell them |
 |---|---|---|
-| "You are in. Finish Discord's rules screening before you can post." | Join worked (`added`). | Accept the rules on Discord's membership screen — until then they're pending and can't post (FAQ Q5). |
+| "You are in. Finish Discord’s rules screening before you can post." | Join worked (`added`). | Accept the rules on Discord's membership screen — until then they're pending and can't post (FAQ Q5). |
 | "You are already in the server." | They're already a member (`already_member`). | Same as above: check the rules screening / pending state. |
 | "You cancelled the Discord approval. You can still use the invite." | They pressed Cancel on Discord's approval screen (`denied`). Nothing is broken. | Go back to `/join` and approve, or use the invite at `/discord`. |
 | "That Discord approval expired. Try again or use the invite." | The approval took too long, or the callback was stale/replayed (`expired`). Nothing is broken. | Try `/join` once more, or use `/discord`. |
 | "One-click join is unavailable right now. The Discord invite still works." | One-click is down: the bot is unreachable, Discord errored, or it isn't configured (`unavailable`). | Use the invite at `/discord` — it works even when everything else is down. |
-| (at sign-in) "You need to be a member of the Together We Own Discord server to sign in." | They're not in the server (`not_a_member`). | Join first via `/join` or `/discord`, then sign in. |
-| (at sign-in) "Discord did not answer just now, so we could not sign you in." | Discord or the role lookup stalled (`unavailable`). | Wait a minute and try again. |
+| (at sign-in) "You need to be a member of the Together We Own Discord server to sign in. Join the server, then come back." | They're not in the server (`not_a_member`). | Join first via `/join` or `/discord`, then sign in. |
+| (at sign-in) "Discord did not answer just now, so we could not sign you in. This is on Discord, not you — please try again in a minute." | Discord or the role lookup stalled (`unavailable`). | Wait a minute and try again. |
 
 ## Denied approvals (`denied`)
 
