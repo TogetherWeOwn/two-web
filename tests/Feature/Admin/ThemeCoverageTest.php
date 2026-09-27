@@ -40,6 +40,8 @@ use Filament\Forms\Components\Select;
 use Filament\Forms\Components\Textarea;
 use Filament\Forms\Components\TextInput;
 use Filament\Forms\Components\Toggle;
+use Filament\Schemas\Components\Html;
+use Filament\Schemas\Components\Section;
 use Filament\Schemas\Schema;
 use Filament\Tables\Columns\IconColumn;
 use Filament\Tables\Columns\TextColumn;
@@ -126,6 +128,11 @@ function componentStylesheetMap(): array
         Action::class => 'actions/resources/css/actions.css',
         DeleteAction::class => 'actions/resources/css/actions.css',
         EditAction::class => 'actions/resources/css/actions.css',
+
+        // Layout. Section's own rules are imported; Html renders its string
+        // with no wrapper of its own, inside chrome theme.css already covers.
+        Section::class => 'schemas/resources/css/components/section.css',
+        Html::class => null,
 
         // Filters render inside the tables container dropdown; they have no
         // stylesheet of their own.
