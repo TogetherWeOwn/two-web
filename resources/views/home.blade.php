@@ -86,7 +86,8 @@
                                              reserves the box (no CLS) the same way the taste concept
                                              does; `object-cover` keeps the crop honest. Lazy: this
                                              sits beside/below the hero, not in the LCP path. --}}
-                                        <img src="{{ $item->image_url }}" alt="{{ $item->imageAltText() }}" loading="lazy" decoding="async" class="mt-5 aspect-video w-full border border-ledger-rule object-cover">
+                                        {{-- TOG-7473: referrerpolicy keeps the third-party image host from learning which page a visitor is on. --}}
+                                        <img src="{{ $item->image_url }}" alt="{{ $item->imageAltText() }}" loading="lazy" decoding="async" referrerpolicy="no-referrer" class="mt-5 aspect-video w-full border border-ledger-rule object-cover">
                                     @endif
                                 </article>
                             @endforeach
