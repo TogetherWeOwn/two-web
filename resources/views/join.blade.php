@@ -4,6 +4,31 @@
             <h1 class="u-display text-3xl text-ink md:text-5xl">{{ __('join.heading') }}</h1>
             <p class="mt-3 max-w-prose text-lg text-ink-muted">{{ __('join.intro') }}</p>
 
+            {{-- TOG-7320: social proof. Each line renders only when its number is
+                 known — unknown is omitted, never a bare zero standing in for "we
+                 do not know" (the rule the landing page's counts hold). Both
+                 reads are non-throwing, so a dark bot database or our own
+                 database being down leaves the pitch and both buttons intact. --}}
+            @if ($counts->hasMemberCount() || $upcomingEventCount !== null)
+                <p class="mt-4 max-w-prose text-base text-ink-muted" data-testid="join-proof">
+                    @if ($counts->hasMemberCount())
+                        <span class="u-numeric font-bold text-ink">{{ $counts->memberCount }}</span>
+                        {{ $counts->memberCount === 1 ? __('join.member_singular') : __('join.member_plural') }}
+                    @endif
+                    @if ($counts->hasMemberCount() && $upcomingEventCount !== null)
+                        <span aria-hidden="true"> · </span>
+                    @endif
+                    @if ($upcomingEventCount !== null)
+                        @if ($upcomingEventCount === 0)
+                            {{ __('join.event_none') }}
+                        @else
+                            <span class="u-numeric font-bold text-ink">{{ $upcomingEventCount }}</span>
+                            <a href="{{ route('events.index') }}" class="underline">{{ $upcomingEventCount === 1 ? __('join.event_singular') : __('join.event_plural') }}</a>
+                        @endif
+                    @endif
+                </p>
+            @endif
+
             @if (session('join_result'))
                 @php($success = in_array(session('join_result'), ['added', 'already_member'], true))
                 <p class="mt-6 rounded-lg border border-line bg-surface p-4 text-ink"

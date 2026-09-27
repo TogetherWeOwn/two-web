@@ -13,6 +13,11 @@ return [
         'You land as a Prospect. Finish Discord’s rules screening before you can post.',
         'Turn up, say hello, come back. Show up a few times and you become a Member.',
     ],
+    'member_singular' => 'member',
+    'member_plural' => 'members',
+    'event_none' => 'No upcoming events right now',
+    'event_singular' => 'upcoming event',
+    'event_plural' => 'upcoming events',
     'result' => [
         'added' => 'You are in. Finish Discord’s rules screening before you can post.',
         'already_member' => 'You are already in the server.',
