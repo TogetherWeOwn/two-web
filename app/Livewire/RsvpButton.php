@@ -86,12 +86,17 @@ class RsvpButton extends Component
             // success: on failure the button stays put, so focus is already
             // where it belongs.
             $this->dispatch('rsvp-state-changed')->self();
+            $this->refreshGoingCount();
         } catch (EventAtCapacityException) {
             $this->full = true;
+            // Somebody else took the last seat: the badge this card shows is
+            // stale by one even though this member got nothing.
+            $this->refreshGoingCount();
         } catch (EventNotOpenException) {
             // Cancelled or already over while they were looking at it. Re-rendering
             // against the fresh row is the honest answer; the reason shows there.
             $this->event = $this->event->fresh() ?? $this->event;
+            $this->refreshGoingCount();
         } catch (ThrottleRequestsException $exception) {
             // Unlike an internal write failure, this is an intentional HTTP refusal.
             // Let Livewire return the 429 and its Retry-After rather than rendering a
@@ -121,11 +126,23 @@ class RsvpButton extends Component
             // TOG-6956: same swap in reverse — the withdraw control is replaced
             // by the "I'm in" button. Refocus after the successful round trip.
             $this->dispatch('rsvp-state-changed')->self();
+            $this->refreshGoingCount();
         } catch (ThrottleRequestsException $exception) {
             throw $exception;
         } catch (Throwable) {
             $this->failed = true;
         }
+    }
+
+    /**
+     * The going-count badge lives in the event card partial, outside this
+     * component's boundary, so a morph here never touches it (TOG-6355). This
+     * asks the parent calendar to re-render with a fresh eager aggregate
+     * rather than reaching across the boundary ourselves.
+     */
+    private function refreshGoingCount(): void
+    {
+        $this->dispatch('rsvp-updated');
     }
 
     public function render(): View
