@@ -530,6 +530,14 @@ body {
     .hallmark-nav__cta,
     .hallmark-join,
     .hallmark-link {
-        transition-duration: 150ms;
+        transition: none;
+    }
+
+    .hallmark-nav__cta:hover,
+    .hallmark-join:hover,
+    .hallmark-nav__cta:active,
+    .hallmark-join:active,
+    .hallmark-link:active {
+        transform: none;
     }
 }
