@@ -384,3 +384,52 @@ it('disables the control while the answer is in flight so it cannot be double-se
 
     expect($html)->toContain('wire:loading.attr="disabled"');
 });
+
+/* ---------------------------------------------------------------------------
+   Focus after the re-render (TOG-6956). A successful RSVP or withdraw swaps
+   the focused control for its replacement, which drops keyboard focus to
+   <body>. The component dispatches to itself on success so the view can move
+   focus to the new state; on failure the button stays put, so no dispatch.
+   --------------------------------------------------------------------------- */
+
+it('dispatches a focus event to itself after a successful RSVP', function () {
+    Livewire::actingAs($this->member)
+        ->test(RsvpButton::class, ['event' => $this->event])
+        ->call('rsvp', RsvpStatus::Going->value)
+        ->assertDispatched('rsvp-state-changed');
+});
+
+it('dispatches a focus event to itself after a successful withdraw', function () {
+    Rsvp::factory()->create([
+        'event_id' => $this->event->id,
+        'user_id' => $this->member->id,
+        'status' => RsvpStatus::Going,
+    ]);
+
+    Livewire::actingAs($this->member)
+        ->test(RsvpButton::class, ['event' => $this->event])
+        ->call('withdraw')
+        ->assertDispatched('rsvp-state-changed');
+});
+
+it('does not dispatch the focus event when the write fails', function () {
+    // Failure keeps the button in place, so focus is already where it belongs.
+    $this->mock(EventService::class)
+        ->shouldReceive('rsvp')
+        ->andThrow(new BotTransportException('down'));
+
+    Livewire::actingAs($this->member)
+        ->test(RsvpButton::class, ['event' => $this->event])
+        ->call('rsvp', RsvpStatus::Going->value)
+        ->assertNotDispatched('rsvp-state-changed');
+});
+
+it('makes the confirmation focusable so keyboard focus can move there', function () {
+    // tabindex="-1": out of the tab order, but focus() works after the swap.
+    $html = Livewire::actingAs($this->member)
+        ->test(RsvpButton::class, ['event' => $this->event])
+        ->call('rsvp', RsvpStatus::Going->value)
+        ->html();
+
+    expect($html)->toContain('tabindex="-1"');
+});
