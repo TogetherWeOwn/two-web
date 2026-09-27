@@ -29,6 +29,17 @@ abstract class DuskTestCase extends BaseTestCase
      */
     protected function driver(): RemoteWebDriver
     {
+        // DUSK_CHROME_ARGS: extra Chrome flags, space-separated, for hosts the
+        // defaults do not cover (TOG-6769). The Paperclip sandbox runs Chrome
+        // as an unprivileged user on a 64M /dev/shm, which needs
+        // `--no-sandbox --disable-dev-shm-usage`; CI runs on a normal runner
+        // and must NOT inherit them (Chrome rejects --no-sandbox for some
+        // non-root builds). Unset there, this is exactly the old default.
+        $rawArgs = $_SERVER['DUSK_CHROME_ARGS'] ?? $_ENV['DUSK_CHROME_ARGS'] ?? '';
+        assert(is_string($rawArgs));
+        /** @var list<string> $extraArgs */
+        $extraArgs = $rawArgs === '' ? [] : array_values(array_filter(preg_split('/\s+/', trim($rawArgs)) ?: []));
+
         $options = (new ChromeOptions)->addArguments(collect([
             $this->shouldStartMaximized() ? '--start-maximized' : '--window-size=1920,1080',
             '--disable-search-engine-choice-screen',
@@ -38,7 +49,7 @@ abstract class DuskTestCase extends BaseTestCase
                 '--disable-gpu',
                 '--headless=new',
             ]);
-        })->all());
+        })->merge($extraArgs)->all());
 
         $chromeBinary = $_ENV['CHROME_BIN'] ?? getenv('CHROME_BIN') ?: null;
 
