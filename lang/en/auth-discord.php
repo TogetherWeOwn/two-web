@@ -14,4 +14,9 @@ return [
 
     'unavailable' => 'Discord did not answer just now, so we could not sign you in. This is on Discord, not you — please try again in a minute.',
 
+    'recovery_title' => 'Sign-in did not go through',
+    'recovery_denied' => 'You cancelled the Discord sign-in, so we did not sign you in. Nothing changed — try again whenever you like.',
+    'recovery_error' => 'Discord answered with an error instead of signing you in. Nothing changed — try again whenever you like.',
+    'recovery_retry' => 'Try signing in again',
+
 ];

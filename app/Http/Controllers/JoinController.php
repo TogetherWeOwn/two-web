@@ -42,10 +42,26 @@ final class JoinController
             ->redirect();
     }
 
-    public function callback(Request $request): RedirectResponse
+    public function callback(Request $request): RedirectResponse|View
     {
         if ($request->filled('error')) {
-            return $this->done('denied');
+            // They pressed Cancel on the Discord consent screen
+            // (`access_denied`), or Discord answered the approval with an
+            // error instead of a code. Either way there is nothing to
+            // exchange, so this is a page that says what happened with one
+            // button to try again — not a redirect whose banner is easy to
+            // miss after a round trip to Discord and back.
+            //
+            // Discord's own `error_description` is never rendered: it is a
+            // third-party string and not ours to echo.
+            $denied = $request->query('error') === 'access_denied';
+
+            return view('oauth.recovery', [
+                'title' => __('join.recovery_title'),
+                'message' => $denied ? __('join.recovery_denied') : __('join.recovery_error'),
+                'retryUrl' => route('join.redirect'),
+                'retryLabel' => __('join.recovery_retry'),
+            ]);
         }
 
         try {

@@ -131,3 +131,40 @@ it('carries a validated source through the OAuth state and logs it with the outc
     ])->once();
     expect(session('join_source'))->toBeNull();
 });
+
+// ---------------------------------------------------------------------------
+// The error-param path. Discord sends the member back with `error` instead of
+// a code — most often `access_denied` after pressing Cancel. That renders the
+// recovery page directly: what happened, one button to try again. Discord's
+// own error_description is never echoed back.
+//
+// No Socialite stub here on purpose: the callback must return before any
+// token exchange is attempted, so an unstubbed Socialite would error if the
+// controller tried to call Discord.
+// ---------------------------------------------------------------------------
+
+it('shows the recovery page when a member says no on the Discord approval screen', function () {
+    $response = $this->get('/join/callback?error=access_denied&error_description=The+user+denied+access');
+
+    $response->assertOk()
+        ->assertSee(__('join.recovery_denied'), escape: false)
+        ->assertSeeHtml('data-testid="oauth-recovery"')
+        ->assertSeeHtml('data-testid="oauth-recovery-retry"')
+        ->assertSee(route('join.redirect'), escape: false);
+
+    $this->assertGuest();
+    expect(User::query()->count())->toBe(0);
+});
+
+it('shows the recovery page with the generic message for any other OAuth error', function () {
+    $response = $this->get('/join/callback?error=server_error&error_description=Something+broke+over+there');
+
+    $response->assertOk()
+        ->assertSee(__('join.recovery_error'), escape: false)
+        ->assertSeeHtml('data-testid="oauth-recovery"')
+        ->assertSeeHtml('data-testid="oauth-recovery-retry"')
+        ->assertDontSee('Something broke over there', escape: false);
+
+    $this->assertGuest();
+    expect(User::query()->count())->toBe(0);
+});

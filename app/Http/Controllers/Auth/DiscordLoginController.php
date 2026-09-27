@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Auth;
 
 use App\Models\User;
 use App\Support\Testing\DiscordProvider as TestingDiscordProvider;
+use Illuminate\Contracts\View\View;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Carbon;
@@ -51,11 +52,26 @@ class DiscordLoginController
     }
 
     /** Discord sends them back here, either with a code or with a complaint. */
-    public function callback(Request $request): RedirectResponse
+    public function callback(Request $request): RedirectResponse|View
     {
-        // They pressed Cancel on the Discord consent screen. Not an error, just a no.
+        // They pressed Cancel on the Discord consent screen
+        // (`access_denied`), or Discord answered the login with an error
+        // instead of a code. Either way there is nothing to exchange, so this
+        // is a page that says what happened with one button to try again —
+        // not a redirect whose banner is easy to miss after a round trip to
+        // Discord and back. Not an error on their part, just a no.
+        //
+        // Discord's own `error_description` is never rendered: it is a
+        // third-party string and not ours to echo.
         if ($request->filled('error')) {
-            return $this->failed('denied');
+            $denied = $request->query('error') === 'access_denied';
+
+            return view('oauth.recovery', [
+                'title' => __('auth-discord.recovery_title'),
+                'message' => $denied ? __('auth-discord.recovery_denied') : __('auth-discord.recovery_error'),
+                'retryUrl' => route('login'),
+                'retryLabel' => __('auth-discord.recovery_retry'),
+            ]);
         }
 
         try {
