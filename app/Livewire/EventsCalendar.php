@@ -88,6 +88,13 @@ class EventsCalendar extends Component
             // one is "we are new", the other is "there was a last one".
             'emptyState' => $upcoming->isEmpty() ? ($past->isEmpty() ? 'never' : 'no-upcoming') : null,
             'lastEventAgo' => $past->first()?->endsAtLocal()->diffForHumans(),
+            // Share tags (TOG-5624). `layoutData` merges into the `#[Layout]`
+            // params above — the attribute params win on conflict, but these keys
+            // are new, so there is no conflict. `route()` builds from APP_URL,
+            // never a hardcoded hostname.
+        ])->layoutData([
+            'canonical' => route('events.index'),
+            'shareDescription' => 'Game nights, tournaments and whatever else the community puts on.',
         ]);
     }
 

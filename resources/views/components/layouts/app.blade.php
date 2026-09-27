@@ -37,6 +37,16 @@
         <meta name="robots" content="{{ $robots }}">
     @endif
     <title>{{ $title ?? config('app.name') }}</title>
+    {{-- Share tags (TOG-5624). A page opts in by passing `canonical`; the OG /
+         Twitter title falls back to the page <title> so the two cannot drift
+         apart. Pages without a canonical get no share tags. --}}
+    @if (isset($canonical))
+        @include('partials.share-meta', [
+            'canonical' => $canonical,
+            'shareTitle' => $shareTitle ?? $title ?? config('app.name'),
+            'shareDescription' => $shareDescription ?? null,
+        ])
+    @endif
     {{-- Archivo is self-hosted and the headline uses its width axis. Without
          this the hero reflows on first paint and the join button moves. --}}
     <link rel="preload" href="/fonts/archivo-latin.woff2" as="font" type="font/woff2" crossorigin>
