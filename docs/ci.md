@@ -527,6 +527,32 @@ on an old release — the same skew in the other direction.
 Pinned by `tests/Unit/QueueDrainOnDeployTest.php`, which asserts this section
 still names the command, the placement, and the bound.
 
+### Queue drill: prove a stuck queue and a dead job both surface (TOG-6948)
+
+Two probes, one drill, run **on the staging box** after each deploy until the
+worker story settles. Both read the box's own database, which is the one place
+the answer means anything — CI never sees staging's queue.
+
+1. **Stuck queue:** `php artisan queue:check-depth --json`. Pending climbing
+   past `--warn` (default 20) is RSVP lag a member can see; past `--critical`
+   (default 100) points at the worker being down rather than busy. The counting
+   is pinned by `tests/Feature/Console/CheckQueueDepthCommandTest.php`.
+2. **Dead job:** `php artisan queue:poison-probe --json`, then tail the log for
+   `Queue job failed.` — one critical line per failed job, with the class,
+   queue and exception message, logged by the `Queue::failing` listener in
+   `AppServiceProvider`. The probe dispatches a self-failing job, runs the
+   worker once against it, and reports the `failed_jobs` row it landed in.
+   Clean the probe row up afterwards with `php artisan queue:forget <uuid>`
+   (the uuid is in the probe output), or retry it with `php artisan queue:retry`.
+   The chain is pinned by `tests/Feature/Console/QueuePoisonProbeTest.php`.
+
+A real failure lands the same way: the worker already owns recovery (the
+ten-minute `events:reconcile` pass re-dispatches what never mirrored), and the
+critical line is the part that tells a tired person to go look. If neither
+probe reports and no critical line appears, the queue is healthy — the drill
+existing is what makes that reading trustworthy, in the same tradition as
+`discord:check-moderators` above.
+
 ### Production deploys are dispatch-only, behind a required reviewer
 
 Production ships from GitHub Actions, and only ever that way: `workflow_dispatch`
