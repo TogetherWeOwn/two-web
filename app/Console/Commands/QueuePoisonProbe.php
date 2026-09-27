@@ -28,14 +28,17 @@ use RuntimeException;
  * in the log. On the staging box the drill is: run this, tail the log, see the
  * critical line. That is the whole acceptance.
  *
- * The command dispatches the poison and then processes it with the queue
- * worker directly (the same `runNextJob` + `WorkerOptions` the `queue:work
- * --once` command uses), rather than nesting an Artisan call: a nested
- * `queue:work` re-registers its own `JobFailed` table writer per invocation
- * and its static listener guard makes repeated runs inside one process
- * unreliable, while the direct call writes the dead letter exactly once per
- * run. The probe row is marked by its marker so it can be identified and —
- * on a box, by hand — retried or forgotten afterwards.
+ * The command dispatches the poison and then runs `queue:work --once`
+ * against it as a silent nested call, and reports what happened:
+ *
+ *   php artisan queue:poison-probe --json
+ *
+ * Silent matters: a plain nested `call()` shares this command's output
+ * buffer, so the worker's own chatter would land ahead of the `--json`
+ * payload and break machine parsing of the probe output. `callSilent`
+ * keeps the buffer for the report alone. The probe row is marked by its
+ * marker so it can be identified and — on a box, by hand — retried or
+ * forgotten afterwards.
  */
 class QueuePoisonProbe extends Command
 {
@@ -64,7 +67,7 @@ class QueuePoisonProbe extends Command
 
         $before = $this->failedCount();
 
-        $exit = $this->call('queue:work', [
+        $exit = $this->callSilent('queue:work', [
             '--once' => true,
             '--tries' => 1,
             '--sleep' => 0,

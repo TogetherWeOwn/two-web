@@ -176,12 +176,17 @@ class AppServiceProvider extends ServiceProvider
         // to remember to query the table. `failing` fires for every driver —
         // database, sync, null — and for jobs that call `fail()` themselves as
         // well as jobs the worker gives up on, so the dead-letter path and the
-        // exhausted-retries path both land here.
+        // exhausted-retries path both land here. `job` is the class via
+        // resolveQueuedJobClass, not resolveName: a job with a displayName
+        // (like the poison probe's marker) would otherwise log the instance
+        // label where a greppable class belongs. The instance label still goes
+        // out as `display`, so the alert carries both what broke and which one.
         Queue::failing(function (JobFailed $event): void {
             Log::critical('Queue job failed.', [
                 'connection' => $event->connectionName,
                 'queue' => $event->job->getQueue(),
-                'job' => $event->job->resolveName(),
+                'job' => $event->job->resolveQueuedJobClass(),
+                'display' => $event->job->resolveName(),
                 'attempts' => $event->job->attempts(),
                 'exception' => get_class($event->exception),
                 'message' => $event->exception->getMessage(),
