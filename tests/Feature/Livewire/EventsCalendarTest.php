@@ -222,6 +222,21 @@ it('offers both views and starts on the list, which is the one that works at 360
         ->assertSeeHtml('data-testid="events-view-calendar"');
 });
 
+it('presents the view switcher as toggle buttons, not a radiogroup', function () {
+    // TOG-6958: the switcher claimed role="radiogroup"/"radio", which promises
+    // arrow-key handling and roving tabindex it never implemented. Plain
+    // buttons with aria-pressed make no such promise.
+    $html = Livewire::test(EventsCalendar::class)->html();
+
+    expect($html)
+        ->not->toContain('radiogroup')
+        ->not->toContain('role="radio"')
+        ->not->toContain('aria-checked')
+        ->toContain('role="group"')
+        ->toContain('aria-pressed="true"')
+        ->toContain('aria-pressed="false"');
+});
+
 it('switches to the calendar view and renders a real month grid', function () {
     upcomingEvent();
 

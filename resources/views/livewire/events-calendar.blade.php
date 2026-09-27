@@ -14,19 +14,22 @@
             </p>
         </div>
 
-        {{-- A radio group, not two buttons: it is one choice with two options, and
-             that is what a screen reader should hear. The archive link sits
-             beside it, not inside it — history is a destination, not a third
-             view, and a link that acted as a radio option would lie about
-             what it does. --}}
+        {{-- A group of toggle buttons, not a radiogroup: one choice with two
+             options, each staying in the Tab order with Space/Enter to switch.
+             TOG-6958: the markup previously claimed role="radiogroup"/"radio",
+             which promises ArrowLeft/ArrowRight handling and roving tabindex
+             the buttons never implemented — a screen reader told "radio group"
+             expects arrows to work. A group with aria-pressed makes no such
+             promise and needs no JS to keep. The archive link sits beside it,
+             not inside it — history is a destination, not a third view, and a
+             link that acted as a toggle option would lie about what it does. --}}
         <div class="flex items-center gap-3 self-start">
             <div class="flex items-center gap-1 rounded-md border border-line bg-surface p-1"
-                 role="radiogroup" aria-label="How to show the events">
+                 role="group" aria-label="How to show the events">
                 @foreach (['list' => 'List', 'calendar' => 'Calendar'] as $key => $label)
                     <button type="button"
                             wire:click="setView('{{ $key }}')"
-                            role="radio"
-                            aria-checked="{{ $view === $key ? 'true' : 'false' }}"
+                            aria-pressed="{{ $view === $key ? 'true' : 'false' }}"
                             data-testid="events-view-{{ $key }}"
                             @class([
                                 'min-h-11 px-4 rounded-md text-sm font-medium transition-colors duration-fast ease-out-quick',
