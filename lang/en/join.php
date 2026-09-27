@@ -8,6 +8,7 @@ return [
     'recovery_discord_down' => 'We could not complete the Discord approval just now. Try again in a minute, or use the invite below.',
     'recovery_retry' => 'Try joining again',
     'invite' => 'Use the Discord invite instead',
+    'reinvite' => 'Rejoin with the Discord invite',
     'widget_title' => 'The lobby, live',
     'widget_note' => 'Who is online right now, straight from Discord. If this does not load, the invite link above still works.',
     'expect_heading' => 'What happens when you join',

@@ -21,6 +21,17 @@
                role="{{ $joinSuccess ? 'status' : 'alert' }}"
                data-testid="join-result">
                 {{ __('join.result.'.session('join_result')) }}
+                @if (session('join_result') === 'already_member')
+                    {{-- TOG-7318: re-invite. One-click success lands on this
+                         page, so already_member members who left the server
+                         need the way back in here. Links the database-free
+                         /discord funnel (see join.blade.php for the reasoning). --}}
+                    <a href="{{ route('discord') }}"
+                       data-testid="reinvite-link"
+                       class="underline">
+                        {{ __('join.reinvite') }}
+                    </a>
+                @endif
             </p>
         </div>
     @endif
