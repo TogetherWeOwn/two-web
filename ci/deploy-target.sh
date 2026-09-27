@@ -73,14 +73,17 @@ HOOK="$(strip "${COOLIFY_STAGING_DEPLOY_HOOK:-}")"
 URL="$(strip "${STAGING_URL:-}")"
 PRODUCTION_HOOK="$(strip "${COOLIFY_PRODUCTION_DEPLOY_HOOK:-}")"
 
-# Tripwire. Nothing in this repo consumes a production hook: production ships by
-# hand from the hosting dashboard after the checklist in docs/ci.md, because the
-# `environment:` approval gate is unenforceable on our plan (TWO-91, TOG-118). If
-# one appears, somebody is part-way through rebuilding the path that was removed.
-# A warning and not a failure — this is a staging deploy and it should not go red
-# over a secret it never reads.
+# Tripwire. This reads only the staging hook: `COOLIFY_PRODUCTION_DEPLOY_HOOK`
+# belongs to the `production` job in deploy.yml, which runs it through
+# ci/deploy-target-production.sh — the same fail-closed contract as this script
+# (TOG-913), restored on TOG-6912 once the org's Enterprise Cloud plan made the
+# `production` environment's required reviewers enforceable (TWO-91, TOG-118
+# superseded). If a production hook appears, that job is its only reader, and it
+# is dispatch-only plus reviewer-gated, so a staging deploy has nothing to say
+# about it. The warning below stays for one reason: if the production job ever
+# stops reading its own hook, the secret's appearance here is the signal.
 if [ -n "$PRODUCTION_HOOK" ]; then
-  say "::warning::COOLIFY_PRODUCTION_DEPLOY_HOOK is set, but this workflow deploys staging only and nothing reads that secret. Production deploys are manual, from the hosting dashboard, after the release checklist in docs/ci.md. See TWO-91 and TOG-118 before adding a production job back."
+  say "::warning::COOLIFY_PRODUCTION_DEPLOY_HOOK is set. Only the reviewer-gated production job reads it (ci/deploy-target-production.sh, TOG-6912); this staging job never touches it."
 fi
 
 # Both halves are required, and a partial configuration is worse than none: a hook
