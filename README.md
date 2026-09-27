@@ -74,6 +74,22 @@ All three must be green before you open a pull request. If `composer check` is r
 on a fresh clone, that is a bug in this README or in the scaffold — say so, do not
 work around it.
 
+### Smoke-check staging after a deploy
+
+```bash
+bin/smoke-staging.sh https://staging.togetherweown.com
+```
+
+Asserts `/up` → 200, `/discord` → 302 to a Discord invite, `/` → 200, and
+`/events.json` → 302 to the Discord login handoff for guests (that route lives
+inside the `auth` group, so an unauthenticated 200 is impossible by design).
+Prints PASS/FAIL per check; exit 0 when all pass. Staging sits behind
+Cloudflare Access — export `CF_ACCESS_CLIENT_ID` and `CF_ACCESS_CLIENT_SECRET`
+(a service token, never committed) so the edge lets the probe through, and pass
+`--cookie 'two_web_session=...'` with a real staging session to also assert the
+authenticated `/events.json` → 200. `bin/smoke-staging.sh --selftest` runs the
+checks against a local stub with no network.
+
 ---
 
 ## Day-to-day commands
