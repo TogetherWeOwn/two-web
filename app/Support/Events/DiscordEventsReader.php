@@ -26,8 +26,14 @@ use Throwable;
  * Follows the CountsReader contract: one cached `select` against a versioned
  * view, and never a throw. An unreachable bot database degrades to no rows,
  * not to a broken page.
+ *
+ * The class itself is not readonly: the services are readonly individually,
+ * but `$failed` below is mutable per-read state — the branch the error empty
+ * state hangs on. A readonly class cannot hold that flag (readonly properties
+ * can neither default nor be reassigned), and this file fatals at load if it
+ * tries.
  */
-final readonly class DiscordEventsReader implements DiscordEventsSource
+final class DiscordEventsReader implements DiscordEventsSource
 {
     /**
      * The bot's scheduled-events collector runs every ten minutes, so a
@@ -46,8 +52,8 @@ final readonly class DiscordEventsReader implements DiscordEventsSource
     private const ASSUMED_DURATION_HOURS = 1;
 
     public function __construct(
-        private DatabaseManager $db,
-        private CacheRepository $cache,
+        private readonly DatabaseManager $db,
+        private readonly CacheRepository $cache,
     ) {}
 
     private bool $failed = false;

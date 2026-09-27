@@ -9,7 +9,8 @@ use App\Support\Events\DiscordEventsSource;
 use Carbon\CarbonImmutable;
 use Carbon\Exceptions\InvalidFormatException;
 use Illuminate\Database\Eloquent\Builder;
-use Illuminate\Database\Eloquent\Collection;
+use Illuminate\Database\Eloquent\Collection as EloquentCollection;
+use Illuminate\Support\Collection as SupportCollection;
 use Illuminate\Support\Facades\Gate;
 use Illuminate\View\View;
 use Livewire\Attributes\Layout;
@@ -47,7 +48,14 @@ class EventsCalendar extends Component
         // Open on the month the next event is actually in. Defaulting to today
         // shows an empty grid whenever the next game night is three weeks out,
         // which reads as "nothing is planned" while an event sits one click away.
-        $this->month = ($this->upcoming()->first()?->startsAtLocal() ?? CarbonImmutable::now())
+        //
+        // Only local rows are read here, deliberately. A Discord fetch in
+        // `mount()` would consume the mock's scripted read before `render()`
+        // ever runs — the error state would never render in tests, and a
+        // retry could never show the recovered event. The month may lag the
+        // Discord rows by one render on first paint; correctness of the
+        // empty-vs-failure branch matters more than the grid's opening month.
+        $this->month = ($this->upcoming(collect())->first()?->startsAtLocal() ?? CarbonImmutable::now())
             ->format('Y-m');
     }
 
@@ -91,7 +99,22 @@ class EventsCalendar extends Component
 
     public function render(): View
     {
-        $upcoming = $this->upcoming();
+        // One resolve per render: the source is bound transient, so each
+        // `app()` call is a fresh reader with a fresh failure flag. The
+        // rows and the flag MUST come from the same instance — asking a
+        // second resolve whether the first one's read failed is always "no",
+        // which would silently turn every error state into the
+        // never-scheduled one.
+        $discord = app(DiscordEventsSource::class);
+        $discordRows = collect($discord->upcoming())
+            // The view already filters to scheduled/active within 90 days, but
+            // the boundary is the bot's clock, not ours — re-check the end
+            // against now so a just-started event cannot linger here forever
+            // if the collector goes dark.
+            ->filter(fn (Event $event): bool => $event->ends_at >= now());
+        $discordFailed = $discord->lastReadFailed();
+
+        $upcoming = $this->upcoming($discordRows);
         $past = $this->past();
 
         return view('livewire.events-calendar', [
@@ -105,7 +128,7 @@ class EventsCalendar extends Component
             // one. The flag only matters when nothing upcoming is shown: a
             // failure beside visible events is invisible by design.
             'emptyState' => $upcoming->isEmpty()
-                ? (app(DiscordEventsSource::class)->lastReadFailed() ? 'error' : ($past->isEmpty() ? 'never' : 'gap'))
+                ? ($discordFailed ? 'error' : ($past->isEmpty() ? 'never' : 'gap'))
                 : null,
             // The gap state's "Last time:" line: the most recent past event.
             // Past rows are newest first, so this is the head of the same
@@ -127,27 +150,22 @@ class EventsCalendar extends Component
      * transients merged here, in start order with the local rows — never
      * persisted, never published, never handed to the write-back.
      *
-     * @return Collection<int, Event>
+     * @param  SupportCollection<int, Event>  $discordRows  Already fetched from the
+     *                                                      render's single source resolve.
+     * @return SupportCollection<int, Event>
      */
-    private function upcoming(): Collection
+    private function upcoming(SupportCollection $discordRows): SupportCollection
     {
         $local = $this->visible()
             ->where('ends_at', '>=', now())
             ->orderBy('starts_at')
             ->get();
 
-        $discord = collect(app(DiscordEventsSource::class)->upcoming())
-            // The view already filters to scheduled/active within 90 days, but
-            // the boundary is the bot's clock, not ours — re-check the end
-            // against now so a just-started event cannot linger here forever
-            // if the collector goes dark.
-            ->filter(fn (Event $event): bool => $event->ends_at >= now());
-
-        return $local->concat($discord)->sortBy(fn (Event $event): int => $event->starts_at->getTimestamp())->values();
+        return $local->concat($discordRows)->sortBy(fn (Event $event): int => $event->starts_at->getTimestamp())->values();
     }
 
-    /** @return Collection<int, Event> Most recent first — "the last one was…". */
-    private function past(): Collection
+    /** @return EloquentCollection<int, Event> Most recent first — "the last one was…". */
+    private function past(): EloquentCollection
     {
         return $this->visible()
             ->where('ends_at', '<', now())
@@ -179,10 +197,10 @@ class EventsCalendar extends Component
      * flagged. A grid that starts mid-row is harder to read than one that shows
      * the 29th of last month greyed out.
      *
-     * @param  Collection<int, Event>  $events
+     * @param  SupportCollection<int, Event>  $events
      * @return list<list<array{date: CarbonImmutable, inMonth: bool, isToday: bool, events: list<Event>}>>
      */
-    private function weeks(Collection $events): array
+    private function weeks(SupportCollection $events): array
     {
         $start = $this->monthStart();
 

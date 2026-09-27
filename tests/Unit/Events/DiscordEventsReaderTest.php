@@ -2,9 +2,9 @@
 
 use App\Enums\EventStatus;
 use App\Support\Events\DiscordEventsReader;
+use Illuminate\Contracts\Cache\Repository as CacheRepository;
 use Illuminate\Database\Connection;
 use Illuminate\Database\DatabaseManager;
-use Illuminate\Contracts\Cache\Repository as CacheRepository;
 use Illuminate\Support\Facades\Log;
 
 function discordReader(Connection $connection): DiscordEventsReader
@@ -75,8 +75,16 @@ it('renders nothing, not an error, when the bot database is unreachable', functi
     $db = Mockery::mock(DatabaseManager::class);
     $db->shouldReceive('connection')->once()->with('bot')->andThrow(new RuntimeException('secret connection string'));
 
+    // A passthrough, not `shouldNotReceive`: the reader always calls
+    // `remember()` first and the connection throws *inside* the closure. A
+    // never-receive expectation makes the cache mock itself throw a
+    // `TypeError`, which the reader catches and logs as `TypeError` — the
+    // `[]` and the flag still come out right, but the Log assertion then
+    // fails on the wrong exception class.
     $cache = Mockery::mock(CacheRepository::class);
-    $cache->shouldNotReceive('remember');
+    $cache->shouldReceive('remember')->once()->andReturnUsing(
+        fn (string $key, int $ttl, Closure $read): mixed => $read(),
+    );
 
     $reader = new DiscordEventsReader($db, $cache);
 

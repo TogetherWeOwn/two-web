@@ -6,6 +6,7 @@ use App\Livewire\EventsCalendar;
 use App\Models\Event;
 use App\Models\Rsvp;
 use App\Models\User;
+use App\Support\Events\DiscordEventsSource;
 use Livewire\Livewire;
 
 /**
@@ -197,7 +198,9 @@ it('renders the error state, never the never-scheduled one, when the Discord rea
 
     Livewire::test(EventsCalendar::class)
         ->assertSeeHtml('data-testid="events-empty-error"')
-        ->assertSee("We couldn't load the calendar.")
+        // `assertSee` escapes the needle (`'` → `&#039;`) while the rendered
+        // page carries the raw apostrophe, so assert the copy unescaped.
+        ->assertSee("We couldn't load the calendar.", escape: false)
         ->assertSee('The Discord always has the latest — come ask there.')
         ->assertSee('Retry')
         ->assertSee('Join the Discord')
@@ -216,10 +219,10 @@ it('keeps the List/Calendar toggle visible in the error state', function () {
 });
 
 it('retries the read when asked, showing the calendar if the bot is back', function () {
-    $source = Mockery::mock(App\Support\Events\DiscordEventsSource::class);
+    $source = Mockery::mock(DiscordEventsSource::class);
     $source->shouldReceive('upcoming')->andReturn([], [sundaySquadEvent()]);
     $source->shouldReceive('lastReadFailed')->andReturn(true, false);
-    app()->instance(App\Support\Events\DiscordEventsSource::class, $source);
+    app()->instance(DiscordEventsSource::class, $source);
 
     Livewire::test(EventsCalendar::class)
         ->assertSeeHtml('data-testid="events-empty-error"')
@@ -240,9 +243,13 @@ it('hides a failed Discord read behind visible events rather than erroring the p
 it('shows the past events once they are asked for', function () {
     pastEvent();
 
+    // The gap state's inline history names the past event before `showPast`
+    // is ever called, so the "hidden until asked" assertion targets the
+    // full past list, not the title text.
     Livewire::test(EventsCalendar::class)
-        ->assertDontSee('Last week s Valorant night')
+        ->assertDontSeeHtml('data-testid="events-past-list"')
         ->call('showPast')
+        ->assertSeeHtml('data-testid="events-past-list"')
         ->assertSee('Last week s Valorant night');
 });
 
@@ -445,10 +452,10 @@ function sundaySquadEvent(): Event
 
 function mockDiscordEvents(array $events, bool $failed = false): void
 {
-    $source = Mockery::mock(App\Support\Events\DiscordEventsSource::class);
+    $source = Mockery::mock(DiscordEventsSource::class);
     $source->shouldReceive('upcoming')->andReturn($events);
     $source->shouldReceive('lastReadFailed')->andReturn($failed);
-    app()->instance(App\Support\Events\DiscordEventsSource::class, $source);
+    app()->instance(DiscordEventsSource::class, $source);
 }
 
 it('lists the guild Sunday Squad event even when our own table is empty', function () {
@@ -495,10 +502,10 @@ it('orders Discord rows with local rows by start time', function () {
 it('renders the error state, not the never-scheduled one, when the bot database is unreachable', function () {
     // TOG-5318 supersedes the old degrade-to-empty contract: a failed read is
     // the error empty state, never E1.
-    $source = Mockery::mock(App\Support\Events\DiscordEventsSource::class);
+    $source = Mockery::mock(DiscordEventsSource::class);
     $source->shouldReceive('upcoming')->andReturn([]);
     $source->shouldReceive('lastReadFailed')->andReturn(true);
-    app()->instance(App\Support\Events\DiscordEventsSource::class, $source);
+    app()->instance(DiscordEventsSource::class, $source);
 
     Livewire::test(EventsCalendar::class)
         ->assertSeeHtml('data-testid="events-empty-error"')
