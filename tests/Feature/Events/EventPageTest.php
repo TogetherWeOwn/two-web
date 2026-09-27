@@ -74,6 +74,24 @@ it('shows a signed-in member their existing answer', function () {
         ->assertSeeHtml('data-testid="rsvp-confirmed"');
 });
 
+it('shows a full event as closed on the shareable page, with no seat to take', function () {
+    // `/e/{key}` carries the same RSVP control as the calendar cards, so it
+    // must carry the same closed state: a link passed around Discord lands
+    // here, and a member arriving after the cap must not be offered a button
+    // that cannot succeed.
+    $event = publishedEvent(['capacity' => 1]);
+    Rsvp::factory()->for($event)->create(['status' => RsvpStatus::Going]);
+
+    $this->actingAs($this->member)
+        ->get(route('events.page', $event))
+        ->assertOk()
+        ->assertSee("This one's full.", false)
+        ->assertSee('Cap is 1.')
+        ->assertSeeHtml('data-testid="event-full"')
+        ->assertDontSeeHtml('data-testid="rsvp-going"')
+        ->assertDontSee("That RSVP didn't save.", false);
+});
+
 it('hides a draft from guests and members but shows it to moderators', function () {
     $draft = publishedEvent(['status' => EventStatus::Draft]);
 
