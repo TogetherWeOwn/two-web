@@ -3,6 +3,7 @@
 use App\Enums\EventStatus;
 use App\Enums\RsvpStatus;
 use App\Livewire\EventsCalendar;
+use App\Livewire\RsvpButton;
 use App\Models\Event;
 use App\Models\Rsvp;
 use App\Models\User;
@@ -308,5 +309,56 @@ it('does not run a query per event card', function () {
     DB::disableQueryLog();
 
     // Twelve cards. A per-card count would put this well past twenty.
+    expect($queries)->toBeLessThan(12);
+});
+
+it('refreshes the going-count badge when an RSVP answer lands, without a reload', function () {
+    // TOG-6355: the badge lives in the card partial, outside the RSVP button's
+    // morph boundary, so it went stale until a full page load — "You're in"
+    // beside "0 of 8 going". The button dispatches rsvp-updated; this listener
+    // re-renders the calendar with a fresh eager aggregate. Both directions:
+    // the withdraw half went stale the same way ("I'm in" beside "1 of 8").
+    $event = upcomingEvent(['capacity' => 8]);
+
+    $page = Livewire::actingAs($this->member)
+        ->test(EventsCalendar::class)
+        ->assertSee('0 of 8 going');
+
+    Livewire::actingAs($this->member)
+        ->test(RsvpButton::class, ['event' => $event])
+        ->call('rsvp', RsvpStatus::Going->value)
+        ->assertDispatched('rsvp-updated');
+
+    $page->call('refreshAfterRsvp')
+        ->assertSee('1 of 8 going');
+
+    Livewire::actingAs($this->member)
+        ->test(RsvpButton::class, ['event' => $event])
+        ->call('withdraw')
+        ->assertDispatched('rsvp-updated');
+
+    $page->call('refreshAfterRsvp')
+        ->assertSee('0 of 8 going');
+});
+
+it('refreshes the badge with the same bounded queries as the initial render', function () {
+    // TOG-6355 meets TOG-5627: the rsvp-updated listener re-runs render(),
+    // which must reuse the eager `going_count` aggregate rather than adding a
+    // per-card count on the refresh round trip.
+    Event::factory()->count(12)->create([
+        'starts_at' => now()->addDays(3),
+        'ends_at' => now()->addDays(3)->addHours(2),
+        'status' => EventStatus::Published,
+        'capacity' => 6,
+    ]);
+
+    $page = Livewire::actingAs($this->member)->test(EventsCalendar::class)->assertOk();
+
+    DB::enableQueryLog();
+    $page->call('refreshAfterRsvp')->assertOk();
+    $queries = count(DB::getQueryLog());
+    DB::disableQueryLog();
+
+    // Twelve cards. A per-card count on refresh would put this past twenty.
     expect($queries)->toBeLessThan(12);
 });

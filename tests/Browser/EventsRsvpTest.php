@@ -183,6 +183,31 @@ test('a member can stand down again', function () {
     });
 });
 
+test('the going-count badge updates on RSVP and withdraw without a reload', function () {
+    // TOG-6355: after RSVP the card read "You're in" beside "0 of 8 going",
+    // and after withdraw "I'm in" beside "1 of 8 going" — the badge lives in
+    // the card partial, outside the button's morph boundary, so it went stale
+    // until a full page load. 375px is the width the brief names.
+    $member = User::factory()->create();
+    browsableEvent(['capacity' => 8]);
+
+    $this->browse(function (Browser $browser) use ($member) {
+        $browser->loginAs($member)
+            ->resize(375, 780)
+            ->visit('/events')
+            ->waitFor('[data-testid="rsvp-going"]')
+            ->assertSeeIn('[data-testid="event-going-count"]', '0 of 8 going')
+            ->click('[data-testid="rsvp-going"]')
+            ->waitFor('[data-testid="rsvp-confirmed"]')
+            // No refresh between the click and this assertion: that is the bug.
+            ->waitForTextIn('[data-testid="event-going-count"]', '1 of 8 going')
+            ->click('[data-testid="rsvp-withdraw"]')
+            ->waitFor('[data-testid="rsvp-going"]')
+            ->waitForTextIn('[data-testid="event-going-count"]', '0 of 8 going')
+            ->assertMissing('[data-testid="rsvp-confirmed"]');
+    });
+});
+
 test('a guest is asked to log in rather than handed a button that cannot work', function () {
     browsableEvent();
 

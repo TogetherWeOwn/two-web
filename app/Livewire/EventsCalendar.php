@@ -12,6 +12,7 @@ use Illuminate\Database\Eloquent\Collection;
 use Illuminate\Support\Facades\Gate;
 use Illuminate\View\View;
 use Livewire\Attributes\Layout;
+use Livewire\Attributes\On;
 use Livewire\Component;
 
 /**
@@ -63,6 +64,17 @@ class EventsCalendar extends Component
     {
         $this->showingPast = true;
     }
+
+    /**
+     * An RSVP answer changed somewhere below. The going-count badge lives in
+     * the card partial, outside the button component's morph boundary, so it
+     * goes stale until something re-renders this component (TOG-6355). The
+     * method body is deliberately empty: the round trip itself re-runs
+     * `render()` with a fresh eager `going_count`, which is the whole fix.
+     * Same two bounded queries as the initial render — no per-card queries.
+     */
+    #[On('rsvp-updated')]
+    public function refreshAfterRsvp(): void {}
 
     public function nextMonth(): void
     {
