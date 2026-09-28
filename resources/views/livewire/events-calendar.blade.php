@@ -299,7 +299,15 @@
             </button>
         </div>
 
+        {{-- TOG-6932: `role="region"` exposes the aria-label to assistive tech
+             (a plain div's label would never be announced). The region keeps
+             tabindex="0", so it is a tab stop on every viewport — including
+             wide screens where it cannot scroll. That unconditional stop is
+             the known WCAG 2.1.1 trade-off: scrollable content must be
+             keyboard-reachable, and a CSS-only conditional stop is not
+             available here. --}}
         <div class="mt-4 overflow-x-auto"
+             role="region"
              tabindex="0"
              aria-label="Events calendar; scroll horizontally to see all days"
              data-testid="events-calendar-scroll">
