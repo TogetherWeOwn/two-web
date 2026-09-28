@@ -27,6 +27,21 @@ function relatedLinkCount($response): int
     return substr_count($response->getContent(), 'data-testid="event-related-link"');
 }
 
+function relatedSectionHtml($response): string
+{
+    $html = $response->getContent();
+    $marker = 'data-testid="event-related"';
+    $pos = strpos($html, $marker);
+    if ($pos === false) {
+        return '';
+    }
+    $sectionStart = strrpos(substr($html, 0, $pos), '<section');
+    $start = $sectionStart === false ? $pos : $sectionStart;
+    $end = strpos($html, '</section>', $pos);
+
+    return $end === false ? substr($html, $start) : substr($html, $start, $end - $start + strlen('</section>'));
+}
+
 it('shows up to 3 related links for an event with siblings, same game first', function () {
     $event = relatedEvent(['title' => 'Friday Helldivers', 'game' => 'Helldivers 2']);
     relatedEvent(['title' => 'Saturday Helldivers', 'game' => 'Helldivers 2', 'starts_at' => now()->addDays(4), 'ends_at' => now()->addDays(4)->addHours(2)]);
@@ -38,13 +53,17 @@ it('shows up to 3 related links for an event with siblings, same game first', fu
     $response = $this->get(route('events.page', $event))->assertOk();
 
     // Five siblings, four same-game: capped at 3, all same-game.
+    // Negatives are scoped to the related section: excluded titles can still
+    // appear in the prev/next nav (`event-previous`/`event-next`), which is a
+    // different block with its own visibility rule.
     $response->assertSeeHtml('data-testid="event-related"');
     expect(relatedLinkCount($response))->toBe(3);
-    $response->assertSee('Saturday Helldivers')
-        ->assertSee('Sunday Helldivers')
-        ->assertSee('Monday Helldivers')
-        ->assertDontSee('Tuesday Helldivers')
-        ->assertDontSee('Valorant night');
+    $section = relatedSectionHtml($response);
+    expect($section)->toContain('Saturday Helldivers')
+        ->toContain('Sunday Helldivers')
+        ->toContain('Monday Helldivers')
+        ->not->toContain('Tuesday Helldivers')
+        ->not->toContain('Valorant night');
 });
 
 it('fills the block with other upcoming events when same-game siblings run out', function () {
@@ -82,10 +101,13 @@ it('excludes itself, cancelled and past events from the block', function () {
     $response = $this->get(route('events.page', $event))->assertOk();
 
     // One live sibling only: the current event must not count itself.
+    // Negatives are scoped to the related section: the past event can still
+    // appear in the prev/next nav, and the cancelled one answers 410.
     expect(relatedLinkCount($response))->toBe(1);
-    $response->assertSeeHtml('href="'.route('events.page', $sibling).'"')
-        ->assertDontSee('Called off')
-        ->assertDontSee('Last week Helldivers');
+    $section = relatedSectionHtml($response);
+    expect($section)->toContain('href="'.route('events.page', $sibling).'"')
+        ->not->toContain('Called off')
+        ->not->toContain('Last week Helldivers');
 });
 
 it('skips drafts for guests but shows them to moderators', function () {
