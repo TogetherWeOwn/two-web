@@ -6,12 +6,16 @@ use App\Enums\EventStatus;
 use App\Enums\RsvpStatus;
 use App\Exceptions\EventAtCapacityException;
 use App\Exceptions\EventNotOpenException;
+use App\Exceptions\StaleAgentVersionException;
 use App\Jobs\SyncEventToDiscord;
+use App\Models\AgentEventGrant;
 use App\Models\Event;
 use App\Models\Rsvp;
 use App\Models\User;
 use App\Support\EventInput;
+use Illuminate\Database\QueryException;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
 
 /**
  * Everything that changes an event or an answer to one.
@@ -54,6 +58,68 @@ class EventService
         });
     }
 
+    /**
+     * Create the one Draft an agent grant may own (TOG-5510/web, Gate 2).
+     *
+     * The adapted attribution seam: `created_by` stays null — no human hosted
+     * this — and ownership lives in `agent_grant_id` instead. The grant's
+     * caller, scope and quota are checked by the agent ingress before this is
+     * reached; what is enforced here is the shape of the row itself. The
+     * database unique index on `agent_grant_id` is what makes the one-event
+     * quota hold under concurrency rather than under good intentions.
+     */
+    public function createForGrant(AgentEventGrant $grant, EventInput $input, string $proofMarker): Event
+    {
+        return DB::transaction(function () use ($grant, $input, $proofMarker): Event {
+            $event = new Event;
+            $this->fill($event, $input);
+            $event->created_by = null;
+            $event->status = EventStatus::Draft;
+            $event->agent_grant_id = $grant->getKey();
+            $event->proof_marker = $proofMarker;
+            $event->agent_version = 1;
+            $event->save();
+
+            // A draft is never mirrored, so this is a no-op by construction —
+            // called for the same reason as in create(): the day this stops
+            // being a draft-first flow it must not silently stop syncing.
+            $this->syncAfterCommit($event);
+
+            return $event;
+        });
+    }
+
+    /**
+     * Update an agent-owned event under optimistic concurrency (Gate 2).
+     *
+     * The row lock serialises concurrent writers; the version check turns the
+     * loser into a 409 rather than a silent overwrite. Human writes never
+     * touch `agent_version`, so a moderator correcting a typo cannot
+     * invalidate an agent's expected version and vice versa.
+     *
+     * @throws StaleAgentVersionException when the row moved since the caller read it
+     */
+    public function updateForGrant(Event $event, EventInput $input, int $expectedVersion): Event
+    {
+        return DB::transaction(function () use ($event, $input, $expectedVersion): Event {
+            $locked = Event::query()->whereKey($event->getKey())->lockForUpdate()->firstOrFail();
+
+            if ($locked->agent_version !== $expectedVersion) {
+                throw new StaleAgentVersionException($locked, $expectedVersion);
+            }
+
+            $this->fill($locked, $input);
+            $locked->agent_version = $expectedVersion + 1;
+            $locked->save();
+
+            $this->syncAfterCommit($locked);
+
+            $event->setRawAttributes($locked->getAttributes(), true);
+
+            return $event;
+        });
+    }
+
     public function publish(Event $event): Event
     {
         return $this->transitionTo($event, EventStatus::Published);
@@ -86,7 +152,12 @@ class EventService
         return DB::transaction(function () use ($event, $user, $status): Rsvp {
             $locked = Event::query()->whereKey($event->getKey())->lockForUpdate()->firstOrFail();
 
-            if ($locked->status !== EventStatus::Published) {
+            // The clock counts, not just the status: reconcile flips finished rows
+            // to Past every ~10 min, so a recently finished event is still
+            // Published. The page already hides its RSVP button (TOG-7273); the
+            // write path refuses with 409 event_not_open instead. Checked on the
+            // locked row so a concurrent reconcile cannot reopen the window.
+            if ($locked->status !== EventStatus::Published || $locked->hasEnded()) {
                 throw EventNotOpenException::forRsvp($locked);
             }
 
@@ -97,7 +168,9 @@ class EventService
 
             // Only an answer that newly takes a seat has to fit. Someone already
             // going who says so again, or who downgrades to maybe, cannot make the
-            // event more full than it is.
+            // event more full than it is — and a waitlisted answer takes no seat
+            // at all, which is why joining the line on a full event gets past
+            // this check by design rather than by accident.
             $takesASeat = $status === RsvpStatus::Going
                 && $existing?->status !== RsvpStatus::Going;
 
@@ -179,6 +252,25 @@ class EventService
      * is not there yet — or, worse, one that is about to be rolled back. A draft is
      * skipped because Discord has never been shown it, so there is nothing to
      * update and the job would be a no-op that still cost a queue slot.
+     *
+     * The dispatch runs inside a savepoint, not in the write's own transaction
+     * frame. `dispatch()` returns a `PendingDispatch` whose destructor eagerly
+     * acquires the job's `ShouldBeUnique` lock — still inside whatever transaction
+     * is open here. When a write-back for this event is already queued (the 10s
+     * debounce, or a worker running behind), that `insert into cache_locks` hits
+     * the unique key, and on Postgres the one failed statement aborts the whole
+     * enclosing transaction: the fallback `update` then dies with 25P02, the
+     * exception escapes, and the member's RSVP rolls back with it (TOG-6959). The
+     * savepoint confines the lock check to its own subtransaction — a duplicate
+     * lock rolls back to the savepoint and the outer write commits untouched.
+     *
+     * The only queries inside the savepoint are the unique-lock's own
+     * insert/update (payload creation and the queue push touch no tables; the push
+     * itself is deferred by `afterCommit`). So any `QueryException` escaping it
+     * means "no fresh lock for this event", and skipping is correct either way:
+     * the already-queued job re-reads the row when it runs and carries this
+     * change with it. The log line keeps the skip observable; `events:reconcile`
+     * is the backstop if the lock store itself is ever down.
      */
     private function syncAfterCommit(Event $event): void
     {
@@ -186,6 +278,19 @@ class EventService
             return;
         }
 
-        SyncEventToDiscord::dispatch($event->event_key)->afterCommit();
+        try {
+            DB::transaction(function () use ($event): void {
+                SyncEventToDiscord::dispatch($event->event_key)->afterCommit();
+            }, 1);
+        } catch (QueryException $e) {
+            // Name the exception: the expected case is a duplicate unique lock
+            // (the already-queued job carries this change), but a QueryException
+            // from a lock store that is actually down must not read identically.
+            Log::info('Event write-back already queued; skipping duplicate dispatch.', [
+                'event_key' => $event->event_key,
+                'exception' => $e::class,
+                'sqlstate' => $e->getCode(),
+            ]);
+        }
     }
 }

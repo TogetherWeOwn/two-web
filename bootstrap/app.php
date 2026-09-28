@@ -11,6 +11,10 @@ use Illuminate\Support\Facades\Route;
 return Application::configure(basePath: dirname(__DIR__))
     ->withRouting(
         web: __DIR__.'/../routes/web.php',
+        // The machine ingress (TOG-5510/web): stateless `api` group, so no
+        // session, no CSRF and no StartSession database connection before the
+        // controller runs. One route today; nothing human belongs in here.
+        api: __DIR__.'/../routes/api.php',
         commands: __DIR__.'/../routes/console.php',
         health: '/up',
         // The funnel, with a deliberately empty middleware stack. `/discord` has
@@ -61,8 +65,8 @@ return Application::configure(basePath: dirname(__DIR__))
         // If that ever stops being true, name the proxy address here instead.
         $middleware->trustProxies(at: '*');
 
-        // Goes on the admin panel's stack, not on `web`. Every screen that reads
-        // member data must carry it — see docs/member-data-access-log.md.
+        // Goes on the admin panel and member-profile routes, not on `web`.
+        // Every member-data screen must carry it — see docs/member-data-access-log.md.
         $middleware->alias([
             'member-access-log' => RecordMemberDataAccess::class,
         ]);

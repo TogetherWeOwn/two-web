@@ -132,17 +132,41 @@ class RsvpButton extends Component
     {
         $rsvp = $this->currentRsvp();
         $going = $rsvp?->status === RsvpStatus::Going;
+        $waitlisted = $rsvp?->status === RsvpStatus::Waitlisted;
 
         return view('livewire.rsvp-button', [
             'rsvp' => $rsvp,
             'going' => $going,
-            'open' => $this->event->status === EventStatus::Published,
-            // Somebody already holding a seat is never shown a full event: they are
-            // the reason it is full, and they must still be able to stand down.
-            'atCapacity' => ! $going && $this->isAtCapacity(),
+            'waitlisted' => $waitlisted,
+            // The clock counts, not just the status: a recently finished event is
+            // still Published until the reconcile pass flips it to Past, and
+            // offering a button for it would be a lie the write path refuses.
+            'open' => $this->event->status === EventStatus::Published && ! $this->event->hasEnded(),
+            // Somebody already holding a seat — or a place in line — is never
+            // shown a full event: they are the reason it is full (or waiting
+            // for one), and they must still be able to stand down or
+            // leave the line. Trapping them at the refusal is the bug.
+            'atCapacity' => ! $going && ! $waitlisted && $this->isAtCapacity(),
+            // A freed seat while in line: the waitlist does not auto-promote
+            // (that is a race of its own), so the member claims it themselves
+            // through the same locked write as everybody else.
+            'seatOpenForWaitlist' => $waitlisted && $this->event->status === EventStatus::Published && ! $this->event->hasEnded() && ! $this->isAtCapacity(),
+            // One-based place in line, only when it will be shown.
+            'waitlistPosition' => $waitlisted ? $this->waitlistPosition() : null,
             // Committed here, not yet in Discord. A true state, not an error.
             'syncing' => $rsvp !== null && $rsvp->synced_to_discord_at === null,
         ]);
+    }
+
+    private function waitlistPosition(): ?int
+    {
+        $user = auth()->user();
+
+        if (! $user instanceof User) {
+            return null;
+        }
+
+        return $this->event->waitlistPositionFor($user);
     }
 
     private function currentRsvp(): ?Rsvp

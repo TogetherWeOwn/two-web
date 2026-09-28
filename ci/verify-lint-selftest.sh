@@ -271,6 +271,14 @@ expect_fail budget-aggregation-removed 'budget `largest-contentful-paint` is not
 expect_fail admin-exception-widened 'the relaxed `/admin` LCP budget reads' \
   sed -i 's/buildAssertions(3000)/buildAssertions(4000)/' ci/lighthouserc.cjs
 
+# LHCI launching Chrome without the sandbox workarounds. TOG-7021: on the
+# persistent self-hosted hosts a Chrome that cannot sandbox dies at startup and
+# the job fails as `Invalid URL: undefined` with zero assertion results. Both
+# flags match ci/browser/launch.mjs and ci/a11y.mjs; the lint reads chromeFlags
+# through node, so removing either flag — or the whole key — goes red here.
+expect_fail lhci-chrome-flags-dropped 'without `--no-sandbox`' \
+  sed -i "s/chromeFlags: '--no-sandbox --disable-dev-shm-usage',/chromeFlags: '--disable-dev-shm-usage',/" ci/lighthouserc.cjs
+
 # A second entry appended for an audit that already has one. The pinned line is
 # left exactly as it was — and a JavaScript object literal keeps the *last*
 # duplicate key, so lhci loads the new one and the CEO's LCP budget is gone. The

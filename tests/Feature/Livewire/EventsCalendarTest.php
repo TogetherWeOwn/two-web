@@ -384,6 +384,21 @@ it('offers both views and starts on the list, which is the one that works at 360
         ->assertSeeHtml('data-testid="events-view-calendar"');
 });
 
+it('presents the view switcher as toggle buttons, not a radiogroup', function () {
+    // TOG-6958: the switcher claimed role="radiogroup"/"radio", which promises
+    // arrow-key handling and roving tabindex it never implemented. Plain
+    // buttons with aria-pressed make no such promise.
+    $html = Livewire::test(EventsCalendar::class)->html();
+
+    expect($html)
+        ->not->toContain('radiogroup')
+        ->not->toContain('role="radio"')
+        ->not->toContain('aria-checked')
+        ->toContain('role="group"')
+        ->toContain('aria-pressed="true"')
+        ->toContain('aria-pressed="false"');
+});
+
 it('switches to the calendar view and renders a real month grid', function () {
     upcomingEvent();
 
@@ -591,6 +606,44 @@ it('clears the search and brings the full list back', function () {
         ->call('clearSearch')
         ->assertSet('search', '')
         ->assertSee('Sunday Valorant scrims');
+});
+
+/* ---------------------------------------------------------------------------
+   Live-region announcements (TOG-7332). The list <-> calendar swap, the month
+   steps and the past drawer all re-render without reloading, so each change
+   has to be named for screen readers — politely (role="status"), never as an
+   alert.
+   --------------------------------------------------------------------------- */
+
+it('names the current view in a polite live region', function () {
+    Livewire::test(EventsCalendar::class)
+        ->assertSeeHtml('data-testid="events-view-status"')
+        ->assertSee('Showing events as a list.')
+        ->call('setView', 'calendar')
+        ->assertSee('Showing events as a calendar.');
+});
+
+it('announces the past-events reveal, and stays silent until asked', function () {
+    pastEvent();
+
+    // Empty until asked, so the initial load announces nothing.
+    $html = Livewire::test(EventsCalendar::class)->html();
+
+    expect($html)->toContain('data-testid="events-past-status"')
+        ->not->toContain('Showing past events.');
+
+    Livewire::test(EventsCalendar::class)
+        ->call('showPast')
+        ->assertSee('Showing past events.');
+});
+
+it('announces month steps through a polite live month label', function () {
+    $html = Livewire::test(EventsCalendar::class)
+        ->call('setView', 'calendar')
+        ->html();
+
+    expect($html)->toContain('aria-live="polite"')
+        ->toContain('data-testid="calendar-month"');
 });
 
 /* ---------------------------------------------------------------------------

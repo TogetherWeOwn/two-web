@@ -22,6 +22,19 @@ class StoreEventRequest extends AuthenticatedRequest
     /** @return array<string, mixed> */
     public function rules(): array
     {
+        return self::fieldRules();
+    }
+
+    /**
+     * The event field rules, shared with the agent ingress. One rule set for
+     * both callers: a field the human form accepts and the machine path
+     * refuses (or vice versa) is a bug in one of them, and the bot's ceilings
+     * behind them do not care which caller sent the bytes.
+     *
+     * @return array<string, mixed>
+     */
+    public static function fieldRules(): array
+    {
         return [
             // 100 is the bot's limit on `name` in event.upsert. Refusing it here is
             // a validation error the host can fix; letting it through makes it a

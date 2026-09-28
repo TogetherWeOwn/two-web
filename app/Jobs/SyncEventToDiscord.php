@@ -3,6 +3,8 @@
 namespace App\Jobs;
 
 use App\Enums\EventStatus;
+use App\Models\AgentEventAudit;
+use App\Models\AgentEventGrant;
 use App\Models\Event;
 use App\Services\Bot\EventCancel;
 use App\Services\Bot\EventUpsert;
@@ -102,6 +104,14 @@ class SyncEventToDiscord implements ShouldBeUnique, ShouldQueue
             return;
         }
 
+        // An agent-owned event re-checks its grant at dispatch, not just at
+        // ingress: a publish queued before expiry or disable must not reach
+        // Discord after it. Fails rather than releases — expiry and disable
+        // are decisions, not outages, and no backoff outlasts one.
+        if ($event->isAgentOwned() && ! $this->agentGrantActive($event)) {
+            return;
+        }
+
         // A draft has never been announced, so there is no Discord event to update and
         // creating one would publish it early. Past is Discord's to forget.
         if (! $event->isMirroredInDiscord()) {
@@ -196,6 +206,49 @@ class SyncEventToDiscord implements ShouldBeUnique, ShouldQueue
         }
 
         $this->recordSuccess($event, $answer->discordEventId, 'event.cancel');
+    }
+
+    /**
+     * Whether the agent grant behind an owned event is still live, audited.
+     *
+     * Human events never reach here — only agent-owned rows re-check. The
+     * audit row is the evidence the Gate 2 proof needs that a queued publish
+     * died at dispatch rather than slipping through after expiry.
+     */
+    private function agentGrantActive(Event $event): bool
+    {
+        $grant = $event->agent_grant_id === null
+            ? null
+            : AgentEventGrant::query()->find($event->agent_grant_id);
+
+        if ($grant instanceof AgentEventGrant && $grant->isActive()) {
+            return true;
+        }
+
+        $reason = ! $grant instanceof AgentEventGrant
+            ? 'grant_missing'
+            : ($grant->isExpired() ? 'grant_expired' : 'grant_disabled');
+
+        AgentEventAudit::query()->create([
+            'grant_id' => $grant?->getKey(),
+            'operation' => 'dispatch',
+            'event_key' => $event->event_key,
+            'request_id' => $this->idempotencyKey,
+            'result' => 'denied',
+            'reason_code' => $reason,
+            'discord_event_id' => $event->discord_event_id,
+        ]);
+
+        Log::warning('Event write-back stopped at dispatch: the agent grant is no longer live.', [
+            'event_key' => $event->event_key,
+            'reason' => $reason,
+        ]);
+
+        $this->fail(new RuntimeException(
+            "Will not mirror {$event->event_key}: the agent grant is {$reason}."
+        ));
+
+        return false;
     }
 
     /**

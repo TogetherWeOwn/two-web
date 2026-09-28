@@ -1,9 +1,11 @@
 <?php
 
+use App\Enums\EventStatus;
 use App\Http\Controllers\Auth\DiscordLoginController;
 use App\Http\Controllers\Auth\StagingQaLoginController;
 use App\Http\Controllers\DesignLab\HallmarkController;
 use App\Http\Controllers\EventController;
+use App\Http\Controllers\EventFeedController;
 use App\Http\Controllers\EventIcsController;
 use App\Http\Controllers\EventPageController;
 use App\Http\Controllers\EventRssController;
@@ -14,6 +16,7 @@ use App\Http\Controllers\ProfileController;
 use App\Http\Controllers\RsvpController;
 use App\Livewire\EventsCalendar;
 use App\Livewire\PastEvents;
+use App\Models\Event;
 use Illuminate\Support\Facades\Route;
 
 // The landing page reads the bot's counts and the featured rows moderators
@@ -28,8 +31,15 @@ Route::get('/', HomeController::class)->name('home');
 Route::get('/design-lab/hallmark', HallmarkController::class)->name('design-lab.hallmark');
 Route::get('/design-lab/taste', [HomeController::class, 'taste'])->name('design-lab.taste');
 
-// Public pages only. Keep this explicit: auth callbacks, signed-in profiles and
-// event-detail URLs do not belong in the index, while the event collection does.
+// Public pages plus the shareable event pages (TOG-7072). Keep this explicit:
+// auth callbacks, signed-in profiles, the JSON collection and /admin never
+// belong in the index, while the event collection and the live event-detail
+// pages do.
+//
+// Published events only: drafts 403 for guests, cancelled answers 410 Gone
+// (TOG-6781), and past events are over — none of those belong in a crawlable
+// index. The sitemap is fetched without a session, so this is exactly the set
+// a guest can open with a 200.
 Route::get('/sitemap_index.xml', function () {
     $urls = [
         ['loc' => route('home'), 'changefreq' => 'weekly', 'priority' => '1.0'],
@@ -39,15 +49,34 @@ Route::get('/sitemap_index.xml', function () {
         ['loc' => route('rules'), 'changefreq' => 'monthly', 'priority' => '0.7'],
     ];
 
+    $events = Event::query()
+        ->where('status', EventStatus::Published->value)
+        ->orderBy('starts_at')
+        ->get(['event_key', 'updated_at']);
+
+    foreach ($events as $event) {
+        $urls[] = [
+            'loc' => route('events.page', $event),
+            'lastmod' => $event->updated_at?->toAtomString(),
+            'changefreq' => 'weekly',
+            'priority' => '0.6',
+        ];
+    }
+
     return response()
         ->view('sitemap', ['urls' => $urls])
         ->header('Content-Type', 'application/xml; charset=UTF-8');
 })->name('sitemap');
 
-// Static about page. Dependency-free leaf (TOG-5310): no controller, no
-// database, no Livewire — Route::view only, so it renders even when the bot's
-// database is down.
-Route::view('/about', 'about')->name('about');
+// robots.txt is dynamic, not a static file in public/: the Sitemap line must
+// name this environment's APP_URL host (TOG-7071 — staging advertised the apex
+// host because public/robots.txt hardcoded it and nginx served it verbatim).
+// route('sitemap') carries the app host, so each environment advertises itself.
+Route::get('/robots.txt', function () {
+    $body = "User-agent: *\nDisallow:\nSitemap: ".route('sitemap')."\n";
+
+    return response($body)->header('Content-Type', 'text/plain; charset=UTF-8');
+})->name('robots');
 
 // Static house rules. Dependency-free leaf (TOG-5147): no controller, no
 // database, no Livewire — Route::view only, so it renders even when the bot's
@@ -109,6 +138,13 @@ Route::get('/events/{event}.ics', EventIcsController::class)->name('events.ics')
 // feed reader has no session.
 Route::get('/events.rss', EventRssController::class)->name('events.rss');
 
+// The collection as a subscribable calendar. Same `.suffix` trick as the feeds
+// above: one URL, one media type, public like the page because a calendar
+// client has no session. The per-event download keeps its own route above; this
+// is the URL a client polls, and the events page subscribe button points at its
+// `webcal://` form.
+Route::get('/events.ics', EventFeedController::class)->name('events.feed');
+
 // Discord is the only way in, so the route Laravel redirects guests to *is* the
 // Discord handoff. There is no login form to design because there is nothing to
 // type. The callback path is fixed at /auth/discord/callback in every environment
@@ -137,9 +173,12 @@ Route::middleware('auth')->group(function () {
     // The singular URL remains the post-login destination. Canonical member
     // profile URLs carry the user id so any signed-in member can share one with
     // another member without exposing the directory to logged-out visitors.
-    Route::get('/profile', [ProfileController::class, 'mine'])->name('profile');
-    Route::get('/members/{user}', [ProfileController::class, 'show'])->name('profiles.show');
-    Route::patch('/members/{user}', [ProfileController::class, 'update'])->name('profiles.update');
+    Route::get('/profile', [ProfileController::class, 'mine'])
+        ->middleware('member-access-log:member,view')->name('profile');
+    Route::get('/members/{user}', [ProfileController::class, 'show'])
+        ->middleware('member-access-log:member,view')->name('profiles.show');
+    Route::patch('/members/{user}', [ProfileController::class, 'update'])
+        ->middleware('member-access-log:member,update')->name('profiles.update');
 
     // Events. The wildcard binds on `event_key`, not the autoincrement id — see
     // Event::getRouteKeyName(). That is the same string the bot keys its Discord
@@ -161,6 +200,16 @@ Route::middleware('auth')->group(function () {
 
     // One answer per member per event, so the RSVP is a singular sub-resource:
     // there is no collection to list and no id to hand back.
-    Route::put('/events/{event}/rsvp', [RsvpController::class, 'update'])->name('events.rsvp.update');
-    Route::delete('/events/{event}/rsvp', [RsvpController::class, 'destroy'])->name('events.rsvp.destroy');
+    //
+    // TOG-7301: a route-level throttle in front of RsvpRateLimit's
+    // in-controller per-member limiter. Same 12/min budget so the two agree;
+    // the middleware refuses a hammering run before validation, policy and
+    // the database run, keyed per member like the controller limiter. Both
+    // verbs share the one bucket, so switching PUT/DELETE cannot multiply it.
+    Route::put('/events/{event}/rsvp', [RsvpController::class, 'update'])
+        ->middleware('throttle:12,1')
+        ->name('events.rsvp.update');
+    Route::delete('/events/{event}/rsvp', [RsvpController::class, 'destroy'])
+        ->middleware('throttle:12,1')
+        ->name('events.rsvp.destroy');
 });

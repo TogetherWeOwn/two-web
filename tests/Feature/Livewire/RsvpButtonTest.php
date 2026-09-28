@@ -338,6 +338,37 @@ it('shares the HTTP RSVP allowance and returns Retry-After from a limited Livewi
         ->assertSee("I'm in", false);
 });
 
+it('announces the closed and full states politely, not as alerts', function () {
+    // TOG-7332: a cancellation landing while the member watches, or losing
+    // the last-seat race after clicking, swaps these states in without a
+    // reload — they must announce via role="status", never role="alert".
+    $this->event->update(['status' => EventStatus::Cancelled]);
+
+    $closed = Livewire::actingAs($this->member)
+        ->test(RsvpButton::class, ['event' => $this->event->fresh()])
+        ->html();
+
+    expect($closed)->toContain('role="status"')
+        ->toContain('data-testid="rsvp-closed"')
+        ->not->toContain('role="alert"');
+
+    $full = Event::factory()->create([
+        'starts_at' => now()->addDays(3),
+        'ends_at' => now()->addDays(3)->addHours(2),
+        'status' => EventStatus::Published,
+        'capacity' => 1,
+    ]);
+    Rsvp::factory()->create(['event_id' => $full->id, 'status' => RsvpStatus::Going]);
+
+    $html = Livewire::actingAs($this->member)
+        ->test(RsvpButton::class, ['event' => $full])
+        ->html();
+
+    expect($html)->toContain('role="status"')
+        ->toContain('data-testid="event-full"')
+        ->not->toContain('role="alert"');
+});
+
 /* ---------------------------------------------------------------------------
    Closed events
    --------------------------------------------------------------------------- */
@@ -383,6 +414,37 @@ it('disables the control while the answer is in flight so it cannot be double-se
         ->html();
 
     expect($html)->toContain('wire:loading.attr="disabled"');
+});
+
+it('leaves exactly one RSVP row when the button is fired twice', function () {
+    // The double-click: `wire:loading.attr="disabled"` stops the second request
+    // in the browser, and `updateOrCreate` behind the unique(event_id, user_id)
+    // index makes a second request that does arrive idempotent. Either way the
+    // member ends up with one answer, not two rows.
+    Livewire::actingAs($this->member)
+        ->test(RsvpButton::class, ['event' => $this->event])
+        ->call('rsvp', RsvpStatus::Going->value)
+        ->call('rsvp', RsvpStatus::Going->value)
+        ->assertSee("You're in", false);
+
+    expect(Rsvp::query()->where('user_id', $this->member->id)->count())->toBe(1);
+});
+
+it('gives the withdraw control the same in-flight treatment as the RSVP', function () {
+    Rsvp::factory()->create([
+        'event_id' => $this->event->id,
+        'user_id' => $this->member->id,
+        'status' => RsvpStatus::Going,
+    ]);
+
+    $html = Livewire::actingAs($this->member)
+        ->test(RsvpButton::class, ['event' => $this->event])
+        ->html();
+
+    expect($html)
+        ->toContain('wire:target="withdraw"')
+        ->toContain('Removing…')
+        ->toContain('aria-busy');
 });
 
 /* ---------------------------------------------------------------------------

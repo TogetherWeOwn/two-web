@@ -82,6 +82,19 @@ test('a member RSVPs, the bot receives it, and the page advances to synced', fun
             // The worker is a third process. Wait for its durable receipt rather
             // than sleeping, then prove the exact event reached the bot boundary.
             ->waitUsing(20, 100, fn () => is_file($receipt), 'The bot stub received no event.upsert call.')
+            // The receipt proves the bot was called, not that the write-back
+            // committed: the stub writes the receipt before answering, and the
+            // job stamps synced_to_discord_at only after the answer arrives.
+            // Refreshing in between renders "syncing" with nothing to re-render
+            // it (the page does not poll), so wait for the committed stamp
+            // first and only then refresh into the synced state.
+            ->waitUsing(20, 100, function () use ($member, $event) {
+                return Rsvp::query()
+                    ->where('event_id', $event->id)
+                    ->where('user_id', $member->id)
+                    ->whereNotNull('synced_to_discord_at')
+                    ->exists();
+            }, 'The write-back never marked the RSVP synced.')
             ->refresh()
             ->waitFor('[data-testid="rsvp-synced"]')
             ->assertSeeIn('[data-testid="rsvp-synced"]', 'Synced to Discord.')

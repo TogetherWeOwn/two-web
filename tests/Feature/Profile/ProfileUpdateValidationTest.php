@@ -1,9 +1,11 @@
 <?php
 
+use App\Livewire\MemberProfile;
 use App\Models\Profile;
 use App\Models\User;
 use App\Support\Profiles\MemberStats;
 use App\Support\Profiles\MemberStatsSource;
+use Livewire\Livewire;
 
 // TOG-5622: ProfileController@update validation hardening. The happy path and
 // the basic invalid trio (long bio, long game, bad timezone) live in
@@ -243,4 +245,113 @@ it('stores markup but renders it escaped, never as live HTML', function () {
         ->assertSee('&lt;img src=x onerror=alert(2)&gt;', escape: false)
         ->assertDontSee('<script>alert', escape: false)
         ->assertDontSee('<img src=x', escape: false);
+});
+
+// TOG-6964: NUL/control bytes used to slip past validation. A NUL in `bio`
+// was silently truncated by Postgres (`a\0b` stored as `61`), other C0
+// controls and DEL were stored verbatim and rendered raw through Blade
+// escaping, and a NUL in `games`/`games_text` blew up as an unhandled
+// SQLSTATE[22P05] QueryException (HTTP 500). Every shape below is a
+// validation failure now, on both the HTTP and Livewire edit paths.
+
+it('rejects control bytes in bio instead of storing them', function (string $payload) {
+    $member = User::factory()->create();
+    $profile = Profile::factory()->for($member)->create(['bio' => 'Before']);
+
+    $this->actingAs($member)
+        ->from(route('profiles.show', $member))
+        ->patch(route('profiles.update', $member), ['bio' => $payload])
+        ->assertRedirect(route('profiles.show', $member))
+        ->assertSessionHasErrors(['bio']);
+
+    expect($profile->fresh()->bio)->toBe('Before');
+})->with([
+    'NUL byte' => ['a'.chr(0).'b'],
+    'SOH' => ["a\x01b"],
+    'backspace' => ["a\x08b"],
+    'form feed' => ["a\x0cb"],
+    'DEL' => ["a\x7fb"],
+]);
+
+it('returns 422 for control bytes in bio on API-style requests', function () {
+    $member = User::factory()->create();
+    $profile = Profile::factory()->for($member)->create(['bio' => 'Before']);
+
+    $this->actingAs($member)
+        ->patchJson(route('profiles.update', $member), ['bio' => 'a'.chr(0).'b'])
+        ->assertStatus(422)
+        ->assertJsonValidationErrors(['bio']);
+
+    expect($profile->fresh()->bio)->toBe('Before');
+});
+
+it('rejects NUL bytes in games entries instead of throwing a 500', function (string $payload) {
+    // Each payload was an unhandled SQLSTATE[22P05] QueryException → HTTP 500.
+    $member = User::factory()->create();
+    $profile = Profile::factory()->for($member)->create(['games' => ['Minecraft']]);
+
+    $this->actingAs($member)
+        ->from(route('profiles.show', $member))
+        ->patch(route('profiles.update', $member), ['games' => [$payload]])
+        ->assertRedirect(route('profiles.show', $member))
+        ->assertSessionHasErrors(['games.0']);
+
+    expect($profile->fresh()->games)->toBe(['Minecraft']);
+})->with([
+    'NUL byte' => ['a'.chr(0).'b'],
+    'SOH' => ["a\x01b"],
+    'DEL' => ["a\x7fb"],
+]);
+
+it('rejects NUL bytes in a games_text line instead of throwing a 500', function () {
+    $member = User::factory()->create();
+    $profile = Profile::factory()->for($member)->create(['games' => ['Minecraft']]);
+
+    $this->actingAs($member)
+        ->from(route('profiles.show', $member))
+        ->patch(route('profiles.update', $member), ['games_text' => 'x'.chr(0)."y\nMinecraft"])
+        ->assertRedirect(route('profiles.show', $member))
+        ->assertSessionHasErrors(['games_text']);
+
+    expect($profile->fresh()->games)->toBe(['Minecraft']);
+});
+
+it('still accepts tabs and newlines in a multiline bio', function () {
+    // Tab, LF and CR are the controls a bio legitimately needs; the rule
+    // allows exactly those and rejects everything else in Cc.
+    $member = User::factory()->create();
+
+    $this->actingAs($member)
+        ->patch(route('profiles.update', $member), [
+            'bio' => "Line one.\nLine two.\tTabbed.",
+            'games' => ['Minecraft'],
+        ])
+        ->assertRedirect(route('profiles.show', $member))
+        ->assertSessionHasNoErrors();
+
+    expect($member->profile()->first()->bio)->toBe("Line one.\nLine two.\tTabbed.");
+});
+
+it('shows validation errors instead of saving control bytes via the Livewire form', function () {
+    $member = User::factory()->create();
+    $profile = Profile::factory()->for($member)->create([
+        'bio' => 'Before',
+        'games' => ['Minecraft'],
+    ]);
+
+    Livewire::actingAs($member)
+        ->test(MemberProfile::class, [
+            'member' => $member,
+            'stats' => hardenedUnavailableStats($member->discord_id),
+        ])
+        ->call('edit')
+        ->set('bio', 'a'.chr(0).'b')
+        ->set('gamesText', 'x'.chr(0)."y\nMinecraft")
+        ->call('save')
+        ->assertSet('editing', true)
+        ->assertHasErrors(['bio', 'gamesText']);
+
+    expect($profile->fresh())
+        ->bio->toBe('Before')
+        ->games->toBe(['Minecraft']);
 });
