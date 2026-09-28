@@ -107,6 +107,7 @@ function expectedProductionRoutes(): array
         'GET|HEAD livewire/livewire.min.js.map',
         'GET|HEAD livewire/preview-file/{filename}',
         'GET|HEAD members/{user}',
+        'GET|HEAD privacy',
         'GET|HEAD profile',
         'GET|HEAD robots.txt',
         'GET|HEAD rules',
