@@ -86,10 +86,10 @@ Route::get('/robots.txt', function () {
     return response($body)->header('Content-Type', 'text/plain; charset=UTF-8');
 })->name('robots');
 
-// Static house rules. Dependency-free leaf (TOG-5147): no controller, no
-// database, no Livewire — Route::view only, so it renders even when the bot's
-// database is down.
-Route::view('/rules', 'rules')->name('rules');
+// Static house rules live in routes/funnel.php (TOG-5147, TOG-6854), not here:
+// SESSION_DRIVER=database everywhere shipped, so a `web` route opens Postgres
+// in StartSession before the view runs and the page 500s when the app database
+// is down. The funnel stack stays empty so the static view still renders.
 
 // One-click join needs the web session for OAuth state and for signing the new
 // member in after Discord adds them. `/discord` remains the database-free invite

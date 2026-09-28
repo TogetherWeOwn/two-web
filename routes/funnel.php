@@ -13,27 +13,30 @@ use Illuminate\Support\Facades\Route;
 |--------------------------------------------------------------------------
 |
 | `/discord` is the database-free floor under the web-to-Discord funnel
-| (TOG-77, docs/dns.md). `/about` lives here too (TOG-6853), as does `/faq`
-| (TOG-8396): static `Route::view` leaves with no controller, no query and no
-| Livewire, and they must stay 200 when the app database is down. `/privacy`
-| (TOG-8609) lives here too: a controller rather than a static view because it
-| renders the versioned content/privacy-policy-v*.md source, but its one read
-| is a file from disk — no session, no cache, no database.
+| (TOG-77, docs/dns.md). `/about` lives here too (TOG-6853), as do `/faq`
+| (TOG-8396) and `/rules` (TOG-6854): static `Route::view` leaves with no
+| controller, no query and no Livewire, and they must stay 200 when the app
+| database is down. `/privacy` (TOG-8609) lives here too: a controller rather
+| than a static view because it renders the versioned
+| content/privacy-policy-v*.md source, but its one read is a file from disk —
+| no session, no cache, no database.
 |
 | **These are not in routes/web.php on purpose.** bootstrap/app.php loads this
 | file with an empty middleware stack, so nothing in the `web` group runs here.
 | That is not tidiness — it is the requirement. `SESSION_DRIVER=database` and
 | `CACHE_STORE=database` in every environment we ship, so a route in the `web`
 | group opens a Postgres connection in `StartSession` before the controller is
-| reached. Put `/discord` or `/about` in that group and the day Postgres is down
-| is the day the join link — or the about page — returns a 500. Same reasoning
-| rules out `throttle`, which reads the cache store: there is no user input on
-| these routes to abuse, and the edge already rate-limits.
+| reached. Put `/discord`, `/about` or `/rules` in that group and the day
+| Postgres is down is the day the join link — or one of the static leaves —
+| returns a 500. Same reasoning rules out `throttle`, which reads the cache
+| store: there is no user input on these routes to abuse, and the edge already
+| rate-limits.
 |
-| tests/Feature/DiscordFunnelTest.php, tests/Feature/AboutPageTest.php and
-| tests/Feature/FaqPageTest.php pin this — they assert zero database queries
-| with a database-backed session configured, so moving these into `web.php`
-| for neatness fails the build instead of failing a member.
+| tests/Feature/DiscordFunnelTest.php, tests/Feature/AboutPageTest.php,
+| tests/Feature/FaqPageTest.php and tests/Feature/RulesPageTest.php pin this —
+| they assert zero database queries with a database-backed session configured,
+| so moving these into `web.php` for neatness fails the build instead of
+| failing a member.
 |
 | Nothing else belongs in this file. Anything that needs a session, a member, or
 | the database goes in routes/web.php where it can have them. The one exception
@@ -74,6 +77,16 @@ Route::view('/about', 'about')->middleware(AddContentSecurityPolicy::class)->nam
 // middleware is attached to the route alone for the same reason: it answers
 // with an HTML document and reads no session, cache or database.
 Route::view('/faq', 'faq')->middleware(AddContentSecurityPolicy::class)->name('faq');
+
+// Static house rules (TOG-5147, TOG-6854). Same dependency-free leaf as
+// `/about` above: no controller, no database, no Livewire — Route::view only,
+// so it renders even when the app's database is down. It lives here rather
+// than in routes/web.php for the same reason: every route in the `web` group
+// opens Postgres in StartSession (SESSION_DRIVER=database everywhere shipped)
+// before the view runs. The CSP middleware is attached to this route alone for
+// the same reason as `/about`: the page answers with an HTML document, and
+// leaving the `web` group must not strip its document policy.
+Route::view('/rules', 'rules')->middleware(AddContentSecurityPolicy::class)->name('rules');
 
 // Public privacy policy (TOG-8609). Same session-free funnel placement as
 // `/about` and `/faq` above: a controller rather than Route::view because the
