@@ -34,7 +34,10 @@
             {{-- Colour is not carrying this: there is an icon and there are words,
                  and the cap is named so the number is not a mystery.
                  role="status": the race loser lands here after clicking, so the
-                 swap has to be announced politely, not as an alert (TOG-7332). --}}
+                 swap has to be announced politely, not as an alert (TOG-7332).
+                 A refusal with nowhere to go is a dead end, so the line is
+                 offered here: joining it is a waitlisted answer, not a seat, and
+                 the locked write accepts it on a full event. --}}
             <p class="flex items-start gap-1.5 text-sm text-alert" role="status" data-testid="event-full">
                 <svg class="size-4 shrink-0 mt-0.5" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
                     <path d="M8 1.5 15 14H1L8 1.5Zm0 4a.75.75 0 0 0-.75.75v3a.75.75 0 0 0 1.5 0v-3A.75.75 0 0 0 8 5.5Zm0 6.75a.9.9 0 1 0 0-1.8.9.9 0 0 0 0 1.8Z"/>
@@ -46,6 +49,66 @@
                     @endif
                 </span>
             </p>
+
+            <button type="button"
+                    wire:click="rsvp('{{ \App\Enums\RsvpStatus::Waitlisted->value }}')"
+                    wire:loading.attr="disabled"
+                    wire:target="rsvp"
+                    data-testid="waitlist-join"
+                    class="inline-flex items-center justify-center gap-2 min-h-11 px-5 rounded-md
+                           bg-transparent text-ink border border-line-strong
+                           hover:bg-raised hover:border-ink-muted active:bg-surface
+                           transition-colors duration-fast ease-out-quick self-start">
+                <span wire:loading.remove wire:target="rsvp">Join the waitlist</span>
+                {{-- Hidden up front like the main CTA below (TOG-6351):
+                     Livewire only toggles loading elements mid-request. --}}
+                <span wire:loading wire:target="rsvp" aria-busy="true" style="display: none">Saving…</span>
+            </button>
+
+        @elseif ($waitlisted)
+            {{-- tabindex="-1": same swap as the confirmation — joining replaces
+                 the button with this, so keyboard focus moves here (TOG-6956).
+                 The place is named in words and digits, never colour alone. --}}
+            <p class="flex items-center gap-1.5 text-sm text-ink" role="status" tabindex="-1" data-testid="waitlist-position">
+                <span class="font-medium">
+                    @if ($waitlistPosition !== null)
+                        You're on the waitlist — #{{ $waitlistPosition }} in line
+                    @else
+                        You're on the waitlist
+                    @endif
+                </span>
+            </p>
+
+            @if ($seatOpenForWaitlist)
+                {{-- A seat freed while in line. The waitlist never auto-promotes
+                     — that claim would be its own race — so the member takes it
+                     through the same locked write as everybody else. --}}
+                <button type="button"
+                        wire:click="rsvp('{{ \App\Enums\RsvpStatus::Going->value }}')"
+                        wire:loading.attr="disabled"
+                        wire:target="rsvp"
+                        data-testid="waitlist-claim"
+                        class="inline-flex items-center justify-center gap-2 min-h-11 px-6 rounded-md
+                               bg-brand text-on-brand font-semibold
+                               hover:bg-brand-hover active:bg-brand-active
+                               disabled:opacity-100
+                               transition-colors duration-fast ease-out-quick self-start">
+                    <span wire:loading.remove wire:target="rsvp">A seat opened up — I'm in</span>
+                    {{-- Hidden up front like the main CTA below (TOG-6351). --}}
+                    <span wire:loading wire:target="rsvp" aria-busy="true" style="display: none">Saving…</span>
+                </button>
+            @endif
+
+            <button type="button"
+                    wire:click="withdraw"
+                    wire:loading.attr="disabled"
+                    wire:target="withdraw"
+                    data-testid="waitlist-leave"
+                    class="inline-flex items-center justify-center gap-2 min-h-11 px-3 rounded-md
+                           text-ink-muted hover:text-ink hover:bg-raised
+                           transition-colors duration-fast ease-out-quick self-start">
+                Leave the waitlist
+            </button>
 
         @elseif ($going)
             {{-- tabindex="-1": not in the tab order, but focusable so a successful
@@ -146,7 +209,15 @@
                     return;
                 }
 
-                const going = root.querySelector('[data-testid="rsvp-going"]');
+                // Joining the line swaps the button for the place in line, the
+                // same focus loss as a successful RSVP (TOG-6956).
+                const position = root.querySelector('[data-testid="waitlist-position"]');
+                if (position) {
+                    position.focus({ preventScroll: true });
+                    return;
+                }
+
+                const going = root.querySelector('[data-testid="rsvp-going"], [data-testid="waitlist-join"]');
                 if (going) {
                     going.focus({ preventScroll: true });
                 }

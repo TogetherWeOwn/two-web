@@ -138,6 +138,43 @@ class Event extends Model
     }
 
     /**
+     * Members in line for a seat. Not seats — a waitlisted row holds nothing,
+     * which is why no `going_count` aggregate needed changing for the waitlist.
+     */
+    public function waitlistCount(): int
+    {
+        return $this->rsvps()->where('status', RsvpStatus::Waitlisted)->count();
+    }
+
+    /**
+     * One-based place in line, earliest answer first. The `id` tiebreak is for
+     * answers written in the same second, which is exactly when a full event
+     * collects them. Null when the member is not on the waitlist.
+     */
+    public function waitlistPositionFor(User $user): ?int
+    {
+        $mine = $this->rsvps()
+            ->where('status', RsvpStatus::Waitlisted)
+            ->where('user_id', $user->getKey())
+            ->first(['id', 'created_at']);
+
+        if ($mine === null) {
+            return null;
+        }
+
+        return $this->rsvps()
+            ->where('status', RsvpStatus::Waitlisted)
+            ->where(function ($query) use ($mine): void {
+                $query->where('created_at', '<', $mine->created_at)
+                    ->orWhere(function ($query) use ($mine): void {
+                        $query->where('created_at', $mine->created_at)
+                            ->where('id', '<=', $mine->id);
+                    });
+            })
+            ->count();
+    }
+
+    /**
      * Whether Discord has been shown this event, and so whether a write-back means
      * anything. The rule lives on the enum so adding a state has one place to answer
      * for itself — this was `!== Draft` until Past existed, which would have kept

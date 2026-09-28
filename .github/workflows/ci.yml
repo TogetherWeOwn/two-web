@@ -33,7 +33,7 @@ jobs:
     runs-on: [self-hosted, two-selfhosted]
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
 
       # Where did this job actually run? `runs-on:` asks; only the job can
       # answer. Fails on a GitHub-hosted runner (which bills) and publishes its
@@ -47,7 +47,7 @@ jobs:
       # preinstalled, but every other job here pins the version and this should not
       # be the exception — an unpinned interpreter is exactly the kind of thing that
       # works until somebody upgrades the host. No install step follows it; seconds.
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: ${{ env.NODE_VERSION }}
 
@@ -265,7 +265,7 @@ jobs:
       - name: Postgres backup self-test
         run: ./ci/pg-backup-selftest.sh
 
-      - uses: shivammathur/setup-php@v2
+      - uses: shivammathur/setup-php@f3e473d116dcccaddc5834248c87452386958240 # v2
         with:
           php-version: ${{ env.PHP_VERSION }}
           extensions: pdo_pgsql, intl, bcmath
@@ -301,7 +301,7 @@ jobs:
           "$php_bin" "$RUNNER_TEMP/composer-pinned" --version
 
       - name: Cache Composer packages
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: vendor
           key: composer-${{ env.PHP_VERSION }}-${{ hashFiles('composer.lock') }}
@@ -350,14 +350,14 @@ jobs:
           --health-retries 20
 
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
 
       # See the note in `static`. Every job attests; a job that does not could be
       # moved onto a billable runner with nothing going red (TOG-2847).
       - name: Attest the runner
         run: ./ci/attest-runner.sh
 
-      - uses: shivammathur/setup-php@v2
+      - uses: shivammathur/setup-php@f3e473d116dcccaddc5834248c87452386958240 # v2
         with:
           php-version: ${{ env.PHP_VERSION }}
           extensions: pdo_pgsql, intl, bcmath
@@ -393,7 +393,7 @@ jobs:
           "$php_bin" "$RUNNER_TEMP/composer-pinned" --version
 
       - name: Cache Composer packages
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: vendor
           key: composer-${{ env.PHP_VERSION }}-${{ hashFiles('composer.lock') }}
@@ -442,6 +442,18 @@ jobs:
     runs-on: [self-hosted, two-selfhosted]
     timeout-minutes: 20
 
+    # The persistent self-hosted hosts run Chrome as an unprivileged user,
+    # so the renderer dies at session creation without the sandbox
+    # workarounds the budgets harness already pins on the same hosts
+    # (ci/lighthouserc.cjs, ci/browser/launch.mjs, ci/a11y.mjs; TOG-7021).
+    # DuskTestCase reads extra flags from DUSK_CHROME_ARGS (TOG-6769 seam);
+    # leaving it unset is the 4/19 session-start failure on PR #368
+    # (TOG-7699). Neither flag is excluded: the non-root Chrome builds on
+    # these hosts accept --no-sandbox, proved by the budgets puppeteer
+    # self-test passing with it in the same failing run.
+    env:
+      DUSK_CHROME_ARGS: '--no-sandbox --disable-dev-shm-usage'
+
     services:
       postgres:
         image: postgres:17-alpine
@@ -460,14 +472,14 @@ jobs:
           --health-retries 20
 
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
 
       # See the note in `static`. Every job attests; a job that does not could be
       # moved onto a billable runner with nothing going red (TOG-2847).
       - name: Attest the runner
         run: ./ci/attest-runner.sh
 
-      - uses: shivammathur/setup-php@v2
+      - uses: shivammathur/setup-php@f3e473d116dcccaddc5834248c87452386958240 # v2
         with:
           php-version: ${{ env.PHP_VERSION }}
           extensions: pdo_pgsql, intl, bcmath
@@ -490,13 +502,13 @@ jobs:
           [ "$("$php_bin" -r 'echo PHP_MAJOR_VERSION, ".", PHP_MINOR_VERSION;')" = "$PHP_VERSION" ] || { echo "::error::pinned PHP is $("$php_bin" -v | head -1), not PHP ${PHP_VERSION} — refusing to run on the wrong interpreter (TOG-5877)"; exit 1; }
           "$php_bin" "$RUNNER_TEMP/composer-pinned" --version
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: npm
 
       - name: Cache Composer packages
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: vendor
           key: composer-${{ env.PHP_VERSION }}-${{ hashFiles('composer.lock') }}
@@ -623,7 +635,7 @@ jobs:
       # re-run it instead of reading it.
       - name: Upload failure evidence
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: dusk-failures
           path: |
@@ -693,7 +705,7 @@ jobs:
           --health-retries 20
 
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
 
       # See the note in `static`. Every job attests; a job that does not could be
       # moved onto a billable runner with nothing going red (TOG-2847).
@@ -708,7 +720,7 @@ jobs:
       # tax on every gated page's TTFB that no user or production host ever pays
       # (TOG-3310). validate_timestamps=0 is safe because nothing touches the
       # checked-out PHP files between here and the server shutting down.
-      - uses: shivammathur/setup-php@v2
+      - uses: shivammathur/setup-php@f3e473d116dcccaddc5834248c87452386958240 # v2
         with:
           php-version: ${{ env.PHP_VERSION }}
           extensions: pdo_pgsql, intl, bcmath, opcache
@@ -753,13 +765,13 @@ jobs:
           printf 'opcache.enable=1\nopcache.enable_cli=1\nopcache.validate_timestamps=0\n' > "$dir/zz-opcache-budgets.ini"
           echo "PHP_INI_SCAN_DIR=:$dir" >> "$GITHUB_ENV"
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: npm
 
       - name: Cache Composer packages
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: vendor
           key: composer-${{ env.PHP_VERSION }}-${{ hashFiles('composer.lock') }}
@@ -997,7 +1009,7 @@ jobs:
       # both paths are generated reports, and the flag only applies to them.
       - name: Upload budget reports
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: budget-reports
           path: |
@@ -1031,7 +1043,7 @@ jobs:
       # This job had no checkout: it only reads `needs` results. It needs one now
       # so it can attest its own runner — the aggregate bills like any other job,
       # and being cheap is not the same as being free (TOG-2847).
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
 
       - name: Attest the runner
         run: ./ci/attest-runner.sh

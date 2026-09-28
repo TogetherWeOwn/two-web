@@ -19,6 +19,8 @@ use App\Models\Event;
  * time would reintroduce the DST ambiguity the `timezone` column exists to
  * kill. `UID` is the immutable `event_key` plus the app host, so re-downloading
  * the same event updates the calendar entry instead of duplicating it.
+ * `SEQUENCE` is the `updated_at` Unix timestamp, so any host edit bumps it and
+ * already-synced calendar clients apply the update instead of keeping stale data.
  */
 final class EventIcs
 {
@@ -78,6 +80,7 @@ final class EventIcs
         $lines = [
             'BEGIN:VEVENT',
             'UID:'.self::uid($event),
+            'SEQUENCE:'.self::sequence($event),
             'DTSTAMP:'.now('UTC')->format('Ymd\THis\Z'),
             'DTSTART:'.$event->starts_at->setTimezone('UTC')->format('Ymd\THis\Z'),
             'DTEND:'.$event->ends_at->setTimezone('UTC')->format('Ymd\THis\Z'),
@@ -118,6 +121,22 @@ final class EventIcs
         }
 
         return $event->event_key.'@'.$host;
+    }
+
+    /**
+     * RFC 5545 §3.8.7.4 revision counter. A persisted counter would need a
+     * migration plus a bump-on-update hook for the same guarantee Eloquent
+     * already gives: any `save()` touching the row advances `updated_at`, so
+     * its Unix timestamp is a monotonic, no-schema-change sequence. A
+     * force-fill back to the create instant would repeat a value, but nothing
+     * in the codebase writes `updated_at` by hand.
+     */
+    private static function sequence(Event $event): int
+    {
+        // `?? 0`: the RFC 5545 default. Unreachable for persisted rows (Eloquent
+        // always stamps `updated_at` on create), but `EventIcs::for()` takes any
+        // model and an unsaved one has no timestamp to derive from.
+        return $event->updated_at?->getTimestamp() ?? 0;
     }
 
     /** RFC 5545 §3.3.11 escaping: backslash, semicolon, comma, newlines. */
