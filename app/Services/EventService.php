@@ -166,7 +166,9 @@ class EventService
 
             // Only an answer that newly takes a seat has to fit. Someone already
             // going who says so again, or who downgrades to maybe, cannot make the
-            // event more full than it is.
+            // event more full than it is — and a waitlisted answer takes no seat
+            // at all, which is why joining the line on a full event gets past
+            // this check by design rather than by accident.
             $takesASeat = $status === RsvpStatus::Going
                 && $existing?->status !== RsvpStatus::Going;
 
