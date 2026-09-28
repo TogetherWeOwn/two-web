@@ -377,14 +377,15 @@ decision, 2026-08-31 — TOG-780), which supersedes Forge (TOG-407 closed).
 > tries — both by executing the guard with no target and by rejecting any step in
 > `deploy.yml` gated on a secret or variable being set.
 
-Secrets and variables to add once Coolify is provisioned (TOG-780). **Both** are
-required: a hook without a URL is refused, because a deploy that cannot be
-health-checked is the same false green in a smaller box.
+Secrets and variables to add once Coolify is provisioned (TOG-780). **The first
+two** are required: a hook without a URL is refused, because a deploy that cannot be
+health-checked is the same false green in a smaller box. The third is optional.
 
 | Name | Kind | Value |
 |---|---|---|
 | `COOLIFY_STAGING_DEPLOY_HOOK` | secret | Coolify staging deploy webhook URL, token included |
 | `STAGING_URL` | variable | e.g. `https://staging.togetherweown.com` |
+| `STAGING_DEPLOY_NOTIFY_WEBHOOK` | secret | Discord webhook URL for the per-run staging result post (TOG-7326). Optional: when unset the notifier warns and skips — the deploy still ships, it just posts nothing. Never committed; a webhook URL is a bearer token for posting to the channel. |
 
 Do not add a production deploy hook as a repo secret. Nothing reads it, and the
 staging job logs a warning if one appears.

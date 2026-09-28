@@ -148,3 +148,20 @@ jobs:
           CF_ACCESS_CLIENT_ID: ${{ secrets.CF_ACCESS_CLIENT_ID }}
           CF_ACCESS_CLIENT_SECRET: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}
         run: ./bin/smoke-staging.sh "$STAGING"
+
+      # Deploy result notification (TOG-7326): one short Discord message per
+      # staging run — success, failure, or cancelled. This is the one step in
+      # this job that carries an `if:`, and it is `always()`: every step above
+      # runs on success only, so without it the notifier is skipped on exactly
+      # the failed runs it exists to report — the old skip-and-pass shape with
+      # the polarity reversed (silence instead of false green, same unreported
+      # deploy). Do not "simplify" it away. It never fails the job: the script
+      # exits 0 on every notify failure, so a missing secret or a Discord
+      # outage is a warning, never a verdict on the deploy.
+      - name: Notify Discord of the deploy result
+        if: always()
+        env:
+          STAGING_DEPLOY_NOTIFY_WEBHOOK: ${{ secrets.STAGING_DEPLOY_NOTIFY_WEBHOOK }}
+          DEPLOY_STATUS: ${{ job.status }}
+          STAGING_URL: ${{ steps.target.outputs.url }}
+        run: ./ci/deploy-notify.sh
