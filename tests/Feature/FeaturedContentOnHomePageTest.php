@@ -91,3 +91,29 @@ it('still serves the join funnel when there is nothing featured', function () {
         ->assertSee('Together We Own')
         ->assertSee('data-testid="discord-join"', escape: false);
 });
+
+it('renders the written alt text on a featured image', function () {
+    FeaturedContent::factory()->published()->create([
+        'title' => 'Summer social photos',
+        'image_url' => 'https://example.org/photo.jpg',
+        'image_alt' => 'Members playing board games at the summer social',
+    ]);
+
+    $this->get('/')
+        ->assertOk()
+        ->assertSee('alt="Members playing board games at the summer social"', escape: false)
+        ->assertDontSee('alt=""', escape: false);
+});
+
+it('falls back to the headline when a legacy row has no alt text', function () {
+    FeaturedContent::factory()->published()->create([
+        'title' => 'Summer social photos',
+        'image_url' => 'https://example.org/photo.jpg',
+        'image_alt' => null,
+    ]);
+
+    $this->get('/')
+        ->assertOk()
+        ->assertSee('alt="Summer social photos"', escape: false)
+        ->assertDontSee('alt=""', escape: false);
+});

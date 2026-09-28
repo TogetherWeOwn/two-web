@@ -16,6 +16,7 @@ class FeaturedContentFactory extends Factory
             'body' => $this->faker->paragraph(),
             'url' => $this->faker->url(),
             'image_url' => null,
+            'image_alt' => null,
             // Unpublished by default: a test that asserts something is visible
             // must say so, the same way a moderator must.
             'is_published' => false,
