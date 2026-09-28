@@ -42,7 +42,9 @@ it('calls an instant save too fast and a patient one human', function () {
         ->and(SpamTrap::tooFast(now()->getTimestamp() - SpamTrap::MIN_FILL_SECONDS))->toBeFalse()
         ->and(SpamTrap::tooFast(now()->getTimestamp() - 3600))->toBeFalse()
         // A stamp from the future reads as instant: fail closed, never open.
-        ->and(SpamTrap::tooFast(now()->getTimestamp() + 3600))->toBeTrue();
+        ->and(SpamTrap::tooFast(now()->getTimestamp() + 3600))->toBeTrue()
+        // A zero stamp (save without opening the form) reads as instant too.
+        ->and(SpamTrap::tooFast(0))->toBeTrue();
 });
 
 /* ---------------------------------------------------------------------------
@@ -77,6 +79,26 @@ it('swallows an instant profile save with no decoy and writes nothing', function
         ->call('save')
         ->assertSet('editing', false)
         ->assertSee('Profile saved.');
+
+    expect($member->profile()->exists())->toBeFalse();
+});
+
+it('shows field errors on a fast invalid save instead of false success (TOG-9361)', function () {
+    $member = User::factory()->create();
+
+    // No time travel: the save lands instantly, and the decoy is filled — but
+    // the bio is over the limit, so validation must win over the trap. A
+    // false "Profile saved." here would both lie to members and teach bots
+    // that invalid input is accepted.
+    Livewire::actingAs($member)
+        ->test(MemberProfile::class, ['member' => $member, 'stats' => memberStatsStub($member->discord_id)])
+        ->call('edit')
+        ->set('bio', str_repeat('a', 1001))
+        ->set(SpamTrap::HONEY_FIELD, 'https://spam.example')
+        ->call('save')
+        ->assertSet('editing', true)
+        ->assertHasErrors(['bio'])
+        ->assertSee('Check the highlighted fields');
 
     expect($member->profile()->exists())->toBeFalse();
 });

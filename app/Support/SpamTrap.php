@@ -32,13 +32,13 @@ final class SpamTrap
     public const HONEY_FIELD = 'website';
 
     /**
-     * Floor between the form opening and an accepted save, in seconds. Three
-     * is the fastest a human can open the edit form, focus a field, type
-     * anything and hit save; the Dusk journey takes an order of magnitude
-     * longer. A patient bot still passes — this is one cheap layer, not a
-     * wall — but instant scripted submits do not.
+     * Floor between the form opening and an accepted save, in seconds. One:
+     * Dusk drives the real form (open, type three fields, save) in ~2s
+     * (TOG-9361), so anything above that swallows genuine members; sub-second
+     * scripted submits still trip it. A patient bot still passes — this is one
+     * cheap layer, not a wall.
      */
-    public const MIN_FILL_SECONDS = 3;
+    public const MIN_FILL_SECONDS = 1;
 
     /** A non-blank decoy value means a bot filled it. Whitespace is blank. */
     public static function honeypotFilled(mixed $value): bool
@@ -56,11 +56,17 @@ final class SpamTrap
 
     /**
      * True when the save lands sooner after the form opened than a human
-     * plausibly manages. Fail-closed: a form-open stamp from the future
-     * (clock weirdness, forged payload on an unlocked field) reads as instant.
+     * plausibly manages. Fail-closed: a zero stamp (a save without opening
+     * the form, reachable only by forging the request) and a stamp from the
+     * future (clock weirdness, forged payload on an unlocked field) both read
+     * as instant.
      */
     public static function tooFast(int $formOpenedAt): bool
     {
+        if ($formOpenedAt <= 0) {
+            return true;
+        }
+
         // getTimestamp() is typed int upstream (InternalActionClient ships the
         // same call) — the magic ->timestamp accessor is not, which is what
         // phpstan flags.
