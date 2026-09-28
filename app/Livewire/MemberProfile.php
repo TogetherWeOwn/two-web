@@ -35,6 +35,15 @@ class MemberProfile extends Component
 
     public bool $saveFailed = false;
 
+    /**
+     * Set when the save (or cancel) arrives with no signed-in member behind
+     * it — the form was opened authenticated and the session died underneath
+     * it (SESSION_LIFETIME). Distinct from $saveFailed on purpose: the next
+     * action is to log in again, not to try once more, so the message must
+     * say that. Mirrors RsvpButton::$sessionExpired (TOG-8135).
+     */
+    public bool $sessionExpired = false;
+
     public string $bio = '';
 
     public string $gamesText = '';
@@ -80,6 +89,7 @@ class MemberProfile extends Component
 
         $this->saved = false;
         $this->saveFailed = false;
+        $this->sessionExpired = false;
         $this->editing = true;
         $this->fillForm();
         // TOG-6957: opening the form unmounts the focused trigger, dropping
@@ -91,10 +101,24 @@ class MemberProfile extends Component
 
     public function cancel(): void
     {
+        // TOG-8137: the session check comes before the gate on purpose. A
+        // signed-out caller hits the gate's 403 before this method can name
+        // the expired session, so the explicit check names it first — same
+        // ordering as RsvpButton (TOG-8135). The self-dispatch (TOG-6957)
+        // still fires: cancelling unmounts the Cancel control, and without
+        // the dispatch keyboard focus drops to <body>.
+        if (! auth()->user() instanceof User) {
+            $this->sessionExpired = true;
+            $this->dispatch('profile-state-changed')->self();
+
+            return;
+        }
+
         Gate::authorize('updateProfile', $this->member);
 
         $this->resetValidation();
         $this->editing = false;
+        $this->sessionExpired = false;
         $this->fillForm();
         // TOG-6957: closing the form unmounts the focused Cancel control.
         // Refocus the Edit profile button after the round trip.
@@ -103,6 +127,18 @@ class MemberProfile extends Component
 
     public function save(): void
     {
+        // TOG-8137: same ordering as cancel() — name the expired session
+        // before the gate can 403. The form stays open with their input
+        // intact (wire:model holds it client-side); only the write is refused.
+        // The self-dispatch (TOG-6957) fires here too, so the listener can
+        // move focus to the expiry banner after the morph.
+        if (! auth()->user() instanceof User) {
+            $this->sessionExpired = true;
+            $this->dispatch('profile-state-changed')->self();
+
+            return;
+        }
+
         Gate::authorize('updateProfile', $this->member);
 
         // TOG-6957: dispatched BEFORE validation on purpose. A failed
@@ -140,6 +176,7 @@ class MemberProfile extends Component
         }
 
         $this->saveFailed = false;
+        $this->sessionExpired = false;
 
         $attributes = [
             'bio' => trim($validated['bio'] ?? '') ?: null,
