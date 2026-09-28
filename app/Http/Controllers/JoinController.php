@@ -6,13 +6,16 @@ use App\Models\User;
 use App\Services\Bot\Exceptions\BotException;
 use App\Services\Bot\InternalActionClient;
 use App\Support\DiscordWidget;
+use GuzzleHttp\Exception\ClientException;
 use Illuminate\Contracts\View\View;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
+use Illuminate\Http\Response;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Log;
 use Laravel\Socialite\Facades\Socialite;
 use Laravel\Socialite\Two\AbstractProvider;
+use Laravel\Socialite\Two\InvalidStateException;
 use Laravel\Socialite\Two\User as DiscordUser;
 use RuntimeException;
 use Throwable;
@@ -52,7 +55,7 @@ final class JoinController
             ->redirect();
     }
 
-    public function callback(Request $request): RedirectResponse
+    public function callback(Request $request): RedirectResponse|Response
     {
         if ($request->filled('error')) {
             return $this->done('denied');
@@ -63,11 +66,16 @@ final class JoinController
                 ->redirectUrl($this->callbackUrl())
                 ->user();
         } catch (Throwable $exception) {
+            $expired = $this->isExpiredApproval($exception);
+
+            // Exception messages and response bodies can contain OAuth secrets.
             Log::warning('Discord token exchange failed on the join journey.', [
                 'exception' => $exception::class,
+                'source' => $request->session()->pull('join_source'),
+                'outcome' => $expired ? 'expired' : 'error',
             ]);
 
-            return $this->done('expired');
+            return $expired ? $this->done('expired') : $this->discordDown();
         }
 
         if (! $discordUser instanceof DiscordUser) {
@@ -166,6 +174,34 @@ final class JoinController
         if (is_string($source) && preg_match('/^[a-z0-9][a-z0-9:_-]{0,63}$/i', $source) === 1) {
             $request->session()->put('join_source', $source);
         }
+    }
+
+    private function isExpiredApproval(Throwable $exception): bool
+    {
+        if ($exception instanceof InvalidStateException) {
+            return true;
+        }
+
+        // Socialite uses Guzzle for the token exchange. Only Discord's explicit
+        // invalid_grant response means the code expired; other 4xx/5xx do not.
+        if (! $exception instanceof ClientException || $exception->getResponse()->getStatusCode() !== 400) {
+            return false;
+        }
+
+        $payload = json_decode((string) $exception->getResponse()->getBody(), true);
+
+        return is_array($payload) && ($payload['error'] ?? null) === 'invalid_grant';
+    }
+
+    private function discordDown(): Response
+    {
+        return response()->view('oauth.recovery', [
+            'title' => __('join.recovery_discord_down_title'),
+            'message' => __('join.recovery_discord_down'),
+            'retryUrl' => route('join.redirect'),
+            'retryLabel' => __('join.recovery_retry'),
+            'inviteUrl' => $this->inviteUrl(),
+        ], 503);
     }
 
     private function done(string $result): RedirectResponse

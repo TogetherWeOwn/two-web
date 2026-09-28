@@ -145,21 +145,25 @@ it('keeps an authenticated member signed in on already_member re-entry', functio
     expect(User::query()->where('discord_id', MATRIX_ID)->count())->toBe(1);
 });
 
-it('maps a Discord-down token exchange to expired without reaching the bot', function () {
-    // Discord itself unreachable during the code exchange: same expired banner
-    // as a stale code ("try again or use the invite"), and the one-use token
-    // never exists so the bot must see zero HTTP calls.
+it('maps a Discord-down token exchange to recovery without reaching the bot', function () {
+    // A provider timeout is not an expired approval. Offer a retry and invite
+    // without signing anyone in or handing a token to the bot.
     $provider = Mockery::mock(AbstractProvider::class)->makePartial();
     $provider->shouldReceive('redirectUrl')->andReturnSelf();
     $provider->shouldReceive('user')->andThrow(new ConnectionException('discord.com:443 timeout'));
     Socialite::shouldReceive('driver')->with('discord')->andReturn($provider);
 
     $this->get('/join/callback?code=good&state=x')
-        ->assertRedirect(route('join'))
-        ->assertSessionHas('join_result', 'expired');
+        ->assertServiceUnavailable()
+        ->assertViewIs('oauth.recovery')
+        ->assertSee(__('join.recovery_discord_down'))
+        ->assertSee('href="'.route('join.redirect').'"', escape: false)
+        ->assertSee('href="https://discord.gg/testinvite"', escape: false)
+        ->assertSessionMissing('join_result');
 
     $this->assertGuest();
     expect(User::query()->count())->toBe(0);
+    $this->assertDatabaseCount('rsvps', 0);
     Http::assertNothingSent();
 });
 
