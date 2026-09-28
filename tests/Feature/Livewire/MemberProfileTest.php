@@ -638,3 +638,104 @@ it('still accepts tabs and newlines in a multiline bio', function () {
 
     expect($member->profile()->first()->bio)->toBe("Line one.\nLine two.\tTabbed.");
 });
+
+/* ---------------------------------------------------------------------------
+   Expired session (TOG-8137). The form was opened signed in and the session
+   died underneath it (SESSION_LIFETIME). The save/cancel arrives with nobody
+   behind it — no user instance — so the component names the expiry and points
+   at the way back in instead of hitting the gate's 403. Distinct from
+   $saveFailed on purpose: retrying cannot succeed without logging in first.
+   The form stays open with the member's input intact; only the write is
+   refused. Mirrors the RSVP session-expired banner (TOG-8135).
+
+   The tests render authenticated, then expire the session before the
+   submit: a guest can never reach mount (the view gate 403s), so rendering
+   signed out cannot produce the component at all.
+   --------------------------------------------------------------------------- */
+
+it('names the expired session with a way back in when the save arrives signed out', function () {
+    $member = User::factory()->create();
+
+    $component = Livewire::actingAs($member)
+        ->test(MemberProfile::class, ['member' => $member, 'stats' => profileStats($member->discord_id)])
+        ->call('edit')
+        ->set('bio', 'Still composing this.');
+
+    // The session died underneath the open form (SESSION_LIFETIME).
+    auth()->logout();
+
+    $component->call('save')
+        ->assertSet('sessionExpired', true)
+        // The form stays open: the input was not eaten, only the write refused.
+        ->assertSet('editing', true)
+        ->assertSee('Your session expired.', false)
+        ->assertSeeHtml('data-testid="profile-session-expired"')
+        ->assertSee('Your changes are still here.')
+        ->assertSee('Log in with Discord')
+        // Not a retryable failure: nothing here may invite a retry that cannot help.
+        ->assertDontSee('That profile did not save.', false)
+        ->assertDontSeeHtml('data-testid="profile-edit-failed"')
+        // The focus dispatch fires so keyboard users land on the banner.
+        ->assertDispatched('profile-state-changed');
+
+    expect($member->profile()->first())->toBeNull();
+});
+
+it('names the expired session when cancel arrives signed out', function () {
+    $member = User::factory()->create();
+
+    $component = Livewire::actingAs($member)
+        ->test(MemberProfile::class, ['member' => $member, 'stats' => profileStats($member->discord_id)])
+        ->call('edit');
+
+    auth()->logout();
+
+    $component->call('cancel')
+        ->assertSet('sessionExpired', true)
+        ->assertSee('Your session expired.', false)
+        ->assertSeeHtml('data-testid="profile-session-expired"')
+        ->assertDispatched('profile-state-changed');
+});
+
+it('announces the expired session as an alert, because it interrupted what they were doing', function () {
+    $member = User::factory()->create();
+
+    $component = Livewire::actingAs($member)
+        ->test(MemberProfile::class, ['member' => $member, 'stats' => profileStats($member->discord_id)])
+        ->call('edit')
+        ->set('bio', 'Still composing this.');
+
+    auth()->logout();
+
+    $html = $component->call('save')
+        ->html();
+
+    expect($html)->toContain('role="alert"')
+        ->toContain('data-testid="profile-session-expired"')
+        ->toContain('tabindex="-1"');
+});
+
+it('clears the expired banner on the next authenticated save', function () {
+    $member = User::factory()->create();
+
+    // A stale banner from an earlier expired round trip must not sit above a
+    // later saved confirmation: cleared before the attempt, not after (same
+    // reasoning as the RSVP reset).
+    Livewire::actingAs($member)
+        ->test(MemberProfile::class, ['member' => $member, 'stats' => profileStats($member->discord_id)])
+        ->set('sessionExpired', true)
+        ->call('save')
+        ->assertSet('sessionExpired', false)
+        ->assertDontSeeHtml('data-testid="profile-session-expired"');
+});
+
+it('clears the expired banner when the form is reopened', function () {
+    $member = User::factory()->create();
+
+    Livewire::actingAs($member)
+        ->test(MemberProfile::class, ['member' => $member, 'stats' => profileStats($member->discord_id)])
+        ->set('sessionExpired', true)
+        ->call('edit')
+        ->assertSet('sessionExpired', false)
+        ->assertDontSeeHtml('data-testid="profile-session-expired"');
+});
