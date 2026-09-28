@@ -13,7 +13,7 @@
                 if (is_string($rulesLastUpdatedRaw) && trim($rulesLastUpdatedRaw) !== '') {
                     try {
                         $rulesLastUpdated = \Carbon\Carbon::parse($rulesLastUpdatedRaw);
-                    } catch (\Throwable $exception) {
+                    } catch (\Throwable) {
                         \Illuminate\Support\Facades\Log::warning('Invalid community.rules_last_updated — hiding /rules stamp', [
                             'value' => $rulesLastUpdatedRaw,
                         ]);
