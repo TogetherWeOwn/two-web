@@ -136,7 +136,11 @@ it('answers a full event with a 409 and not a 500', function () {
     $this->actingAs($this->member)
         ->putJson(route('events.rsvp.update', $event), ['status' => RsvpStatus::Going->value])
         ->assertStatus(409)
-        ->assertJsonPath('reason', 'event_at_capacity');
+        ->assertJsonPath('reason', 'event_at_capacity')
+        // The loser of the race is a member, not a client to debug: the body
+        // carries the sentence they would read and the cap, not just a code.
+        ->assertJsonPath('message', 'This event is full.')
+        ->assertJsonPath('capacity', 1);
 });
 
 it('still takes a maybe for a full event, because maybe is not a seat', function () {
