@@ -50,19 +50,12 @@
                 </span>
             @endif
 
-            {{-- The count, in tabular figures so it does not jitter as it ticks.
+            {{-- The count, live: GoingCount re-reads the aggregate when RsvpButton
+                 broadcasts `going-count-updated` after a write (TOG-7966).
                  Omitted when unknown: a Discord-native row has no local answers,
                  and "0 going" would be a number we do not know. --}}
             @if ($event->going_count !== null)
-                <span class="u-numeric inline-flex items-center gap-1.5 rounded-sm px-2 py-0.5 text-xs font-medium
-                             bg-raised text-ink-muted border border-line"
-                      data-testid="event-going-count">
-                    @if ($event->capacity !== null)
-                        {{ $event->going_count }} of {{ $event->capacity }} going
-                    @else
-                        {{ $event->going_count }} going
-                    @endif
-                </span>
+                @livewire('going-count', ['event' => $event], key('going-count-'.$event->event_key))
             @endif
         </div>
     </div>
