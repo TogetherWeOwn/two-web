@@ -5,6 +5,8 @@ use App\Enums\RsvpStatus;
 use App\Models\Event;
 use App\Models\Rsvp;
 use App\Models\User;
+use App\Support\RsvpRateLimit;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Laravel\Dusk\Browser;
 
@@ -171,6 +173,48 @@ test('a failed RSVP write returns the control and succeeds on retry', function (
         ->exists())->toBeTrue();
 });
 
+test('a rate-limited RSVP click announces the wait and keeps the control', function () {
+    $member = User::factory()->create();
+    $event = browsableEvent();
+
+    // The limiter is database-backed and shared across processes, so spending
+    // the member's budget here throttles the browser journey too: the click
+    // below is the 13th write. The HTTP 429 envelope is unchanged; the control
+    // must speak instead of failing silently (TOG-7976).
+    for ($attempt = 0; $attempt < RsvpRateLimit::MAX_ATTEMPTS; $attempt++) {
+        RsvpRateLimit::hit($member);
+    }
+
+    $this->browse(function (Browser $browser) use ($member, $event) {
+        $browser->loginAs($member)
+            ->resize(360, 780)
+            ->visit('/events')
+            ->waitUntil('window.Livewire?.initialRenderIsFinished === true')
+            ->waitFor('[data-testid="rsvp-going"]')
+            ->click('[data-testid="rsvp-going"]')
+            // The exact wait depends on wall-clock seconds since the budget was
+            // spent across the process boundary, so pin the stable fragments of
+            // the CM-frozen copy, not the number.
+            ->waitFor('[data-testid="rsvp-rate-limited"]')
+            ->assertSeeIn('[data-testid="rsvp-rate-limited"]', 'Slow down — try again in')
+            ->assertSeeIn('[data-testid="rsvp-rate-limited"]', 'seconds. Nothing changed, just wait a moment.')
+            // Polite announcement for a temporary wait, never an interruption.
+            ->assertAttribute('[data-testid="rsvp-rate-limited"]', 'role', 'status')
+            // The control returns to default and stays usable — never disabled
+            // or replaced, and no failure copy for a wait.
+            ->assertVisible('[data-testid="rsvp-going"]')
+            ->assertButtonEnabled('[data-testid="rsvp-going"]')
+            ->assertMissing('[data-testid="rsvp-confirmed"]')
+            ->assertMissing('[data-testid="rsvp-failed"]');
+
+        // The throttled click changed nothing.
+        expect(Rsvp::query()
+            ->where('event_id', $event->id)
+            ->where('user_id', $member->id)
+            ->exists())->toBeFalse();
+    });
+});
+
 test('a member can stand down again', function () {
     $member = User::factory()->create();
     $event = browsableEvent();
@@ -193,6 +237,35 @@ test('a member can stand down again', function () {
             ->refresh()
             ->waitFor('[data-testid="rsvp-going"]')
             ->assertMissing('[data-testid="rsvp-confirmed"]');
+    });
+});
+
+test('the going count ticks with the answer without a reload', function () {
+    // TOG-7966: the badge lives outside RsvpButton, so it used to show the
+    // pre-click number until a full reload. No refresh below on purpose — the
+    // tick itself is the assertion. waitForTextIn, never pause (flake policy).
+    $member = User::factory()->create();
+    browsableEvent();
+
+    $this->browse(function (Browser $browser) use ($member) {
+        $browser->loginAs($member)
+            ->resize(360, 780)
+            ->visit('/events')
+            ->waitForText('Friday night Helldivers')
+            ->waitFor('[data-testid="event-going-count"]')
+            ->assertSeeIn('[data-testid="event-going-count"]', '0 of 4 going')
+            // Polite live region: the count changes without a reload, so the
+            // change must announce via role="status", never role="alert".
+            ->assertAttribute('[data-testid="event-going-count"]', 'role', 'status')
+            ->assertVisible('[data-testid="rsvp-going"]')
+            ->click('[data-testid="rsvp-going"]')
+            ->waitFor('[data-testid="rsvp-confirmed"]')
+            ->waitForTextIn('[data-testid="event-going-count"]', '1 of 4 going')
+            ->assertSeeIn('[data-testid="event-going-count"]', '1 of 4 going')
+            ->click('[data-testid="rsvp-withdraw"]')
+            ->waitFor('[data-testid="rsvp-going"]')
+            ->waitForTextIn('[data-testid="event-going-count"]', '0 of 4 going')
+            ->assertSeeIn('[data-testid="event-going-count"]', '0 of 4 going');
     });
 });
 
@@ -237,18 +310,90 @@ test('an empty calendar reads as early rather than broken', function () {
     // on its own terms instead of inheriting whatever the previous test created.
     expect(Event::query()->count())->toBe(0);
 
-    $this->browse(function (Browser $browser) {
-        $browser->resize(360, 780)
-            ->visit('/events')
-            ->waitFor('[data-testid="events-empty-never"]')
-            ->assertSeeIn('[data-testid="events-empty-never"]', 'Nothing on the calendar yet.')
-            // Exactly one action, and it is the one that helps.
-            ->assertSeeLink('Join the Discord')
-            // Nothing on this page is an error. A member who lands here early must
-            // not think the site is down.
-            ->assertMissing('[data-testid="rsvp-failed"]')
-            ->assertDontSee('No events found');
-    });
+    // A healthy empty read is not an unavailable bot. The shared cache makes
+    // the fixture visible to the separate HTTP process without a test route.
+    Cache::put('events.discord-upcoming', [], 600);
+
+    try {
+        $this->browse(function (Browser $browser) {
+            $browser->resize(360, 780)
+                ->visit('/events')
+                ->waitFor('[data-testid="events-empty-never"]')
+                ->assertSeeIn('[data-testid="events-empty-never"]', 'Nothing on the calendar yet.')
+                ->assertAttribute('[data-testid="events-empty-never"] [data-testid="discord-join"]', 'href', route('discord'))
+                ->assertSeeLink('Join the Discord')
+                ->assertMissing('[data-testid="events-empty-error"]')
+                ->assertMissing('[data-testid="rsvp-failed"]')
+                ->click('[data-testid="events-view-calendar"]')
+                ->waitFor('[data-testid="events-calendar-grid"]')
+                ->assertAttribute('[data-testid="events-view-calendar"]', 'aria-pressed', 'true')
+                ->assertVisible('[data-testid="events-empty-never"]')
+                ->assertDontSee('No events found');
+        });
+    } finally {
+        Cache::forget('events.discord-upcoming');
+    }
+});
+
+test('the gap calendar shows five past names and keeps the selected view', function () {
+    Cache::put('events.discord-upcoming', [], 600);
+
+    for ($days = 1; $days <= 7; $days++) {
+        browsableEvent([
+            'title' => "Past game night {$days}",
+            'starts_at' => now()->subDays($days)->subHours(2),
+            'ends_at' => now()->subDays($days),
+        ]);
+    }
+
+    try {
+        $this->browse(function (Browser $browser) {
+            $browser->resize(360, 780)
+                ->visit('/events')
+                ->waitFor('[data-testid="events-empty-gap"]')
+                ->assertSeeIn('[data-testid="events-empty-gap"]', 'No upcoming events — check back soon.')
+                ->assertSeeIn('[data-testid="events-empty-gap"]', 'Last time: Past game night 1')
+                ->assertCount('[data-testid="events-empty-gap-item"]', 5)
+                ->assertDontSee('Past game night 6')
+                ->assertMissing('[data-testid="events-empty-never"]')
+                ->click('[data-testid="events-view-calendar"]')
+                ->waitFor('[data-testid="events-calendar-grid"]')
+                ->assertAttribute('[data-testid="events-view-calendar"]', 'aria-pressed', 'true')
+                ->assertVisible('[data-testid="events-empty-gap"]');
+        });
+    } finally {
+        Cache::forget('events.discord-upcoming');
+    }
+});
+
+test('a failed calendar read retries in the browser without losing the view', function () {
+    // An invalid cached read triggers the reader's error path deterministically,
+    // without reaching Discord or adding a production-accessible failure seam.
+    Cache::put('events.discord-upcoming', 'invalid-event-result', 600);
+
+    try {
+        $this->browse(function (Browser $browser) {
+            $browser->resize(360, 780)
+                ->visit('/events')
+                ->waitFor('[data-testid="events-empty-error"]')
+                ->assertSeeIn('[data-testid="events-empty-error"]', "We couldn't load the calendar.")
+                ->assertSeeIn('[data-testid="events-empty-error"]', 'The Discord always has the latest — come ask there.')
+                ->assertMissing('[data-testid="events-empty-never"]')
+                ->click('[data-testid="events-view-calendar"]')
+                ->waitFor('[data-testid="events-calendar-grid"]')
+                ->assertAttribute('[data-testid="events-view-calendar"]', 'aria-pressed', 'true');
+
+            Cache::put('events.discord-upcoming', [], 600);
+
+            $browser->click('[data-testid="events-retry"]')
+                ->waitFor('[data-testid="events-empty-never"]')
+                ->assertMissing('[data-testid="events-empty-error"]')
+                ->assertAttribute('[data-testid="events-view-calendar"]', 'aria-pressed', 'true')
+                ->assertVisible('[data-testid="events-calendar-grid"]');
+        });
+    } finally {
+        Cache::forget('events.discord-upcoming');
+    }
 });
 
 test('the calendar view renders a month grid and jumps to the event', function () {

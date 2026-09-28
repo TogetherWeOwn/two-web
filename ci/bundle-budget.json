@@ -1,0 +1,10 @@
+{
+  "$comment": "Vite bundle size budget (TOG-5629). Enforced by ci/check-bundle-budget.mjs in the `budgets` job after `npm run build`; pinned by ci/verify-pipeline.sh --lint (check 12). Measured baseline 2026-09-27 (vite 7.3.6): app.css 62560 raw / 11719 gzip, app.js 1 / 21, hallmark.css 10853 / 2651, theme.css 342710 / 33013. event-copy-link.js (TOG-7262, added 2026-09-28): dependency-free module, source 3339 raw / 1535 gzip, ceiling 4096/2048 — headroom for copy variants, tight enough that an axios-grade import goes red. Headroom is ~10-40% raw: enough for ordinary work, tight enough that a restored axios (48 KB, see TOG-53) or an unconditional hallmark include (10.9 KB, see TOG-3233) goes red. Raising a number is a deliberate edit in its own commit that says what grew and why, plus the matching lint pin — same standard as ci/lighthouserc.cjs.",
+  "budgets": {
+    "resources/css/app.css": { "maxRawBytes": 76800, "maxGzipBytes": 15360 },
+    "resources/css/filament/admin/theme.css": { "maxRawBytes": 375000, "maxGzipBytes": 38000 },
+    "resources/css/hallmark.css": { "maxRawBytes": 15360, "maxGzipBytes": 4096 },
+    "resources/js/app.js": { "maxRawBytes": 5120, "maxGzipBytes": 2048 },
+    "resources/js/event-copy-link.js": { "maxRawBytes": 4096, "maxGzipBytes": 2048 }
+  }
+}

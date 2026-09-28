@@ -124,6 +124,54 @@ it('hides attendee names from guests while keeping the count and join pitch', fu
         ->assertDontSee('Alice Attendee');
 });
 
+it('shows how many spots are left against the cap', function () {
+    // The progress signal: seats still claimable from the existing
+    // `capacity`/`going_count` data — no new schema. A guest sees it too,
+    // because it is information, not a control.
+    $event = publishedEvent(['capacity' => 5]);
+    Rsvp::factory()->count(2)->for($event)->create(['status' => RsvpStatus::Going]);
+
+    $this->get(route('events.page', $event))
+        ->assertOk()
+        ->assertSeeHtml('data-testid="event-spots-left"')
+        ->assertSee('3 of 5 spots left', false);
+});
+
+it('shows Full instead of a count when no spots are left', function () {
+    $event = publishedEvent(['capacity' => 1]);
+    Rsvp::factory()->for($event)->create(['status' => RsvpStatus::Going]);
+
+    $this->get(route('events.page', $event))
+        ->assertOk()
+        ->assertSeeHtml('data-testid="event-spots-left"')
+        ->assertSee('Full', false)
+        ->assertDontSee('spots left', false);
+});
+
+it('shows Full rather than a negative count when going exceeds the cap', function () {
+    // Over-subscription is possible when the cap is lowered after RSVPs exist;
+    // the page must never print "-1 of 1 spots left".
+    $event = publishedEvent(['capacity' => 1]);
+    Rsvp::factory()->count(3)->for($event)->create(['status' => RsvpStatus::Going]);
+
+    $this->get(route('events.page', $event))
+        ->assertOk()
+        ->assertSeeHtml('data-testid="event-spots-left"')
+        ->assertSee('Full', false)
+        ->assertDontSee('spots left', false);
+});
+
+it('shows no spots signal when the event has no capacity', function () {
+    // Unknown capacity renders nothing rather than inventing a number.
+    $event = publishedEvent(['capacity' => null]);
+    Rsvp::factory()->for($event)->create(['status' => RsvpStatus::Going]);
+
+    $this->get(route('events.page', $event))
+        ->assertOk()
+        ->assertSee('1 going', false)
+        ->assertDontSeeHtml('data-testid="event-spots-left"');
+});
+
 it('hides a draft from guests and members but shows it to moderators', function () {
     $draft = publishedEvent(['status' => EventStatus::Draft]);
 

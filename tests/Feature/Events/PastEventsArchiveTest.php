@@ -163,6 +163,80 @@ it('says what the empty archive means instead of rendering a bare list', functio
         ->assertSee('See upcoming events');
 });
 
+it('names the miss on an out-of-range page instead of claiming the archive is empty', function () {
+    // TOG-7989: past `lastPage` Laravel returns an empty collection, which
+    // used to fall into the first-visit empty state — a stale/bookmarked deep
+    // link was told no events ever happened on a non-empty archive.
+    foreach (range(1, 5) as $i) {
+        archivePastEvent([
+            'title' => "Night {$i}",
+            'starts_at' => now()->subDays($i),
+            'ends_at' => now()->subDays($i)->addHours(2),
+        ]);
+    }
+
+    $this->get(route('events.past').'?page=999')
+        ->assertOk()
+        ->assertSee('data-testid="past-events-out-of-range"', escape: false)
+        ->assertSee('That page doesn')
+        ->assertDontSee('data-testid="past-events-empty"', escape: false)
+        ->assertDontSee('data-testid="past-events-list"', escape: false);
+
+    Livewire::test(PastEvents::class)
+        ->call('gotoPage', 999)
+        ->assertSeeHtml('data-testid="past-events-out-of-range"')
+        ->assertDontSeeHtml('data-testid="past-events-empty"');
+});
+
+it('keeps the first-visit empty state on an out-of-range page of an empty archive', function () {
+    // The archive really is empty here: `$events->total() === 0`, so the
+    // out-of-range state must not appear — there is no page count to name.
+    $this->get(route('events.past').'?page=999')
+        ->assertOk()
+        ->assertSee('data-testid="past-events-empty"', escape: false)
+        ->assertDontSee('data-testid="past-events-out-of-range"', escape: false);
+});
+
+it('canonicalizes the archive to itself with a single canonical tag', function () {
+    // TOG-8706: the archive is paginated, so each page must name itself —
+    // every page canonicalizing to page 1 would leave crawlers indexing
+    // duplicates of the first page instead of the archive.
+    archivePastEvent();
+
+    $html = (string) $this->get(route('events.past'))->assertOk()->getContent();
+
+    expect($html)->toContain('<link rel="canonical" href="'.route('events.past').'">');
+    expect(substr_count($html, 'rel="canonical"'))->toBe(1);
+});
+
+it('names the archive page in the canonical on paginated pages', function () {
+    // Twenty-one past events spill onto page 2 (twenty per page). Page 2
+    // must canonicalize to its own address, not back to page 1.
+    foreach (range(1, 21) as $i) {
+        archivePastEvent([
+            'title' => "Night {$i}",
+            'starts_at' => now()->subDays($i),
+            'ends_at' => now()->subDays($i)->addHours(2),
+        ]);
+    }
+
+    $html = (string) $this->get(route('events.past').'?page=2')->assertOk()->getContent();
+
+    expect($html)->toContain('<link rel="canonical" href="'.route('events.past', ['page' => 2]).'">');
+    expect(substr_count($html, 'rel="canonical"'))->toBe(1);
+});
+
+it('keeps the bare archive URL as the canonical for page one', function () {
+    // `?page=1` is the first page with noise appended — canonicalizing it
+    // to itself would split the archive's ranking between two addresses.
+    archivePastEvent();
+
+    $html = (string) $this->get(route('events.past').'?page=1')->assertOk()->getContent();
+
+    expect($html)->toContain('<link rel="canonical" href="'.route('events.past').'">');
+    expect(substr_count($html, 'rel="canonical"'))->toBe(1);
+});
+
 it('is linked from the events page', function () {
     $this->get(route('events.index'))
         ->assertOk()

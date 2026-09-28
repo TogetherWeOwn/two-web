@@ -199,13 +199,12 @@ it('returns 429 on the login callback past the limit, revealing nothing about ac
     bindRealDiscordDriver([], $history);
 
     for ($i = 0; $i < 10; $i++) {
-        $this->get('/auth/discord/callback?code=stale&state=wrong');
+        $this->getJson('/auth/discord/callback?code=stale&state=wrong');
     }
 
-    $throttled = $this->get('/auth/discord/callback?code=stale&state=wrong');
+    $throttled = $this->getJson('/auth/discord/callback?code=stale&state=wrong');
 
-    $throttled->assertStatus(429);
-    $throttled->assertHeader('Retry-After');
+    assertThrottleEnvelope($throttled);
     $this->assertGuest();
 
     // The throttle throws before the controller runs, so the member's presence
@@ -218,13 +217,12 @@ it('returns 429 on the join callback past the limit without revealing anything',
     bindRealDiscordDriver([], $history);
 
     for ($i = 0; $i < 10; $i++) {
-        $this->get('/join/callback?code=stale&state=wrong');
+        $this->getJson('/join/callback?code=stale&state=wrong');
     }
 
-    $throttled = $this->get('/join/callback?code=stale&state=wrong');
+    $throttled = $this->getJson('/join/callback?code=stale&state=wrong');
 
-    $throttled->assertStatus(429);
-    $throttled->assertHeader('Retry-After');
+    assertThrottleEnvelope($throttled);
     $this->assertGuest();
     expect(User::query()->count())->toBe(0);
 });
@@ -234,13 +232,12 @@ it('returns 429 on the login redirect past the limit, before any Discord handoff
     bindRealDiscordDriver([], $history);
 
     for ($i = 0; $i < 10; $i++) {
-        $this->get(route('login'));
+        $this->getJson(route('login'));
     }
 
-    $throttled = $this->get(route('login'));
+    $throttled = $this->getJson(route('login'));
 
-    $throttled->assertStatus(429);
-    $throttled->assertHeader('Retry-After');
+    assertThrottleEnvelope($throttled);
 
     // A throttled handoff must not leak the OAuth URL either.
     expect((string) $throttled->getContent())->not->toContain('discord.com');

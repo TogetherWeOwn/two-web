@@ -230,6 +230,7 @@
                 <p>Together We Own · adult gaming community · founded 1998</p>
                 <div class="flex flex-wrap items-center gap-4 md:gap-6">
                     <a href="{{ route('about') }}" class="font-semibold underline underline-offset-4 hover:text-brand">About</a>
+                    <a href="{{ route('faq') }}" class="font-semibold underline underline-offset-4 hover:text-brand">FAQ</a>
                     <a href="{{ route('rules') }}" class="font-semibold underline underline-offset-4 hover:text-brand">House rules</a>
                     @auth
                         <a href="{{ route('profile') }}" class="font-semibold underline underline-offset-4 hover:text-brand">Your profile</a>

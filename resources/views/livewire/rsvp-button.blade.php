@@ -80,9 +80,12 @@
             </p>
 
             @if ($seatOpenForWaitlist)
-                {{-- A seat freed while in line. The waitlist never auto-promotes
-                     — that claim would be its own race — so the member takes it
-                     through the same locked write as everybody else. --}}
+                {{-- A seat reads free while the member is still in line — only
+                     possible mid-flight before their promotion renders, or when
+                     a promotion never fired. A withdraw (or a raised cap) deals
+                     freed seats to the head of the line in the same locked
+                     write (TOG-8394); this control takes the seat through the
+                     same locked write for whatever gap remains. --}}
                 <button type="button"
                         wire:click="rsvp('{{ \App\Enums\RsvpStatus::Going->value }}')"
                         wire:loading.attr="disabled"
@@ -178,6 +181,19 @@
         @elseif ($going)
             <p class="text-xs text-ink-muted" role="status" data-testid="rsvp-synced">
                 Synced to Discord.
+            </p>
+        @endif
+
+        @if ($rateLimitedMessage !== null)
+            {{-- TOG-7976: the throttle wait. role="status", not alert: a throttle is
+                 temporary, not a failure that interrupts (CM spec in TOG-7928
+                 `copy` doc). Beside the control with the button enabled, like
+                 rsvp-failed below — never disabling or replacing the control. --}}
+            <p class="flex items-start gap-1.5 text-sm text-ink-muted" role="status" data-testid="rsvp-rate-limited">
+                <svg class="size-4 shrink-0 mt-0.5" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+                    <path d="M8 1.5a6.5 6.5 0 1 0 0 13 6.5 6.5 0 0 0 0-13Zm.75 3.75a.75.75 0 0 0-1.5 0v3.5a.75.75 0 0 0 1.5 0V5.25ZM8 11.5a.9.9 0 1 0 0-1.8.9.9 0 0 0 0 1.8Z"/>
+                </svg>
+                <span>{{ $rateLimitedMessage }}</span>
             </p>
         @endif
 

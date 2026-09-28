@@ -97,6 +97,7 @@ function expectedProductionRoutes(): array
         'GET|HEAD events/past',
         'GET|HEAD events/{event}',
         'GET|HEAD events/{event}.ics',
+        'GET|HEAD faq',
         'GET|HEAD filament/exports/{export}/download',
         'GET|HEAD filament/imports/{import}/failed-rows/download',
         'GET|HEAD join',
@@ -113,7 +114,9 @@ function expectedProductionRoutes(): array
         'GET|HEAD storage/{path}',
         'GET|HEAD up',
         'PATCH events/{event}',
-        'PATCH members/{user}',
+        // TOG-8440 deleted PATCH members/{user} (`profiles.update`): the
+        // Livewire form is the single profile writer, so the member surface is
+        // GET-only plus the shared POST livewire/update endpoint below.
         'POST admin/logout',
         'POST api/agent-events',
         'POST events',

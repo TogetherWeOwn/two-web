@@ -46,6 +46,7 @@ Route::get('/sitemap_index.xml', function () {
         ['loc' => route('join'), 'changefreq' => 'monthly', 'priority' => '0.9'],
         ['loc' => route('events.index'), 'changefreq' => 'daily', 'priority' => '0.8'],
         ['loc' => route('about'), 'changefreq' => 'monthly', 'priority' => '0.7'],
+        ['loc' => route('faq'), 'changefreq' => 'monthly', 'priority' => '0.7'],
         ['loc' => route('rules'), 'changefreq' => 'monthly', 'priority' => '0.7'],
     ];
 
@@ -167,7 +168,11 @@ if (app()->environment('staging')) {
 }
 
 // POST only. A logout on GET can be fired by any <img src> a member loads.
-Route::post('/logout', [DiscordLoginController::class, 'logout'])->name('logout');
+// Throttled like every other write (TOG-8709): the audit test fails a new
+// POST route that ships without one, and this line is what keeps that true.
+Route::post('/logout', [DiscordLoginController::class, 'logout'])
+    ->middleware('throttle:30,1')
+    ->name('logout');
 
 Route::middleware('auth')->group(function () {
     // The singular URL remains the post-login destination. Canonical member
@@ -177,8 +182,6 @@ Route::middleware('auth')->group(function () {
         ->middleware('member-access-log:member,view')->name('profile');
     Route::get('/members/{user}', [ProfileController::class, 'show'])
         ->middleware('member-access-log:member,view')->name('profiles.show');
-    Route::patch('/members/{user}', [ProfileController::class, 'update'])
-        ->middleware('member-access-log:member,update')->name('profiles.update');
 
     // Events. The wildcard binds on `event_key`, not the autoincrement id — see
     // Event::getRouteKeyName(). That is the same string the bot keys its Discord
@@ -192,11 +195,15 @@ Route::middleware('auth')->group(function () {
     // serves the HTML page (see above) and one URL answering with two media types
     // is how you end up with a crawler and a browser seeing different sites.
     Route::get('/events.json', [EventController::class, 'index'])->name('events.json');
-    Route::post('/events', [EventController::class, 'store'])->name('events.store');
+    Route::post('/events', [EventController::class, 'store'])
+        ->middleware('throttle:30,1')->name('events.store');
     Route::get('/events/{event}', [EventController::class, 'show'])->name('events.show');
-    Route::patch('/events/{event}', [EventController::class, 'update'])->name('events.update');
-    Route::post('/events/{event}/publish', [EventStatusController::class, 'publish'])->name('events.publish');
-    Route::post('/events/{event}/cancel', [EventStatusController::class, 'cancel'])->name('events.cancel');
+    Route::patch('/events/{event}', [EventController::class, 'update'])
+        ->middleware('throttle:30,1')->name('events.update');
+    Route::post('/events/{event}/publish', [EventStatusController::class, 'publish'])
+        ->middleware('throttle:30,1')->name('events.publish');
+    Route::post('/events/{event}/cancel', [EventStatusController::class, 'cancel'])
+        ->middleware('throttle:30,1')->name('events.cancel');
 
     // One answer per member per event, so the RSVP is a singular sub-resource:
     // there is no collection to list and no id to hand back.

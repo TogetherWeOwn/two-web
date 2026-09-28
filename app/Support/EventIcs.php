@@ -63,6 +63,11 @@ final class EventIcs
                 'VERSION:2.0',
                 'PRODID:-//TogetherWeOwn//Events//EN',
                 'METHOD:PUBLISH',
+                // Non-standard, but Apple Calendar labels a subscription with
+                // the raw URL when it is missing — the name is what the member
+                // sees in their calendar list.
+                'X-WR-CALNAME:'.self::text((string) config('app.name').' Events'),
+                'X-WR-CALDESC:'.self::text('Upcoming events from '.config('app.name')),
             ],
             $inner,
             ['END:VCALENDAR'],
@@ -95,6 +100,13 @@ final class EventIcs
         if (is_string($event->location) && $event->location !== '') {
             $lines[] = 'LOCATION:'.self::text($event->location);
         }
+
+        // Tap-through to the shareable page: the feed exists to drive RSVPs,
+        // and without it the entry is a dead end. Emitted raw, not through
+        // `text()`: `URL` is a URI-typed property (RFC 5545 §3.8.4.6), so the
+        // colons and slashes are literal and backslash-escaping would corrupt it.
+        // Same `route()`-in-builder precedent as `EventRss::item()`.
+        $lines[] = 'URL:'.route('events.page', $event);
 
         $lines[] = 'BEGIN:VALARM';
         $lines[] = 'TRIGGER:-PT30M';
