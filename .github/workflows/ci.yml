@@ -196,6 +196,15 @@ jobs:
       - name: Bundle budget self-test
         run: node ci/check-bundle-budget.mjs --selftest
 
+      # The dependency audit predicate (TOG-8405). Its own `--selftest` runs
+      # here, in `static`, for the same reason as the line above: the live
+      # audit needs the public feeds so it runs in `deps-audit`, and a
+      # predicate that quietly stopped failing is indistinguishable from
+      # clean lockfiles unless something offline proves it still fails.
+      # Canned fixtures in a temp dir, no network, milliseconds.
+      - name: Dependency audit self-test
+        run: ./ci/deps-audit.sh --selftest
+
       # The `budgets` verdict, which had no test until it shipped a defect. lhci
       # runs there under `continue-on-error: true`, so its exit code is discarded
       # and `ci/lh-annotate.mjs` is what actually turns the job red — the whole
@@ -1008,8 +1017,62 @@ jobs:
           if-no-files-found: ignore
 
   # ---------------------------------------------------------------------------
-  # The aggregate. It is one of the six required checks on `main` (TWO-36) — the
-  # four jobs above are required too, so protection does not depend on this guard
+  # Dependency audit. composer audit + npm audit, failing on high/critical
+  # advisories (TOG-8405). Both read the lockfiles, so this needs no install,
+  # no vendor/, no node_modules, no database — seconds, not minutes.
+  #
+  # The threshold lives in ci/deps-audit.sh, not here: composer's advisory feed
+  # carries entries with no severity field at all, and trusting either tool's
+  # exit code alone would pass those quietly. The script allowlists low/medium
+  # and fails on everything else, fail-closed on unparseable output.
+  # ---------------------------------------------------------------------------
+  deps-audit:
+    name: deps-audit
+    runs-on: [self-hosted, two-selfhosted]
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+
+      # See the note in `static`. Every job attests; a job that does not could be
+      # moved onto a billable runner with nothing going red (TOG-2847).
+      - name: Attest the runner
+        run: ./ci/attest-runner.sh
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      # No extensions: the audit reads lockfiles and phones the free public
+      # feeds (packagist.org, the npm registry). Nothing to compile against,
+      # no database, no paid service.
+      - uses: shivammathur/setup-php@f3e473d116dcccaddc5834248c87452386958240 # v2
+        with:
+          php-version: ${{ env.PHP_VERSION }}
+          coverage: none
+          tools: composer:v2
+
+      # See the pin note in `static`: the shared /usr/bin/php link moves under
+      # concurrent jobs, so this job pins the versioned binary too.
+      - name: Pin the setup-php PHP and Composer binaries (TOG-5877)
+        run: |
+          php_bin="$(command -v "php${PHP_VERSION}")"
+          [ -n "$php_bin" ] || { echo "::error::php${PHP_VERSION} not found after setup-php — refusing to run on the wrong interpreter (TOG-5877)"; exit 1; }
+          composer_src="$(command -v composer)"
+          [ -n "$composer_src" ] || { echo "::error::composer not found after setup-php (TOG-5877)"; exit 1; }
+          head -1 "$composer_src" | grep -q php || { echo "::error::composer is not a PHP script — cannot pin it to the pinned interpreter (TOG-5877)"; exit 1; }
+          cp "$composer_src" "$RUNNER_TEMP/composer-pinned"
+          echo "CI_PHP_BIN=$php_bin" >> "$GITHUB_ENV"
+          echo "CI_COMPOSER_BIN=$RUNNER_TEMP/composer-pinned" >> "$GITHUB_ENV"
+          "$php_bin" -v | head -1
+          [ "$("$php_bin" -r 'echo PHP_MAJOR_VERSION, ".", PHP_MINOR_VERSION;')" = "$PHP_VERSION" ] || { echo "::error::pinned PHP is $("$php_bin" -v | head -1), not PHP ${PHP_VERSION} — refusing to run on the wrong interpreter (TOG-5877)"; exit 1; }
+          "$php_bin" "$RUNNER_TEMP/composer-pinned" --version
+
+      - name: Dependency audit
+        run: ./ci/deps-audit.sh --run
+
+  # ---------------------------------------------------------------------------
+  # The aggregate. It is one of the seven required checks on `main` (TWO-36) — the
+  # five jobs above are required too, so protection does not depend on this guard
   # staying correct through future edits. See docs/ci.md for the full list.
   #
   # Protection matches the check-run *name*, which is a job's `name:` when it sets
@@ -1017,7 +1080,7 @@ jobs:
   # string. Rename either half and the required check never arrives: every PR waits
   # forever, and it presents as CI hanging rather than as a misconfiguration.
   #
-  # What this job buys on top of the four: anything added above goes red through
+  # What this job buys on top of the five: anything added above goes red through
   # here the moment it is in `needs`, with no protection change at all.
   # ---------------------------------------------------------------------------
   tests:
@@ -1025,7 +1088,7 @@ jobs:
     runs-on: [self-hosted, two-selfhosted]
     timeout-minutes: 5
     if: always()
-    needs: [static, pest, dusk, budgets]
+    needs: [static, pest, dusk, budgets, deps-audit]
     steps:
       # This job had no checkout: it only reads `needs` results. It needs one now
       # so it can attest its own runner — the aggregate bills like any other job,
@@ -1037,10 +1100,11 @@ jobs:
 
       - name: Gate
         run: |
-          echo "static:  ${{ needs.static.result }}"
-          echo "pest:    ${{ needs.pest.result }}"
-          echo "dusk:    ${{ needs.dusk.result }}"
-          echo "budgets: ${{ needs.budgets.result }}"
+          echo "static:     ${{ needs.static.result }}"
+          echo "pest:       ${{ needs.pest.result }}"
+          echo "dusk:       ${{ needs.dusk.result }}"
+          echo "budgets:    ${{ needs.budgets.result }}"
+          echo "deps-audit: ${{ needs.deps-audit.result }}"
           if [ "${{ contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled') || contains(needs.*.result, 'skipped') }}" = "true" ]; then
             echo "::error::CI is red. Nobody merges. Read the failing job — do not re-run it."
             exit 1

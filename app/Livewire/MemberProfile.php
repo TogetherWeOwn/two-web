@@ -63,6 +63,16 @@ class MemberProfile extends Component
         $this->fillForm();
     }
 
+    /** @return array<string, mixed> */
+    public static function validationRules(): array
+    {
+        return [
+            'bio' => ['nullable', 'string', 'max:1000', new NoControlCharacters],
+            'gamesText' => ['nullable', 'string', 'max:1700', new NoControlCharacters],
+            'timezone' => ['nullable', 'string', new IanaTimeZone],
+        ];
+    }
+
     /** @throws AuthorizationException */
     public function edit(): void
     {
@@ -104,11 +114,7 @@ class MemberProfile extends Component
         // the listener picks its target from the morphed DOM.
         $this->dispatch('profile-state-changed')->self();
 
-        $validated = $this->validate([
-            'bio' => ['nullable', 'string', 'max:1000', new NoControlCharacters],
-            'gamesText' => ['nullable', 'string', 'max:1700', new NoControlCharacters],
-            'timezone' => ['nullable', 'string', new IanaTimeZone],
-        ]);
+        $validated = $this->validate(static::validationRules());
 
         $games = [];
         foreach (preg_split('/\R/', $validated['gamesText'] ?? '') ?: [] as $game) {

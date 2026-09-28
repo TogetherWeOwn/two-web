@@ -107,6 +107,7 @@ function expectedProductionRoutes(): array
         'GET|HEAD livewire/livewire.min.js.map',
         'GET|HEAD livewire/preview-file/{filename}',
         'GET|HEAD members/{user}',
+        'GET|HEAD privacy',
         'GET|HEAD profile',
         'GET|HEAD robots.txt',
         'GET|HEAD rules',
@@ -114,7 +115,9 @@ function expectedProductionRoutes(): array
         'GET|HEAD storage/{path}',
         'GET|HEAD up',
         'PATCH events/{event}',
-        'PATCH members/{user}',
+        // TOG-8440 deleted PATCH members/{user} (`profiles.update`): the
+        // Livewire form is the single profile writer, so the member surface is
+        // GET-only plus the shared POST livewire/update endpoint below.
         'POST admin/logout',
         'POST api/agent-events',
         'POST events',

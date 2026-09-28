@@ -48,6 +48,7 @@ Route::get('/sitemap_index.xml', function () {
         ['loc' => route('about'), 'changefreq' => 'monthly', 'priority' => '0.7'],
         ['loc' => route('faq'), 'changefreq' => 'monthly', 'priority' => '0.7'],
         ['loc' => route('rules'), 'changefreq' => 'monthly', 'priority' => '0.7'],
+        ['loc' => route('privacy'), 'changefreq' => 'monthly', 'priority' => '0.7'],
     ];
 
     $events = Event::query()
@@ -182,8 +183,6 @@ Route::middleware('auth')->group(function () {
         ->middleware('member-access-log:member,view')->name('profile');
     Route::get('/members/{user}', [ProfileController::class, 'show'])
         ->middleware('member-access-log:member,view')->name('profiles.show');
-    Route::patch('/members/{user}', [ProfileController::class, 'update'])
-        ->middleware(['member-access-log:member,update', 'throttle:30,1'])->name('profiles.update');
 
     // Events. The wildcard binds on `event_key`, not the autoincrement id — see
     // Event::getRouteKeyName(). That is the same string the bot keys its Discord

@@ -23,7 +23,18 @@
 #   ./bin/pg-backup.sh backup [output.dump]
 #     Writes backups/two-web-<UTC>.dump by default. Never leaves a partial file
 #     under the final name: the dump lands in a temp file first and is moved
-#     into place only on success.
+#     into place only on success. When BACKUP_COPY_DEST names a directory, the
+#     finished dump is also copied there — the offsite copy (see
+#     docs/runbook.md "Backup retention + offsite copy").
+#
+#   ./bin/pg-backup.sh rotate [--dry-run]
+#     Prunes backups/ to the newest BACKUP_KEEP_DAILY dailies (default 7) and
+#     the newest BACKUP_KEEP_WEEKLY weeklies (default 4). --dry-run prints the
+#     keep:/delete: lines and deletes nothing.
+#
+#   ./bin/pg-backup.sh promote-weekly [dump]
+#     Copies the newest daily (or the named dump) to a
+#     two-web-weekly-<UTC>.dump name. Run once a week, then rotate.
 #
 #   ./bin/pg-backup.sh restore-proof [dump]
 #     Restores into two_web_restore_proof, compares row counts table by table
@@ -46,8 +57,22 @@ cd "$ROOT"
 SCRATCH_DB="two_web_restore_proof"
 BACKUP_DIR="backups"
 
+# Retention: keep the newest BACKUP_KEEP_DAILY dailies (default 7) and the
+# newest BACKUP_KEEP_WEEKLY weeklies (default 4). Weeklies are the files
+# `promote-weekly` names two-web-weekly-*.dump; everything else counts as a
+# daily. Environment overrides exist so the selftest can shrink the window
+# without touching the production rule.
+: "${BACKUP_KEEP_DAILY:=7}"
+: "${BACKUP_KEEP_WEEKLY:=4}"
+# Offsite copy: when BACKUP_COPY_DEST names a directory, each finished backup
+# is also copied there (production: the mounted offsite volume, see
+# docs/runbook.md). Empty by default — local dev keeps one copy. The value is
+# a local path only, never a URL or credential: the mount itself is the
+# DevOps-owned step, and anything that needs a password is not this script.
+: "${BACKUP_COPY_DEST:=}"
+
 usage() {
-  echo "usage: $0 backup [output.dump] | $0 restore-proof [dump]" >&2
+  echo "usage: $0 backup [output.dump] | $0 rotate [--dry-run] | $0 promote-weekly [dump] | $0 restore-proof [dump]" >&2
   exit 2
 }
 
@@ -79,21 +104,26 @@ DB_PASSWORD="${DB_PASSWORD:-$(env_get DB_PASSWORD)}"
 : "${DB_USERNAME:=two_web}"
 : "${DB_PASSWORD:=two_web}"
 
-# Local docker only, enforced before anything connects. A DB_HOST that is not
-# this machine means someone pointed .env at a shared or production server, and
-# the two things this script does — dump a whole database to a laptop, drop and
-# recreate databases — are exactly what must never happen there.
-case "$DB_HOST" in
-  127.0.0.1|localhost) ;;
-  *)
-    echo "pg-backup: refusing: DB_HOST is '${DB_HOST}', not this machine. This script is local-docker only; production restores are docs/runbook.md." >&2
-    exit 1
-    ;;
-esac
+# Local docker only, enforced by the commands that connect (backup and
+# restore-proof). A DB_HOST that is not this machine means someone pointed .env
+# at a shared or production server, and the two things those commands do — dump
+# a whole database to a laptop, drop and recreate databases — are exactly what
+# must never happen there. `rotate` and `promote-weekly` touch only files, so
+# they run anywhere: the production cron and the CI dry-run proof have no
+# docker, and must not need one.
+require_local_docker() {
+  case "$DB_HOST" in
+    127.0.0.1|localhost) ;;
+    *)
+      echo "pg-backup: refusing: DB_HOST is '${DB_HOST}', not this machine. This script is local-docker only; production restores are docs/runbook.md." >&2
+      exit 1
+      ;;
+  esac
 
-command -v docker >/dev/null 2>&1 || {
-  echo "pg-backup: refusing: \`docker\` is not installed. Start the compose database first: docker compose up -d" >&2
-  exit 1
+  command -v docker >/dev/null 2>&1 || {
+    echo "pg-backup: refusing: \`docker\` is not installed. Start the compose database first: docker compose up -d" >&2
+    exit 1
+  }
 }
 
 # Everything runs inside the compose container, so no host Postgres client is
@@ -132,6 +162,7 @@ table_counts() {
 }
 
 cmd_backup() {
+  require_local_docker
   local out="${1:-}"
   if [ -z "$out" ]; then
     mkdir -p "$BACKUP_DIR"
@@ -154,9 +185,87 @@ cmd_backup() {
   trap - EXIT
   BACKUP_TMP=""
   echo "pg-backup: wrote ${out} ($(wc -c < "$out" | tr -d ' ') bytes)"
+  # The offsite copy. A directory, copied into by cp, so a missing or
+  # unmounted destination fails loudly here — a silent copy that never lands
+  # is worse than no copy step at all. The backup itself already succeeded
+  # above, so a failed copy keeps the backup and exits nonzero: the
+  # operator's next run (or the cron mail) sees it.
+  if [ -n "$BACKUP_COPY_DEST" ]; then
+    if [ -d "$BACKUP_COPY_DEST" ]; then
+      cp "$out" "$BACKUP_COPY_DEST/" \
+        && echo "pg-backup: copied $(basename "$out") to ${BACKUP_COPY_DEST}/" \
+        || { echo "pg-backup: FAILED: backup kept at ${out} but the copy to ${BACKUP_COPY_DEST}/ failed." >&2; return 1; }
+    else
+      echo "pg-backup: FAILED: backup kept at ${out} but BACKUP_COPY_DEST '${BACKUP_COPY_DEST}' is not a directory (mount missing?)." >&2
+      return 1
+    fi
+  fi
+}
+
+# Newest-first listing of one class of dumps (pattern like two-web-*.dump),
+# so rotation keeps the head and deletes the tail. `ls -t` is name-mtime
+# order on a live dir; the selftest sets mtimes explicitly, which is why this
+# reads mtime rather than parsing timestamps out of filenames — the filenames
+# carry wall-clock time for humans, the rotation reads the filesystem.
+newest_first() {
+  ls -t "$@" 2>/dev/null || true
+}
+
+cmd_rotate() {
+  local dry_run=0
+  if [ "${1:-}" = "--dry-run" ]; then dry_run=1; shift; fi
+
+  mkdir -p "$BACKUP_DIR"
+  # Weeklies first (they match the daily glob too, so exclude them from the
+  # daily list by filtering the name, not by moving directories around).
+  local weeklies dailies keep delete
+  weeklies="$(newest_first "${BACKUP_DIR}"/two-web-weekly-*.dump)"
+  dailies="$(newest_first "${BACKUP_DIR}"/two-web-*.dump | grep -v 'two-web-weekly-' || true)"
+
+  keep="$(printf '%s\n' "$weeklies" | head -n "$BACKUP_KEEP_WEEKLY")"
+  delete="$(printf '%s\n' "$weeklies" | tail -n +"$((BACKUP_KEEP_WEEKLY + 1))")"
+  local keep_d delete_d
+  keep_d="$(printf '%s\n' "$dailies" | head -n "$BACKUP_KEEP_DAILY")"
+  delete_d="$(printf '%s\n' "$dailies" | tail -n +"$((BACKUP_KEEP_DAILY + 1))")"
+  keep="$(printf '%s\n%s' "$keep" "$keep_d" | grep -v '^$' || true)"
+  delete="$(printf '%s\n%s' "$delete" "$delete_d" | grep -v '^$' || true)"
+
+  local f
+  printf '%s\n' "$keep" | while IFS= read -r f; do
+    [ -n "$f" ] && echo "keep: $f"
+  done
+  if [ "$dry_run" -eq 1 ]; then
+    printf '%s\n' "$delete" | while IFS= read -r f; do
+      [ -n "$f" ] && echo "delete: $f"
+    done
+    echo "pg-backup: dry-run — keeping $(printf '%s\n' "$keep" | grep -c . || true), would delete $(printf '%s\n' "$delete" | grep -c . || true). Nothing removed."
+  else
+    printf '%s\n' "$delete" | while IFS= read -r f; do
+      if [ -n "$f" ]; then rm -f "$f" && echo "delete: $f"; fi
+    done
+    echo "pg-backup: rotated — keeping $(printf '%s\n' "$keep" | grep -c . || true), deleted $(printf '%s\n' "$delete" | grep -c . || true)."
+  fi
+}
+
+cmd_promote_weekly() {
+  local src="${1:-}"
+  if [ -z "$src" ]; then
+    # Newest daily, excluding files already promoted.
+    src="$(newest_first "${BACKUP_DIR}"/two-web-*.dump | grep -v 'two-web-weekly-' | head -n 1 || true)"
+    [ -n "$src" ] || {
+      echo "pg-backup: no daily dump found in ${BACKUP_DIR}/ — run '$0 backup' first." >&2
+      exit 1
+    }
+  fi
+  [ -f "$src" ] || { echo "pg-backup: no such dump: ${src}" >&2; exit 1; }
+  mkdir -p "$BACKUP_DIR"
+  local dest="${BACKUP_DIR}/two-web-weekly-$(date -u +%Y%m%dT%H%M%SZ).dump"
+  cp "$src" "$dest"
+  echo "pg-backup: promoted $(basename "$src") to $(basename "$dest")"
 }
 
 cmd_restore_proof() {
+  require_local_docker
   local dump="${1:-}"
   if [ -z "$dump" ]; then
     dump="$(ls -t "${BACKUP_DIR}"/two-web-*.dump 2>/dev/null | head -n 1 || true)"
@@ -213,7 +322,9 @@ cmd_restore_proof() {
 
 [ "$#" -ge 1 ] || usage
 case "$1" in
-  backup)        shift; cmd_backup "$@" ;;
-  restore-proof) shift; cmd_restore_proof "$@" ;;
-  *)             usage ;;
+  backup)         shift; cmd_backup "$@" ;;
+  rotate)         shift; cmd_rotate "$@" ;;
+  promote-weekly) shift; cmd_promote_weekly "$@" ;;
+  restore-proof)  shift; cmd_restore_proof "$@" ;;
+  *)              usage ;;
 esac
