@@ -1,5 +1,6 @@
 <?php
 
+use App\Http\Middleware\AddContentSecurityPolicy;
 use App\Http\Middleware\CompressStaticAssets;
 use App\Http\Middleware\RecordMemberDataAccess;
 use Illuminate\Foundation\Application;
@@ -36,6 +37,13 @@ return Application::configure(basePath: dirname(__DIR__))
         // CompressStaticAssets carries the measurements and the reasoning.
         $middleware->append(CompressStaticAssets::class);
 
+        // The site's CSP (TOG-6770) goes on `web`, not globally: the funnel
+        // routes answer redirects/JSON that carry no body to protect, and the
+        // deliberately empty funnel stack must stay empty so `/discord` keeps
+        // answering during a database outage. Admin has its own middleware
+        // stack (see AdminPanelProvider) and gets the same class there.
+        $middleware->web(append: [AddContentSecurityPolicy::class]);
+
         // `/discord` is the break-glass route during a deploy. The one-click
         // `/join` flow needs a session and the bot, so maintenance mode must not
         // pretend it can complete; the plain invite remains available here.
@@ -53,8 +61,8 @@ return Application::configure(basePath: dirname(__DIR__))
         // If that ever stops being true, name the proxy address here instead.
         $middleware->trustProxies(at: '*');
 
-        // Goes on the admin panel's stack, not on `web`. Every screen that reads
-        // member data must carry it — see docs/member-data-access-log.md.
+        // Goes on the admin panel and member-profile routes, not on `web`.
+        // Every member-data screen must carry it — see docs/member-data-access-log.md.
         $middleware->alias([
             'member-access-log' => RecordMemberDataAccess::class,
         ]);

@@ -19,7 +19,8 @@
                                  height="96"
                                  decoding="async"
                                  class="size-24 rounded-full bg-raised object-cover"
-                                 onerror="this.hidden=true;this.nextElementSibling.hidden=false">
+                                 data-testid="profile-avatar-img"
+                                 onerror="this.onerror=null;this.hidden=true;this.nextElementSibling.hidden=false">
                         @endif
 
                         <div @if ($member->avatar) hidden @endif
@@ -68,8 +69,13 @@
             </header>
 
             @if ($saved)
+                {{-- tabindex="-1": not in the tab order, but focusable so a
+                     successful save can move keyboard focus here after the
+                     re-render replaces the form (TOG-6957). Focusing the
+                     role="status" node also announces it to screen readers. --}}
                 <p class="flex items-center gap-2 rounded-lg border border-line bg-online-quiet p-4 text-sm text-ink"
                    role="status"
+                   tabindex="-1"
                    data-testid="profile-saved">
                     <svg class="size-4 shrink-0 text-online" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
                         <path d="M6.2 11.8 2.6 8.2l1.1-1.1 2.5 2.5 6.1-6.1 1.1 1.1-7.2 7.2Z"/>
@@ -81,12 +87,20 @@
             @if ($editing)
                 <section class="rounded-lg border border-line bg-surface p-5 md:p-8" aria-labelledby="edit-profile-heading">
                     <div class="max-w-2xl">
-                        <h2 id="edit-profile-heading" class="text-2xl font-semibold text-ink">Edit your profile</h2>
+                        {{-- tabindex="-1": the open-form focus target (TOG-6957).
+                             Not in the tab order — reached by the listener, not by Tab. --}}
+                        <h2 id="edit-profile-heading" tabindex="-1" class="text-2xl font-semibold text-ink">Edit your profile</h2>
                         <p class="mt-2 text-base text-ink-muted">Your name, avatar, join date and rank come from Discord.</p>
 
                         @if ($errors->any() || $saveFailed)
+                            {{-- tabindex="-1": the invalid-save focus target
+                                 (TOG-6957). A failed save keeps the form open
+                                 but drops focus to <body>; the listener moves
+                                 it here so keyboard and screen-reader users
+                                 land on the error summary. --}}
                             <div class="mt-5 flex items-start gap-3 rounded-lg border border-line bg-alert-quiet p-4"
                                  role="alert"
+                                 tabindex="-1"
                                  data-testid="profile-edit-failed">
                                 <svg class="mt-0.5 size-5 shrink-0 text-alert" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
                                     <path d="M8 1.5 15 14H1L8 1.5Zm0 4a.75.75 0 0 0-.75.75v3a.75.75 0 0 0 1.5 0v-3A.75.75 0 0 0 8 5.5Zm0 6.75a.9.9 0 1 0 0-1.8.9.9 0 0 0 0 1.8Z"/>
@@ -176,12 +190,13 @@
                                         wire:target="save"
                                         class="inline-flex min-h-11 items-center justify-center gap-2 rounded-md bg-brand px-6 font-semibold text-on-brand transition-colors duration-fast ease-out-quick hover:bg-brand-hover active:bg-brand-active disabled:cursor-not-allowed disabled:border disabled:border-line disabled:bg-surface disabled:text-ink-disabled">
                                     <span class="size-4 shrink-0" aria-hidden="true" wire:loading.remove wire:target="save"></span>
-                                    <svg class="size-4 shrink-0 animate-spin" viewBox="0 0 16 16" fill="none" aria-hidden="true" wire:loading wire:target="save">
+                                    {{-- Hidden up front for the same reason as the RSVP control (TOG-6351). --}}
+                                    <svg class="size-4 shrink-0 animate-spin" viewBox="0 0 16 16" fill="none" aria-hidden="true" wire:loading wire:target="save" style="display: none">
                                         <circle cx="8" cy="8" r="6" stroke="currentColor" stroke-opacity="0.3" stroke-width="2"/>
                                         <path d="M14 8a6 6 0 0 0-6-6" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
                                     </svg>
                                     <span wire:loading.remove wire:target="save">Save</span>
-                                    <span wire:loading wire:target="save" aria-busy="true">Saving…</span>
+                                    <span wire:loading wire:target="save" aria-busy="true" style="display: none">Saving…</span>
                                 </button>
                             </div>
                         </form>
@@ -306,4 +321,46 @@
             </form>
         </div>
     </div>
+
+    @script
+        {{-- TOG-6957: every profile state change unmounts the focused control
+             (Edit opens the form, save/cancel removes it), dropping keyboard
+             focus to <body>. The component dispatches `profile-state-changed`
+             to itself on edit, cancel and save — save dispatches BEFORE
+             validation so a ValidationException cannot swallow it — which
+             fires after the morph, so the new state is already in the DOM.
+             The listener picks its target from what rendered, in priority
+             order: error alert (invalid save), saved confirmation (valid
+             save), form heading (opened), Edit button (cancelled).
+             `$wire.on` runs once per component lifecycle, never on re-render,
+             so this cannot stack. --}}
+        <script>
+            $wire.on('profile-state-changed', () => {
+                const root = $wire.el;
+
+                const failed = root.querySelector('[data-testid="profile-edit-failed"]');
+                if (failed) {
+                    failed.focus({ preventScroll: true });
+                    return;
+                }
+
+                const saved = root.querySelector('[data-testid="profile-saved"]');
+                if (saved) {
+                    saved.focus({ preventScroll: true });
+                    return;
+                }
+
+                const heading = root.querySelector('#edit-profile-heading');
+                if (heading && root.querySelector('[data-testid="profile-edit-form"]')) {
+                    heading.focus({ preventScroll: true });
+                    return;
+                }
+
+                const edit = root.querySelector('[data-testid="profile-edit"]');
+                if (edit) {
+                    edit.focus({ preventScroll: true });
+                }
+            });
+        </script>
+    @endscript
 </div>

@@ -16,6 +16,15 @@
         </a>
 
         <article data-testid="event-page" class="mt-4 rounded-lg bg-surface border border-line p-5 md:p-8">
+            {{-- Machine-readable event for crawlers: schema.org JSON-LD in the
+                 body is valid and parsed by Google, and keeps this off the
+                 shared layout that every other page hangs off. Slashes and
+                 unicode stay readable; `<`, `>`, `&`, quotes are hex-escaped
+                 so a title containing `</script>` cannot break out of this
+                 block — titles are free text. --}}
+            <script type="application/ld+json" data-testid="event-jsonld">
+                {!! json_encode(\App\Support\EventJsonLd::for($event), JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_AMP | JSON_HEX_QUOT) !!}
+            </script>
             <div class="flex flex-wrap items-start justify-between gap-3">
                 <div class="min-w-0">
                     <h1 class="u-display text-3xl text-ink lg:text-4xl">{{ $event->title }}</h1>
@@ -77,6 +86,53 @@
                 <p class="mt-4 max-w-prose text-ink-muted">{{ $event->description }}</p>
             @endif
 
+            {{-- Calendar export, side by side: the ICS download for every client
+                 and the Google one-click for the member who lives in a browser.
+                 Above the RSVP divider on purpose — saving the date is not RSVPing,
+                 and a guest who cannot RSVP can still add the event. --}}
+            <div class="mt-4 flex flex-wrap items-center gap-2" data-testid="event-calendar-links">
+                <a href="{{ route('events.ics', $event) }}"
+                   data-testid="event-ics"
+                   class="inline-flex items-center justify-center gap-2 min-h-11 px-5 rounded-md
+                          bg-transparent text-ink border border-line-strong
+                          hover:bg-raised hover:border-ink-muted active:bg-surface
+                          transition-colors duration-fast ease-out-quick">
+                    Add to calendar (.ics)
+                </a>
+                <a href="{{ \App\Support\EventGoogleCalendar::url($event) }}"
+                   data-testid="event-google-calendar"
+                   target="_blank"
+                   rel="noopener"
+                   class="inline-flex items-center justify-center gap-2 min-h-11 px-5 rounded-md
+                          bg-transparent text-ink border border-line-strong
+                          hover:bg-raised hover:border-ink-muted active:bg-surface
+                          transition-colors duration-fast ease-out-quick">
+                    Add to Google Calendar
+                </a>
+            </div>
+
+            {{-- Who's going: member display names for signed-in viewers only.
+                 Guests see the count in the header plus the join pitch below —
+                 no member-identifying data for logged-out visitors (TOG-5621).
+                 Names only, no profile links (TOG-6926 owns that). --}}
+            @auth
+                @if ($attendees->isNotEmpty())
+                    <div class="mt-6 border-t border-line pt-6" data-testid="event-attendees">
+                        <h2 class="text-sm font-semibold text-ink">
+                            Who's going ({{ $attendees->count() }})
+                        </h2>
+                        <ul class="mt-2 flex flex-wrap gap-1.5">
+                            @foreach ($attendees as $name)
+                                <li class="inline-flex items-center rounded-sm px-2 py-0.5 text-xs font-medium
+                                           bg-raised text-ink-muted border border-line">
+                                    {{ $name }}
+                                </li>
+                            @endforeach
+                        </ul>
+                    </div>
+                @endif
+            @endauth
+
             <div class="mt-6 border-t border-line pt-6">
                 @auth
                     <livewire:rsvp-button :event="$event" />
@@ -102,5 +158,39 @@
                 @endguest
             </div>
         </article>
+
+        {{-- Prev/next event, in `starts_at` order. The ends of the line omit
+             their missing side rather than rendering a dead link — the first
+             event has no previous, the last has no next. --}}
+        @if ($previousEvent || $nextEvent)
+            <nav class="mt-6 flex items-stretch justify-between gap-3" aria-label="More events"
+                 data-testid="event-pagination">
+                @if ($previousEvent)
+                    <a href="{{ route('events.page', $previousEvent) }}"
+                       data-testid="event-previous"
+                       rel="prev"
+                       class="flex-1 rounded-lg bg-surface border border-line p-4
+                              hover:bg-raised transition-colors duration-fast ease-out-quick">
+                        <span class="block text-xs text-ink-muted">← Previous event</span>
+                        <span class="mt-1 block truncate text-sm font-medium text-ink">{{ $previousEvent->title }}</span>
+                    </a>
+                @else
+                    <span class="flex-1" aria-hidden="true"></span>
+                @endif
+
+                @if ($nextEvent)
+                    <a href="{{ route('events.page', $nextEvent) }}"
+                       data-testid="event-next"
+                       rel="next"
+                       class="flex-1 rounded-lg bg-surface border border-line p-4 text-right
+                              hover:bg-raised transition-colors duration-fast ease-out-quick">
+                        <span class="block text-xs text-ink-muted">Next event →</span>
+                        <span class="mt-1 block truncate text-sm font-medium text-ink">{{ $nextEvent->title }}</span>
+                    </a>
+                @else
+                    <span class="flex-1" aria-hidden="true"></span>
+                @endif
+            </nav>
+        @endif
     </div>
 </x-layouts.app>
