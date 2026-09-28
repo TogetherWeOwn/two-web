@@ -211,7 +211,7 @@ Rules:
 The quarterly staging rehearsal above is the real test, but the mechanics —
 take the dump the same way, prove it restores — run on a laptop with nothing
 but docker. `bin/pg-backup.sh` wraps both halves; `ci/pg-backup-selftest.sh`
-pins the script's guards offline (15 cases, runs in `static`), so a guard that
+pins the script's guards offline (22 cases, runs in `static`), so a guard that
 quietly stopped guarding goes red on the next PR rather than at the rehearsal.
 
 ```bash
@@ -244,6 +244,43 @@ Rules for the local proof, all enforced by the script:
 - **No Postgres client needed on the laptop.** Everything runs inside the
   compose container; the password is forwarded as `-e PGPASSWORD` (name only)
   and never appears in a command line.
+
+### Backup retention + offsite copy
+
+Dumps accumulate; a disk that fills at 03:00 is an outage with a timestamp.
+The rule, enforced by `bin/pg-backup.sh rotate`:
+
+- **Dailies: keep the newest 7.** The nightly cron dumps, then rotates. The
+  8th-oldest daily is deleted.
+- **Weeklies: keep the newest 4.** Once a week (Sunday, after the nightly
+  dump), the cron runs `promote-weekly` — a byte copy of the newest daily
+  under a `two-web-weekly-<UTC>.dump` name — then rotates. Weeklies never
+  count against the daily quota.
+- **Prove it before you trust it:** `./bin/pg-backup.sh rotate --dry-run`
+  prints `keep:`/`delete:` lines and removes nothing. The acceptance proof
+  for this rule is the `rotate-dry-run` case in `ci/pg-backup-selftest.sh`:
+  8 dailies in, newest 7 kept, the 8th named for delete, nothing removed.
+
+```bash
+./bin/pg-backup.sh backup            # nightly: dump, then copy offsite
+./bin/pg-backup.sh rotate            # nightly: prune to 7 dailies + 4 weeklies
+./bin/pg-backup.sh promote-weekly    # Sundays: snapshot newest daily as weekly
+./bin/pg-backup.sh rotate --dry-run  # anytime: show what rotate would do
+```
+
+`rotate` and `promote-weekly` touch only files — no docker, no database — so
+they run on the production cron box and in CI. `backup` and `restore-proof`
+keep the local-docker-only refusal.
+
+**Offsite copy — where the second copy lives.** When `BACKUP_COPY_DEST` names
+a directory, every finished `backup` is also copied there with `cp`, and a
+missing destination fails the run loudly (backup kept, exit 1) rather than
+passing silently. Production value, set in the cron environment on the box
+(never in the repo): `BACKUP_COPY_DEST=/mnt/offsite/two-web` — the mounted
+offsite volume DevOps owns. The mount itself (what backs `/mnt/offsite`,
+its credentials, its own rotation) is DevOps-owned box config, not this
+page. No paid service, no new credential: `cp` to a mount the box already
+has. Local dev leaves `BACKUP_COPY_DEST` unset and keeps one copy.
 
 ---
 
