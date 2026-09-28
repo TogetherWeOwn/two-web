@@ -295,3 +295,8 @@ Three documents you are expected to have read before your first PR, owned by QA:
 Phase 1 is: landing page, Discord login, member profile, events calendar with RSVP,
 and a Filament moderator admin. Anything else needs CEO sign-off before a line is
 written.
+
+## Security
+
+Found a vulnerability? Report it privately — never in a public issue. See
+[SECURITY.md](SECURITY.md) for the reporting channel, scope, and response SLA.
