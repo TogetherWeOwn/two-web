@@ -62,11 +62,27 @@ it('hides every loading state before the runtime boots', function () {
     // loading state to display:none instead of seeing both states at once.
     expect($html)->toContain(livewireLoadingRule());
 
-    // No loading element opts itself back out with an inline display style
-    // that would beat the stylesheet hiding rule.
-    preg_match_all('/<[^>]*\swire:loading[^>]*>/', $html, $matches);
-    foreach ($matches[0] as $tag) {
-        expect($tag)->not->toMatch('/style="[^"]*display/i', "loading element overrides the hiding rule: {$tag}");
+    // No show-during-loading element opts itself back out with a visible
+    // inline display value that would beat the stylesheet hiding rule. An
+    // inline `display:none` cooperates with it (the RSVP button hides its
+    // spinner and loading copy up front as defense-in-depth, TOG-6351) —
+    // anything else (`block`, `flex`, …) would render beside the default
+    // state until the runtime boots. `wire:loading.remove` elements are the
+    // default states, correctly visible before boot, so only the
+    // show-during-loading elements are checked — and there must be some,
+    // or this assertion is vacuous.
+    preg_match_all('/<[^>]*\swire:loading(?![.\w-])[^>]*>|<[^>]*\swire:loading\.\w[^>]*>/', $html, $matches);
+    $showing = array_filter(
+        $matches[0],
+        fn (string $tag) => ! str_contains($tag, 'wire:loading.remove')
+            && ! str_contains($tag, 'wire:loading.attr')
+            && ! str_contains($tag, 'wire:loading.class'),
+    );
+    expect($showing)->not->toBeEmpty();
+    foreach (array_values($showing) as $tag) {
+        if (preg_match('/style="[^"]*display\s*:\s*([a-z-]+)/i', $tag, $m)) {
+            expect(strtolower($m[1]))->toBe('none');
+        }
     }
 });
 
