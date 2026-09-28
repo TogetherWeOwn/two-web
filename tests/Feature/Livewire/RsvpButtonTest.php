@@ -391,6 +391,53 @@ it('does not offer an RSVP on an event that has already happened', function () {
 });
 
 /* ---------------------------------------------------------------------------
+   Expired session (TOG-8135). The page was rendered signed in and the session
+   died underneath it (SESSION_LIFETIME). The click arrives with nobody behind
+   it — no user instance — so the component names the expiry and points at the
+   way back in instead of returning silently. Distinct from $failed on purpose:
+   retrying cannot succeed without logging in first.
+   --------------------------------------------------------------------------- */
+
+it('names the expired session with a way back in when the RSVP click arrives signed out', function () {
+    Livewire::test(RsvpButton::class, ['event' => $this->event])
+        ->call('rsvp', RsvpStatus::Going->value)
+        ->assertSee('Your session expired.', false)
+        ->assertSeeHtml('data-testid="rsvp-session-expired"')
+        ->assertSee('Log in with Discord')
+        // Not a retryable failure: nothing here may invite a retry that cannot help.
+        ->assertDontSee("That RSVP didn't save.", false)
+        ->assertDontSeeHtml('data-testid="rsvp-failed"');
+
+    expect(Rsvp::query()->where('user_id', $this->member->id)->exists())->toBeFalse();
+});
+
+it('names the expired session when the withdraw click arrives signed out', function () {
+    Rsvp::factory()->create([
+        'event_id' => $this->event->id,
+        'user_id' => $this->member->id,
+        'status' => RsvpStatus::Going,
+    ]);
+
+    Livewire::test(RsvpButton::class, ['event' => $this->event])
+        ->call('withdraw')
+        ->assertSee('Your session expired.', false)
+        ->assertSeeHtml('data-testid="rsvp-session-expired"')
+        ->assertDontSeeHtml('data-testid="rsvp-failed"');
+
+    // The answer is untouched: nothing was withdrawn.
+    expect(Rsvp::query()->where('user_id', $this->member->id)->exists())->toBeTrue();
+});
+
+it('announces the expired session as an alert, because it interrupted what they were doing', function () {
+    $html = Livewire::test(RsvpButton::class, ['event' => $this->event])
+        ->call('rsvp', RsvpStatus::Going->value)
+        ->html();
+
+    expect($html)->toContain('role="alert"')
+        ->toContain('data-testid="rsvp-session-expired"');
+});
+
+/* ---------------------------------------------------------------------------
    The loading state. It is a real requirement — "an honest loading state" — and
    in Livewire it is `wire:loading` markup, which is asserted as markup.
    --------------------------------------------------------------------------- */

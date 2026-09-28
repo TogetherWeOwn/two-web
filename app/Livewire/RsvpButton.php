@@ -35,6 +35,11 @@ use Throwable;
  *  - **A real failure keeps the button.** COMPONENTS.md §1.1: the error goes
  *    beside the control, the control returns to default and stays enabled. A
  *    disabled button after an error is a dead end.
+ *
+ *  - **An expired session is not a failure.** The page was rendered signed in
+ *    and the session died underneath it. Saying "try once more" would be a lie
+ *    — no retry can succeed without logging in first — so the click names the
+ *    expired session and points at the way back in instead.
  */
 class RsvpButton extends Component
 {
@@ -52,6 +57,14 @@ class RsvpButton extends Component
     /** Set when the last seat went to somebody else. Retrying will not help. */
     public bool $full = false;
 
+    /**
+     * Set when the click arrived with no signed-in member behind it — the page
+     * was rendered authenticated and the session died underneath it
+     * (SESSION_LIFETIME). Distinct from $failed on purpose: the next action is
+     * to log in again, not to try once more, so the message must say that.
+     */
+    public bool $sessionExpired = false;
+
     public function mount(Event $event): void
     {
         $this->event = $event;
@@ -62,6 +75,10 @@ class RsvpButton extends Component
         $user = auth()->user();
 
         if (! $user instanceof User) {
+            // The member was signed in when this rendered and is not now. A
+            // silent return is the bug (TOG-8135): name it and point at login.
+            $this->sessionExpired = true;
+
             return;
         }
 
@@ -75,6 +92,7 @@ class RsvpButton extends Component
         // a successful RSVP is its own bug.
         $this->failed = false;
         $this->full = false;
+        $this->sessionExpired = false;
 
         try {
             RsvpRateLimit::hit($user);
@@ -110,10 +128,13 @@ class RsvpButton extends Component
         $user = auth()->user();
 
         if (! $user instanceof User) {
+            $this->sessionExpired = true;
+
             return;
         }
 
         $this->failed = false;
+        $this->sessionExpired = false;
 
         try {
             RsvpRateLimit::hit($user);
