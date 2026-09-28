@@ -136,7 +136,10 @@ class RsvpButton extends Component
         return view('livewire.rsvp-button', [
             'rsvp' => $rsvp,
             'going' => $going,
-            'open' => $this->event->status === EventStatus::Published,
+            // The clock counts, not just the status: a recently finished event is
+            // still Published until the reconcile pass flips it to Past, and
+            // offering a button for it would be a lie the write path refuses.
+            'open' => $this->event->status === EventStatus::Published && ! $this->event->hasEnded(),
             // Somebody already holding a seat is never shown a full event: they are
             // the reason it is full, and they must still be able to stand down.
             'atCapacity' => ! $going && $this->isAtCapacity(),

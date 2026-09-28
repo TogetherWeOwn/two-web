@@ -150,7 +150,12 @@ class EventService
         return DB::transaction(function () use ($event, $user, $status): Rsvp {
             $locked = Event::query()->whereKey($event->getKey())->lockForUpdate()->firstOrFail();
 
-            if ($locked->status !== EventStatus::Published) {
+            // The clock counts, not just the status: reconcile flips finished rows
+            // to Past every ~10 min, so a recently finished event is still
+            // Published. The page already hides its RSVP button (TOG-7273); the
+            // write path refuses with 409 event_not_open instead. Checked on the
+            // locked row so a concurrent reconcile cannot reopen the window.
+            if ($locked->status !== EventStatus::Published || $locked->hasEnded()) {
                 throw EventNotOpenException::forRsvp($locked);
             }
 
