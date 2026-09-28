@@ -33,10 +33,14 @@ final class EventRss
         }
 
         return '<?xml version="1.0" encoding="UTF-8"?>'."\n"
-            .'<rss version="2.0">'
+            .'<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom">'
             .'<channel>'
             .'<title>'.self::e((string) config('app.name').' Events').'</title>'
             .'<link>'.self::e(route('events.index')).'</link>'
+            // The feed's own URL, so a reader holding a copy can confirm the
+            // canonical address (TOG-7939): without it the feed is not
+            // self-identifying and autodiscovery only works from our pages.
+            .'<atom:link href="'.self::e(route('events.rss')).'" rel="self" type="application/rss+xml" />'
             .'<description>'.self::e('Upcoming events from '.config('app.name')).'</description>'
             .'<lastBuildDate>'.now('UTC')->format(DATE_RSS).'</lastBuildDate>'
             .$items

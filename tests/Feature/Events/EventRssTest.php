@@ -129,3 +129,27 @@ it('builds the feed from already-fetched models without an HTTP round trip', fun
     expect($feed->channel->item)->toHaveCount(1)
         ->and((string) $feed->channel->item[0]->guid)->toBe(route('events.page', $event));
 });
+
+it('advertises the feed for autodiscovery from the page and from the channel', function () {
+    Event::factory()->create(['status' => EventStatus::Published]);
+
+    // A reader fetching the events page finds the feed without a pasted URL.
+    $html = (string) $this->get(route('events.index'))->assertOk()->getContent();
+
+    expect($html)->toContain(
+        '<link rel="alternate" type="application/rss+xml" title="'.config('app.name').' Events" href="'.route('events.rss').'">'
+    );
+
+    // A reader holding a copy of the feed confirms its canonical address from
+    // the channel itself.
+    $feed = rssFeed($this->get(route('events.rss'))->assertOk()->getContent());
+
+    expect($feed->getNamespaces(true))->toHaveKey('atom');
+
+    $feed->registerXPathNamespace('atom', 'http://www.w3.org/2005/Atom');
+    $self = $feed->channel->xpath('atom:link[@rel="self"]');
+
+    expect($self)->toHaveCount(1)
+        ->and((string) $self[0]['href'])->toBe(route('events.rss'))
+        ->and((string) $self[0]['type'])->toBe('application/rss+xml');
+});

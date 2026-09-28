@@ -51,6 +51,11 @@
             'shareDescription' => $shareDescription ?? null,
         ])
     @endif
+    {{-- Feed autodiscovery (TOG-7939). Every page advertises the events feed so
+         readers find it without a pasted URL; the feed itself carries the
+         matching atom:link rel="self". Unconditional: the URL is stable and
+         public, and a conditional risks pages that silently opt out. --}}
+    <link rel="alternate" type="application/rss+xml" title="{{ config('app.name') }} Events" href="{{ route('events.rss') }}">
     {{-- Archivo is self-hosted and the headline uses its width axis. Without
          this the hero reflows on first paint and the join button moves. --}}
     <link rel="preload" href="/fonts/archivo-latin.woff2" as="font" type="font/woff2" crossorigin>
