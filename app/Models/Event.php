@@ -3,6 +3,7 @@
 namespace App\Models;
 
 use App\Enums\EventStatus;
+use App\Enums\RecurrenceFrequency;
 use App\Enums\RsvpStatus;
 use App\Exceptions\ImmutableAttributeException;
 use Carbon\CarbonImmutable;
@@ -34,6 +35,11 @@ use Spatie\Activitylog\Traits\LogsActivity;
  * @property string|null $agent_grant_id
  * @property string|null $proof_marker
  * @property int $agent_version
+ * @property RecurrenceFrequency|null $recurrence_frequency
+ * @property int|null $recurrence_count
+ * @property CarbonImmutable|null $recurrence_ends_on
+ * @property int|null $parent_event_id
+ * @property int|null $recurrence_index
  */
 class Event extends Model
 {
@@ -84,6 +90,11 @@ class Event extends Model
         'agent_grant_id',
         'proof_marker',
         'agent_version',
+        'recurrence_frequency',
+        'recurrence_count',
+        'recurrence_ends_on',
+        'parent_event_id',
+        'recurrence_index',
     ];
 
     /** @return array<string, string> */
@@ -98,6 +109,10 @@ class Event extends Model
             'status' => EventStatus::class,
             'discord_sync_failed_at' => 'immutable_datetime',
             'agent_version' => 'integer',
+            'recurrence_frequency' => RecurrenceFrequency::class,
+            'recurrence_count' => 'integer',
+            'recurrence_ends_on' => 'immutable_date',
+            'recurrence_index' => 'integer',
         ];
     }
 
@@ -233,6 +248,36 @@ class Event extends Model
     public function isAgentOwned(): bool
     {
         return $this->agent_grant_id !== null;
+    }
+
+    /**
+     * Whether this event is the first meeting of a recurring series. The rule
+     * lives on the parent; the children carry only the pointer and their index.
+     */
+    public function isSeriesParent(): bool
+    {
+        return $this->recurrence_frequency !== null;
+    }
+
+    /**
+     * Which meeting of the series this row is: the parent is 1, the first
+     * materialised child is 2. Null for a one-off.
+     */
+    public function isSeriesChild(): bool
+    {
+        return $this->parent_event_id !== null;
+    }
+
+    /** @return BelongsTo<Event, $this> */
+    public function parentEvent(): BelongsTo
+    {
+        return $this->belongsTo(self::class, 'parent_event_id');
+    }
+
+    /** @return HasMany<Event, $this> */
+    public function childEvents(): HasMany
+    {
+        return $this->hasMany(self::class, 'parent_event_id')->orderBy('recurrence_index');
     }
 
     /** @return HasMany<Rsvp, $this> */
