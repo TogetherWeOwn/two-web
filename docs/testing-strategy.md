@@ -11,8 +11,9 @@ Those two pull against each other, which is what the rest of this document is fo
 ## The shape we are aiming at
 
 ```
-        Dusk  (E2E, real Chrome)          6 journeys, ~5 min      slowest, most valuable per test
+        Dusk  (E2E, real Chrome)          6 critical journeys     slowest, most valuable per test
       Feature (HTTP + real Postgres)      the bulk of the suite   where most bugs get caught
+  Integration (commits that must commit)  a few, where the DB seam is the point
         Unit  (pure functions)            few, and only where earned
 ```
 
@@ -73,6 +74,22 @@ They run against **real Postgres**, never sqlite. We use `jsonb` and Postgres da
 handling; a sqlite suite goes green on things that break in production. `phpunit.xml`
 pins this and explains it.
 
+### The Integration suite is the exception to the transaction rule
+
+`Feature` wraps every test in a transaction it never commits (`RefreshDatabase`).
+Two kinds of behaviour need a commit to be a commit, so they live in
+`tests/Integration` (`tests/Pest.php`), which truncates instead:
+
+- **Races fought by separate processes.** The RSVP capacity race is decided by
+  concurrent workers that cannot see rows inside somebody else's uncommitted
+  transaction.
+- **`afterCommit` dispatch.** A job dispatched `afterCommit` only runs when a
+  commit actually happens; inside `RefreshDatabase` it never fires.
+
+Its own directory so the difference is visible from the file tree and nothing
+else inherits it by accident. If your test does not need a real commit, it is a
+feature test.
+
 ### They do not run against built assets
 
 `Tests\TestCase` calls `withoutVite()`, so `@vite` renders nothing in the PHP suite
@@ -111,13 +128,24 @@ the browser suite still gets the real, built assets.
 
 A Dusk journey is expensive: real Chrome, real server, real database, tens of
 seconds each, and the most likely thing in the repo to flake. It has to buy
-something a feature test cannot.
+something a feature test cannot. When one flakes, the [flake policy](flake-policy.md)
+applies in full: open an issue, then fix it or delete it — never re-run until green.
 
 It earns one when **the browser is genuinely part of the behaviour**: JavaScript,
 Livewire round-trips, a redirect chain through a third party, focus and keyboard
 handling, or a full multi-page path where the value is that the *whole thing* joins up.
 
-The suite is a fixed list, and it is the funnel plus the money paths (TWO-34):
+Dusk is never part of `composer test`. Pest runs the Unit, Feature and
+Integration suites in-process; Dusk runs through `phpunit.dusk.xml`
+(`composer test:e2e`) against a real browser, a real server and a real database,
+with `DatabaseTruncation` instead of `RefreshDatabase` — the browser is a
+separate process, so rows wrapped in the test's own uncommitted transaction are
+invisible to the page under test (see `tests/Pest.php`).
+
+The core of the suite is a fixed list of six critical journeys — the funnel
+plus the money paths (TWO-34), pinned in `ci/critical-journeys.json`, which the
+`static` job's suite-health self-test reads and the weekly [flake-policy
+report](flake-policy.md) measures against:
 
 1. Land on the homepage → click join → the tracked invite link fires
 2. Discord OAuth against a stubbed provider → land on the profile
@@ -132,9 +160,16 @@ Number 6 is not optional and it is not a nice-to-have. The bot and the site shar
 database and a network; the bot *will* be down at some point. What a member sees
 when that happens is a product decision we have already made, so it gets a test.
 
-**Adding a seventh journey requires QA agreement.** Not because the list is sacred,
-but because "we'll just add a Dusk test" is exactly how the pyramid inverts. Come
-with the argument for why a feature test cannot do it.
+**Adding a seventh critical journey requires QA agreement.** Not because the list
+is sacred, but because "we'll just add a Dusk test" is exactly how the pyramid
+inverts. Come with the argument for why a feature test cannot do it.
+
+Beyond the six, a small number of supporting browser tests exist where only a
+browser can prove the thing — the scaffold smoke test (the site loads in real
+Chrome) and the moderator admin-panel journey (Filament renders through
+Livewire, so a resource can pass every feature test and still show a blank
+page). Each one carries the same burden of proof: name what only the browser
+can see, or it belongs in Feature.
 
 ---
 
@@ -172,7 +207,7 @@ a preference.
 | | Local | CI (every PR) |
 |---|---|---|
 | Pint, PHPStan | `composer check` | `static` job |
-| Pest unit + feature | `composer test` | `tests` job |
+| Pest unit + feature + integration | `composer test` | `pest` job |
 | Dusk | `composer test:e2e` | `dusk` job |
 | Lighthouse + WCAG 2.2 AA | not usually | `budgets` job |
 
