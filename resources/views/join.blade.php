@@ -10,6 +10,20 @@
                    role="{{ $success ? 'status' : 'alert' }}"
                    data-testid="join-result">
                     {{ __('join.result.'.session('join_result')) }}
+                    @if (session('join_result') === 'already_member')
+                        {{-- TOG-7318: re-invite. The bot reports already_member
+                             whenever Discord already holds the account —
+                             including members who left, were kicked, or never
+                             finished screening — and one-click has nothing new
+                             to add. Links the database-free /discord funnel so
+                             the way back in works even when the invite lookup
+                             or the database is down. --}}
+                        <a href="{{ route('discord') }}"
+                           data-testid="reinvite-link"
+                           class="underline">
+                            {{ __('join.reinvite') }}
+                        </a>
+                    @endif
                 </p>
             @endif
 
