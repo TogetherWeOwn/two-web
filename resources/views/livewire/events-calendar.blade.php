@@ -47,6 +47,18 @@
                       transition-colors duration-fast ease-out-quick">
                 Past events
             </a>
+            {{-- One-click calendar subscribe: the `webcal://` form of the
+                 collection feed (`GET /events.ics`). A member's calendar app
+                 opens on the click and polls the feed, so the calendar stays
+                 current without re-downloading. Public like the page — a
+                 calendar client has no session. --}}
+            <a href="{{ \App\Support\EventSubscribe::webcalUrl() }}"
+               data-testid="events-subscribe"
+               class="inline-flex items-center min-h-11 px-4 rounded-md text-sm font-medium
+                      text-ink-muted hover:text-ink hover:bg-raised
+                      transition-colors duration-fast ease-out-quick">
+                Subscribe
+            </a>
         </div>
     </header>
 
