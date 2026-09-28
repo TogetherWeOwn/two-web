@@ -418,6 +418,82 @@ it('makes the horizontally scrolling calendar keyboard accessible', function () 
         ->assertSeeHtml('aria-label="Events calendar; scroll horizontally to see all days"');
 });
 
+/* ---------------------------------------------------------------------------
+   Calendar grid keyboard navigation (TOG-5607). The grid is a `<table>` with
+   role="grid" and a single roving tabindex over its `<td>`s; arrow keys move
+   it and Enter/Space activate a cell, all client-side in the `@script` block
+   in the view. Feature tests can pin the markup the script depends on — which
+   cell starts focusable, that every cell carries its day and a name, that the
+   grid role is present — but not a real key press, which stays out of scope
+   per the card's "Livewire feature tests" deliverable.
+   --------------------------------------------------------------------------- */
+
+it('marks the calendar grid so a screen reader treats it as a grid, not a plain table', function () {
+    Livewire::test(EventsCalendar::class)
+        ->call('setView', 'calendar')
+        ->assertSeeHtml('role="grid"')
+        ->assertSeeHtml('role="gridcell"');
+});
+
+/** The `<td>` tag whose attributes include a given `data-day`, across its multi-line attribute list. */
+function calendarDayCellMarkup(string $html, string $day): string
+{
+    preg_match('/<td[\s\S]*?data-day="'.preg_quote($day, '/').'"[\s\S]*?>/', $html, $matches);
+
+    return $matches[0] ?? '';
+}
+
+it('starts the roving tabindex on today when today is in the month shown', function () {
+    $today = now()->startOfDay()->format('Y-m-d');
+
+    $html = Livewire::test(EventsCalendar::class)
+        ->call('setView', 'calendar')
+        ->html();
+
+    expect(calendarDayCellMarkup($html, $today))->toContain('tabindex="0"');
+
+    // Exactly one day cell is in the Tab order — every other one is off it
+    // until an arrow key moves the roving tabindex there. The horizontal
+    // scroll wrapper carries its own, separate tabindex="0", hence 2.
+    expect(substr_count($html, 'tabindex="0"'))->toBe(2);
+});
+
+it('starts the roving tabindex on the 1st when the month shown does not include today', function () {
+    $event = upcomingEvent(['starts_at' => now()->addMonths(2), 'ends_at' => now()->addMonths(2)->addHour()]);
+    $firstOfMonth = $event->startsAtLocal()->startOfMonth()->format('Y-m-d');
+
+    $html = Livewire::test(EventsCalendar::class)
+        ->call('setView', 'calendar')
+        ->html();
+
+    expect(calendarDayCellMarkup($html, $firstOfMonth))->toContain('tabindex="0"');
+    expect(substr_count($html, 'tabindex="0"'))->toBe(2);
+});
+
+it('names every calendar cell with its date and event count for a screen reader landing on it', function () {
+    upcomingEvent(['title' => 'Friday night Helldivers']);
+
+    $html = Livewire::test(EventsCalendar::class)
+        ->call('setView', 'calendar')
+        ->html();
+
+    expect($html)
+        ->toContain(', no events')
+        ->toContain(', 1 event"');
+});
+
+it('ships the arrow-key handler for the calendar grid on the real page', function () {
+    // The `@script` payload is hoisted into `wire:effects`, which Livewire's
+    // in-memory component test strips as "initial data" — a real HTTP request
+    // is what actually ships to a browser, so that is what this pins.
+    $this->get(route('events.index'))
+        ->assertOk()
+        ->assertSee('ArrowLeft', false)
+        ->assertSee('ArrowRight', false)
+        ->assertSee('ArrowUp', false)
+        ->assertSee('ArrowDown', false);
+});
+
 it('uses AA contrast text for dates outside the current month', function () {
     $html = Livewire::test(EventsCalendar::class)
         ->call('setView', 'calendar')
@@ -606,6 +682,110 @@ it('clears the search and brings the full list back', function () {
         ->call('clearSearch')
         ->assertSet('search', '')
         ->assertSee('Sunday Valorant scrims');
+});
+
+/* ---------------------------------------------------------------------------
+   Status filter (TOG-5607). A second, independent narrowing of the same rows
+   the search box narrows — a member can combine a text search with a status.
+   --------------------------------------------------------------------------- */
+
+it('offers all statuses to a guest, minus draft', function () {
+    Livewire::test(EventsCalendar::class)
+        ->assertSeeHtml('data-testid="events-status-filter"')
+        ->assertSee('All statuses')
+        ->assertSee('Published')
+        ->assertSee('Cancelled')
+        ->assertDontSee('Draft');
+});
+
+it('offers draft as a status option to a moderator only', function () {
+    Livewire::actingAs($this->moderator)
+        ->test(EventsCalendar::class)
+        ->assertSee('Draft');
+});
+
+it('narrows to published and hides a cancelled event', function () {
+    upcomingEvent(['title' => 'Friday night Helldivers', 'status' => EventStatus::Published]);
+    upcomingEvent(['title' => 'Called off night', 'status' => EventStatus::Cancelled]);
+
+    Livewire::test(EventsCalendar::class)
+        ->set('status', EventStatus::Published->value)
+        ->assertSee('Friday night Helldivers')
+        ->assertDontSee('Called off night');
+});
+
+it('narrows to cancelled and hides a published event', function () {
+    upcomingEvent(['title' => 'Friday night Helldivers', 'status' => EventStatus::Published]);
+    upcomingEvent(['title' => 'Called off night', 'status' => EventStatus::Cancelled]);
+
+    Livewire::test(EventsCalendar::class)
+        ->set('status', EventStatus::Cancelled->value)
+        ->assertSee('Called off night')
+        ->assertDontSee('Friday night Helldivers');
+});
+
+it('never shows a draft to a member through the status filter, even asked for by name', function () {
+    // The filter value is client input (bound to the URL); asking for `draft`
+    // by hand must not do what the option a moderator sees does.
+    upcomingEvent(['title' => 'Unannounced raid', 'status' => EventStatus::Draft]);
+
+    Livewire::actingAs($this->member)
+        ->test(EventsCalendar::class)
+        ->set('status', EventStatus::Draft->value)
+        ->assertDontSee('Unannounced raid');
+});
+
+it('reads the initial status from ?status= so a filtered view is a shareable link', function () {
+    upcomingEvent(['title' => 'Friday night Helldivers', 'status' => EventStatus::Published]);
+    upcomingEvent(['title' => 'Called off night', 'status' => EventStatus::Cancelled]);
+
+    Livewire::withQueryParams(['status' => EventStatus::Cancelled->value])
+        ->test(EventsCalendar::class)
+        ->assertSee('Called off night')
+        ->assertDontSee('Friday night Helldivers');
+});
+
+it('ignores a status it does not recognise rather than erroring', function () {
+    upcomingEvent(['title' => 'Friday night Helldivers']);
+
+    Livewire::withQueryParams(['status' => 'not-a-real-status'])
+        ->test(EventsCalendar::class)
+        ->assertOk()
+        ->assertSee('Friday night Helldivers');
+});
+
+it('shows its own empty state when a status filter matches nothing, not the never-scheduled one', function () {
+    upcomingEvent(['title' => 'Friday night Helldivers', 'status' => EventStatus::Published]);
+
+    Livewire::test(EventsCalendar::class)
+        ->set('status', EventStatus::Cancelled->value)
+        ->assertSeeHtml('data-testid="events-empty-filter"')
+        ->assertSee('Nothing matches that filter.')
+        ->assertDontSee('Friday night Helldivers')
+        ->assertDontSeeHtml('data-testid="events-empty-never"')
+        ->assertDontSeeHtml('data-testid="events-empty-no-upcoming"');
+});
+
+it('clears the status filter and brings the full list back', function () {
+    upcomingEvent(['title' => 'Friday night Helldivers', 'status' => EventStatus::Published]);
+    upcomingEvent(['title' => 'Called off night', 'status' => EventStatus::Cancelled]);
+
+    Livewire::test(EventsCalendar::class)
+        ->set('status', EventStatus::Published->value)
+        ->assertDontSee('Called off night')
+        ->call('clearStatusFilter')
+        ->assertSet('status', 'all')
+        ->assertSee('Called off night');
+});
+
+it('returns to the list view when a status filter starts', function () {
+    upcomingEvent(['status' => EventStatus::Published]);
+
+    Livewire::test(EventsCalendar::class)
+        ->call('setView', 'calendar')
+        ->assertSet('view', 'calendar')
+        ->set('status', EventStatus::Published->value)
+        ->assertSet('view', 'list');
 });
 
 /* ---------------------------------------------------------------------------

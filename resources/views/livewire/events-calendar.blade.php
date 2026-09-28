@@ -100,6 +100,46 @@
         @endif
     </div>
 
+    {{-- Status filter. A second, independent narrowing of the same rows — a
+         member can search and filter by status together. Bound to the URL for
+         the same reason the search box is: a filtered view is a link that can
+         be shared. --}}
+    <div class="mt-3 flex items-center gap-2">
+        <label for="events-status-filter" class="text-sm text-ink-muted">Status</label>
+        <select id="events-status-filter"
+                wire:model.live="status"
+                data-testid="events-status-filter"
+                class="min-h-11 rounded-md border border-line bg-surface px-3 text-sm text-ink">
+            @foreach ($statusOptions as $value => $label)
+                <option value="{{ $value }}">{{ $label }}</option>
+            @endforeach
+        </select>
+    </div>
+
+    {{-- The filter narrowed the rows to nothing, but the calendar is not
+         empty — a search with no matches gets its own message above; this is
+         the same idea for a status with no matches and no search text. --}}
+    @if (! $searching && $statusFiltering && ! $hasVisibleResults)
+        <div class="u-hatch mt-4 rounded-lg border border-line p-8 text-center"
+             data-testid="events-empty-filter">
+            <h2 class="text-lg font-semibold text-ink">Nothing matches that filter.</h2>
+            <p class="mx-auto mt-1.5 max-w-prose text-sm text-ink-muted">
+                Try a different status.
+            </p>
+            <div class="mt-5">
+                <button type="button"
+                        wire:click="clearStatusFilter"
+                        data-testid="events-status-filter-clear"
+                        class="inline-flex items-center justify-center gap-2 min-h-11 px-5 rounded-md
+                               bg-transparent text-ink border border-line-strong
+                               hover:bg-raised hover:border-ink-muted active:bg-surface
+                               transition-colors duration-fast ease-out-quick">
+                    Clear the filter
+                </button>
+            </div>
+        </div>
+    @endif
+
     {{-- What a search found, in words. `{{ }}` escapes the query on the way
          out, so echoing it back here cannot become markup no matter what the
          URL carried. `aria-live` because the line changes without reloading. --}}
@@ -303,7 +343,11 @@
              tabindex="0"
              aria-label="Events calendar; scroll horizontally to see all days"
              data-testid="events-calendar-scroll">
+            {{-- role="grid" turns each `<td>` into a gridcell rather than a plain
+                 table cell, which is what makes the roving tabindex below a
+                 recognised keyboard widget rather than 42 stray tab stops. --}}
             <table class="w-full min-w-2xl table-fixed border-collapse"
+                   role="grid"
                    data-testid="events-calendar-grid">
                 <caption class="sr-only">Events in {{ $monthLabel }}</caption>
                 <thead>
@@ -319,12 +363,22 @@
                     @foreach ($weeks as $week)
                         <tr>
                             @foreach ($week as $day)
+                                {{-- Arrow keys move a single roving tab stop between
+                                     these cells (see the `@script` below); only one
+                                     cell is in the Tab order at a time. It starts on
+                                     $initialFocusDay — today if shown, else the 1st —
+                                     so Tab always lands somewhere useful rather than
+                                     nowhere if no cell were focusable by default. --}}
                                 <td @class([
                                         'h-24 align-top border border-line p-1.5',
                                         'bg-surface' => $day['inMonth'],
                                         'bg-canvas' => ! $day['inMonth'],
                                     ])
+                                    role="gridcell"
+                                    tabindex="{{ $day['date']->format('Y-m-d') === $initialFocusDay ? '0' : '-1' }}"
+                                    data-day="{{ $day['date']->format('Y-m-d') }}"
                                     data-testid="calendar-day"
+                                    aria-label="{{ $day['date']->format('l, F j, Y') }}{{ count($day['events']) > 0 ? ', '.count($day['events']).' '.\Illuminate\Support\Str::plural('event', count($day['events'])) : ', no events' }}"
                                     @if ($day['isToday']) aria-current="date" @endif>
                                     <span @class([
                                         'u-numeric text-xs',
@@ -353,3 +407,68 @@
         </div>
     @endif
 </div>
+
+@script
+    {{--
+        Arrow-key navigation for the calendar grid (TOG-5607). `$wire.el` is the
+        component's root div, which survives Livewire's morph on every render
+        (month step, filter, search) — a listener on it keeps working even
+        though the `<td>`s underneath get replaced. `@script` itself runs once
+        per component lifecycle, never on re-render, so this cannot double-bind.
+
+        Left/Right/Up/Down move the single roving tab stop across the 7-column
+        grid; Home/End move to the first/last day of the row a cell is in.
+        Enter/Space activate the cell exactly as a click would — the first
+        event link inside it, if there is one; a day with no events has
+        nothing to activate.
+    --}}
+    <script>
+        $wire.el.addEventListener('keydown', (event) => {
+            const cell = event.target.closest('[data-testid="calendar-day"]');
+            if (! cell) {
+                return;
+            }
+
+            const table = event.target.closest('[data-testid="events-calendar-grid"]');
+            if (! table) {
+                return;
+            }
+
+            if (event.key === 'Enter' || event.key === ' ') {
+                event.preventDefault();
+                cell.querySelector('a')?.click();
+
+                return;
+            }
+
+            const moves = ['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Home', 'End'];
+            if (! moves.includes(event.key)) {
+                return;
+            }
+
+            event.preventDefault();
+
+            const cells = Array.from(table.querySelectorAll('[data-testid="calendar-day"]'));
+            const index = cells.indexOf(cell);
+            const columns = 7;
+            const column = index % columns;
+
+            const target = {
+                ArrowLeft: index - 1,
+                ArrowRight: index + 1,
+                ArrowUp: index - columns,
+                ArrowDown: index + columns,
+                Home: index - column,
+                End: index + (columns - 1 - column),
+            }[event.key];
+
+            if (target < 0 || target >= cells.length) {
+                return;
+            }
+
+            cell.setAttribute('tabindex', '-1');
+            cells[target].setAttribute('tabindex', '0');
+            cells[target].focus();
+        });
+    </script>
+@endscript

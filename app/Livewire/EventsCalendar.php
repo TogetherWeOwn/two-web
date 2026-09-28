@@ -57,6 +57,18 @@ class EventsCalendar extends Component
     #[Url(as: 'q', except: '')]
     public string $search = '';
 
+    /**
+     * Which status to show, from `?status=`, or `all` for no filter.
+     *
+     * Bound to the URL for the same reason `$search` is: a filtered view is a
+     * link a member can share. An unrecognised value (hand-edited URL, a status
+     * removed from {@see statusOptions()}) is treated as `all` in the query
+     * rather than thrown — this is client input reaching a public page, same as
+     * `$month` below.
+     */
+    #[Url(as: 'status', except: 'all')]
+    public string $status = 'all';
+
     private const VIEWS = ['list', 'calendar'];
 
     public function setView(string $view): void
@@ -102,6 +114,22 @@ class EventsCalendar extends Component
         $this->search = '';
     }
 
+    /**
+     * A filter starts from the list for the same reason a search does: the open
+     * month grid may not contain a single matching day, and a member should not
+     * read an empty grid as "nothing matches" when a list one click away would
+     * have shown them the answer.
+     */
+    public function updatedStatus(): void
+    {
+        $this->view = 'list';
+    }
+
+    public function clearStatusFilter(): void
+    {
+        $this->status = 'all';
+    }
+
     public function nextMonth(): void
     {
         $this->month = $this->monthStart()->addMonth()->format('Y-m');
@@ -140,25 +168,40 @@ class EventsCalendar extends Component
         // A blank search is no search: spaces alone must not narrow the page to
         // nothing, and must not swap the empty states for the search one.
         $searching = trim($this->search) !== '';
-        // While searching, matching past events show without opening the drawer:
-        // a match hidden behind a closed drawer reads as "no results".
-        $showPast = $this->showingPast || $searching;
+        $statusFiltering = $this->status !== 'all';
+        // Either kind of narrowing means a plain "we are new" / "nothing
+        // scheduled" empty state would be a lie — the calendar has rows, the
+        // member's filter just does not match any of them.
+        $filtering = $searching || $statusFiltering;
+        // While filtering, matching past events show without opening the
+        // drawer: a match hidden behind a closed drawer reads as "no results".
+        $showPast = $this->showingPast || $filtering;
+        $weeks = $this->weeks($upcoming->concat($past));
 
         return view('livewire.events-calendar', [
             'upcoming' => $upcoming,
             'past' => $past,
-            'weeks' => $this->weeks($upcoming->concat($past)),
+            'weeks' => $weeks,
             'monthLabel' => $this->monthStart()->format('F Y'),
-            // Failed reads take precedence over an empty result, including search.
+            // Failed reads take precedence over an empty result, including any
+            // filter — a search or status with no matches while the source is
+            // also down must still read as "broken", not "no results".
             'emptyState' => $upcoming->isEmpty() && $discordFailed
                 ? 'error'
-                : ($searching ? null : ($upcoming->isEmpty() ? ($past->isEmpty() ? 'never' : 'gap') : null)),
+                : ($filtering ? null : ($upcoming->isEmpty() ? ($past->isEmpty() ? 'never' : 'gap') : null)),
             'lastPastEvent' => $past->first(),
+            // The day the calendar grid's roving tabindex starts on: today if
+            // it is in the month being shown, else the first day of the month.
+            // Arrow keys move it from there — see the `@script` block in the
+            // view, which is the whole of the keyboard-navigation feature.
+            'initialFocusDay' => $this->initialFocusDay($weeks),
             // Whether the member currently sees anything. The past list only
             // counts once asked for — an unopened drawer is not results.
             'hasVisibleResults' => $upcoming->isNotEmpty() || ($showPast && $past->isNotEmpty()),
             'showPast' => $showPast,
             'searching' => $searching,
+            'statusFiltering' => $statusFiltering,
+            'statusOptions' => $this->statusOptions(),
             // Share tags (TOG-5624). `layoutData` merges into the `#[Layout]`
             // params above — the attribute params win on conflict, but these keys
             // are new, so there is no conflict. `route()` builds from APP_URL,
@@ -223,6 +266,10 @@ class EventsCalendar extends Component
                 fn (Builder $query): Builder => $query->where('status', '!=', EventStatus::Draft->value),
             )
             ->when(
+                $this->status !== 'all' && EventStatus::tryFrom($this->status) !== null,
+                fn (Builder $query): Builder => $query->where('status', $this->status),
+            )
+            ->when(
                 trim($this->search) !== '',
                 function (Builder $query): void {
                     // `whereLike` binds the value (never interpolated) and is
@@ -236,6 +283,63 @@ class EventsCalendar extends Component
                         ->orWhereLike('description', $term));
                 },
             );
+    }
+
+    /**
+     * The statuses on offer in the filter, in the order they render.
+     *
+     * Draft is included only for a viewer who can see drafts at all — offering
+     * it to everyone else would not leak anything (the query above still
+     * excludes drafts regardless of what `$status` says), but a filter option
+     * that always returns nothing is a worse bug than a missing one.
+     *
+     * @return array<string, string>
+     */
+    private function statusOptions(): array
+    {
+        $options = [
+            'all' => 'All statuses',
+            EventStatus::Published->value => 'Published',
+            EventStatus::Cancelled->value => 'Cancelled',
+        ];
+
+        if (Gate::allows('viewDrafts', Event::class)) {
+            $options[EventStatus::Draft->value] = 'Draft';
+        }
+
+        return $options;
+    }
+
+    /**
+     * Which day the calendar grid's roving tabindex starts on.
+     *
+     * Today's cell if the month being shown has one, else the first day that
+     * belongs to this month — never a leading/trailing day from a neighbour,
+     * which would put the one reachable-by-Tab cell outside the month whose
+     * label is on screen. `$weeks` is never empty: {@see weeks()} always walks
+     * at least the weeks covering the first of the month.
+     *
+     * @param  list<list<array{date: CarbonImmutable, inMonth: bool, isToday: bool, events: list<Event>}>>  $weeks
+     */
+    private function initialFocusDay(array $weeks): string
+    {
+        foreach ($weeks as $week) {
+            foreach ($week as $day) {
+                if ($day['isToday']) {
+                    return $day['date']->format('Y-m-d');
+                }
+            }
+        }
+
+        foreach ($weeks as $week) {
+            foreach ($week as $day) {
+                if ($day['inMonth']) {
+                    return $day['date']->format('Y-m-d');
+                }
+            }
+        }
+
+        return $weeks[0][0]['date']->format('Y-m-d');
     }
 
     /**
