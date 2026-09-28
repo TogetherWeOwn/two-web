@@ -14,10 +14,10 @@ use Livewire\Livewire;
 // TOG-5621: profiles are members-only. The two logged-out GET redirects are
 // also pinned where the flows live (DiscordLoginTest for /profile,
 // ProfileBackendTest for /members/{id}); this file pins everything around
-// them: the write path and the member-adjacent JSON behind the same `auth`
-// group, the Livewire entry point that does not pass through route
-// middleware, and the actual requirement — no member data in any public page
-// or its source.
+// them: the member-adjacent JSON behind the same `auth` group, the Livewire
+// entry point that does not pass through route middleware, the deleted PATCH
+// write path (TOG-8440: a logged-out PATCH is a 405, never a write), and the
+// actual requirement — no member data in any public page or its source.
 
 /** A member whose every personal string is distinctive enough to grep for. */
 function exposedMember(): User
@@ -53,11 +53,14 @@ it('sends a logged-out visitor to login before showing any profile', function ()
     $this->get(route('profiles.show', $member))->assertRedirect(route('login'));
 });
 
-it('sends a logged-out visitor to login before they can change a profile', function () {
+it('has no logged-out profile write path left to smuggle through', function () {
+    // TOG-8440: PATCH /members/{user} is deleted, so a logged-out PATCH on
+    // the member URL never reaches `auth` — route matching 405s first — and
+    // writes nothing.
     $member = User::factory()->create();
 
-    $this->patch(route('profiles.update', $member), ['bio' => 'Smuggled bio.'])
-        ->assertRedirect(route('login'));
+    $this->patch("/members/{$member->id}", ['bio' => 'Smuggled bio.'])
+        ->assertMethodNotAllowed();
 
     expect($member->profile()->exists())->toBeFalse();
 });
