@@ -52,5 +52,5 @@ it('shows the search empty state when nothing matches', function () {
         ->assertDontSee('Friday night Helldivers')
         // Neither no-search empty state applies to a query with no matches.
         ->assertDontSeeHtml('data-testid="events-empty-never"')
-        ->assertDontSeeHtml('data-testid="events-empty-no-upcoming"');
+        ->assertDontSeeHtml('data-testid="events-empty-gap"');
 });

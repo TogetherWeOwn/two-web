@@ -254,7 +254,7 @@ test('an empty calendar reads as early rather than broken', function () {
                 ->assertMissing('[data-testid="rsvp-failed"]')
                 ->click('[data-testid="events-view-calendar"]')
                 ->waitFor('[data-testid="events-calendar-grid"]')
-                ->assertAttribute('[data-testid="events-view-calendar"]', 'aria-checked', 'true')
+                ->assertAttribute('[data-testid="events-view-calendar"]', 'aria-pressed', 'true')
                 ->assertVisible('[data-testid="events-empty-never"]')
                 ->assertDontSee('No events found');
         });
@@ -286,7 +286,7 @@ test('the gap calendar shows five past names and keeps the selected view', funct
                 ->assertMissing('[data-testid="events-empty-never"]')
                 ->click('[data-testid="events-view-calendar"]')
                 ->waitFor('[data-testid="events-calendar-grid"]')
-                ->assertAttribute('[data-testid="events-view-calendar"]', 'aria-checked', 'true')
+                ->assertAttribute('[data-testid="events-view-calendar"]', 'aria-pressed', 'true')
                 ->assertVisible('[data-testid="events-empty-gap"]');
         });
     } finally {
@@ -309,14 +309,14 @@ test('a failed calendar read retries in the browser without losing the view', fu
                 ->assertMissing('[data-testid="events-empty-never"]')
                 ->click('[data-testid="events-view-calendar"]')
                 ->waitFor('[data-testid="events-calendar-grid"]')
-                ->assertAttribute('[data-testid="events-view-calendar"]', 'aria-checked', 'true');
+                ->assertAttribute('[data-testid="events-view-calendar"]', 'aria-pressed', 'true');
 
             Cache::put('events.discord-upcoming', [], 600);
 
             $browser->click('[data-testid="events-retry"]')
                 ->waitFor('[data-testid="events-empty-never"]')
                 ->assertMissing('[data-testid="events-empty-error"]')
-                ->assertAttribute('[data-testid="events-view-calendar"]', 'aria-checked', 'true')
+                ->assertAttribute('[data-testid="events-view-calendar"]', 'aria-pressed', 'true')
                 ->assertVisible('[data-testid="events-calendar-grid"]');
         });
     } finally {

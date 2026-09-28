@@ -520,7 +520,7 @@ it('shows its own empty state when nothing matches, not the never-scheduled one'
         // Neither of the no-search empty states applies to a query with no
         // matches — "nothing is planned" would be a lie with an event aboard.
         ->assertDontSeeHtml('data-testid="events-empty-never"')
-        ->assertDontSeeHtml('data-testid="events-empty-no-upcoming"');
+        ->assertDontSeeHtml('data-testid="events-empty-gap"');
 });
 
 it('echoes the query back escaped, not as markup', function () {
