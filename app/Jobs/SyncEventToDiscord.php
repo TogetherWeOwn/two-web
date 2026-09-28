@@ -144,13 +144,14 @@ class SyncEventToDiscord implements ShouldBeUnique, ShouldQueue
         } catch (BotNotConfiguredException|InvalidActionRequestException $e) {
             // Terminal by construction: a missing secret, or a payload the bot would
             // call `malformed`. A retry re-sends identical bytes to the same place.
+            $this->markTerminallyRefused($event, 'not_configured');
             $this->failWith($e->getMessage(), $e);
 
             return;
         }
 
         if ($answer instanceof InternalActionFailure) {
-            $this->handleRefusal($answer, 'event.upsert');
+            $this->handleRefusal($event, $answer, 'event.upsert');
 
             return;
         }
@@ -194,13 +195,14 @@ class SyncEventToDiscord implements ShouldBeUnique, ShouldQueue
 
             return;
         } catch (BotNotConfiguredException|InvalidActionRequestException $e) {
+            $this->markTerminallyRefused($event, 'not_configured');
             $this->failWith($e->getMessage(), $e);
 
             return;
         }
 
         if ($answer instanceof InternalActionFailure) {
-            $this->handleRefusal($answer, 'event.cancel');
+            $this->handleRefusal($event, $answer, 'event.cancel');
 
             return;
         }
@@ -244,6 +246,13 @@ class SyncEventToDiscord implements ShouldBeUnique, ShouldQueue
             'reason' => $reason,
         ]);
 
+        // A dead grant reads exactly like a transient outage to the reconcile
+        // pass (published, mirror null), so without the stamp it re-dispatches
+        // this denial every ten minutes forever (TOG-6990). Grants are
+        // disable/expire-only — nothing in the app layer re-arms one — so the
+        // stamp is as terminal as the bot's own `retryable: false`.
+        $this->markTerminallyRefused($event, $reason);
+
         $this->fail(new RuntimeException(
             "Will not mirror {$event->event_key}: the agent grant is {$reason}."
         ));
@@ -271,7 +280,7 @@ class SyncEventToDiscord implements ShouldBeUnique, ShouldQueue
     }
 
     /** The bot answered, and the answer was no. */
-    private function handleRefusal(InternalActionFailure $failure, string $action): void
+    private function handleRefusal(Event $event, InternalActionFailure $failure, string $action): void
     {
         $context = [
             'event_key' => $this->eventKey,
@@ -289,6 +298,8 @@ class SyncEventToDiscord implements ShouldBeUnique, ShouldQueue
                 'message' => $failure->message,
             ]);
 
+            $this->markTerminallyRefused($event, $failure->code);
+
             $this->fail(new RuntimeException(
                 "The bot refused {$action} for {$this->eventKey} with `{$failure->code}`: {$failure->message}"
             ));
@@ -302,12 +313,41 @@ class SyncEventToDiscord implements ShouldBeUnique, ShouldQueue
         $this->release($failure->retryAfterSeconds ?? $this->nextDelay());
     }
 
+    /**
+     * Stamp the refusal onto the row so the reconcile pass can tell it apart
+     * from a transient outage (TOG-6990). Without this, a terminal `fail()` —
+     * "no amount of backoff adds one" — leaves `discord_event_id` null, which
+     * is exactly the shape reconcile matches on, and the refused operation is
+     * re-dispatched every ten minutes forever.
+     *
+     * Only terminal paths call this. A release keeps the stamp untouched — and a
+     * row is only re-attempted after a genuinely new member or moderator change
+     * first clears the stamp in EventService::syncAfterCommit. So a release here
+     * means a fresh transport wobble during a re-armed attempt, and it must not
+     * resurrect the old verdict.
+     */
+    private function markTerminallyRefused(Event $event, string $code): void
+    {
+        $event->forceFill([
+            'discord_sync_failed_at' => now(),
+            'discord_sync_failure_code' => $code,
+        ])->save();
+    }
+
     private function recordSuccess(Event $event, string $discordEventId, string $action): void
     {
         $mirroredAt = now();
 
         DB::transaction(function () use ($event, $discordEventId, $mirroredAt): void {
-            $event->forceFill(['discord_event_id' => $discordEventId])->save();
+            // Success clears a terminal stamp from an earlier operation: the
+            // verdict answered a different payload, and this answer supersedes
+            // it. Without the clear, the stamp would outlive the recovery it
+            // was meant to gate, and the banner would read failed forever.
+            $event->forceFill([
+                'discord_event_id' => $discordEventId,
+                'discord_sync_failed_at' => null,
+                'discord_sync_failure_code' => null,
+            ])->save();
 
             // Only the answers this call actually mirrored. Anything that changed while
             // the request was in flight keeps its null and is picked up by the job that

@@ -3,6 +3,26 @@
         <div class="mx-auto max-w-3xl px-4 py-16 md:px-6 md:py-20 lg:px-8">
             <h1 id="rules-heading" class="u-display text-3xl text-ink md:text-5xl">House rules</h1>
             <p class="mt-3 max-w-prose text-lg text-ink-muted">Five rules that keep the lobby a place people come back to. Short on purpose — if anything is unclear, ask in Discord before you assume.</p>
+            @php
+                // Single config read (TOG-7323): an empty or unparseable
+                // RULES_LAST_UPDATED must never 500 this dependency-free leaf.
+                // The stamp is hidden instead, and the misconfiguration is logged.
+                $rulesLastUpdatedRaw = config('community.rules_last_updated');
+                $rulesLastUpdated = null;
+
+                if (is_string($rulesLastUpdatedRaw) && trim($rulesLastUpdatedRaw) !== '') {
+                    try {
+                        $rulesLastUpdated = \Carbon\Carbon::parse($rulesLastUpdatedRaw);
+                    } catch (\Throwable) {
+                        \Illuminate\Support\Facades\Log::warning('Invalid community.rules_last_updated — hiding /rules stamp', [
+                            'value' => $rulesLastUpdatedRaw,
+                        ]);
+                    }
+                }
+            @endphp
+            @if ($rulesLastUpdated)
+                <p data-testid="rules-last-updated" class="mt-2 text-sm text-ink-muted">Last updated <time datetime="{{ $rulesLastUpdated->toDateString() }}">{{ $rulesLastUpdated->format('j F Y') }}</time></p>
+            @endif
 
             <ol data-testid="rules-list" class="mt-8 space-y-4">
                 <li class="rounded-lg border border-line bg-surface p-4">

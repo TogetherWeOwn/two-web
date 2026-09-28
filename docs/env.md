@@ -124,6 +124,19 @@ Read-only Postgres role the bot grants us for its published views (TWO-23).
 | `BOT_DB_USERNAME` / `BOT_DB_PASSWORD` (**secret**) | Optional, **leave blank locally** until the views exist | Blank | Read-only credentials provisioned by the bot side | Blank = bot-sourced views unavailable (degraded, by design). Wrong = connection errors on the views that need them. |
 | `BOT_DB_TIMEOUT` | Optional, not in `.env.example` (default 2s) | Unset | Unset | Too high: pages depending on bot views hang on bot-DB outages instead of degrading fast. |
 
+## 8b. Join funnel and agent replay-store retention
+
+`join_attempts` grows by one row per join attempt and
+`agent_event_idempotency_keys` by one row per agent operation; both are pruned
+daily by `model:prune` on their `prunable()` scopes (`routes/console.php`),
+which can only ever match rows older than the configured window. The admin
+funnel widget counts the table it sees — the retention window, not all time.
+
+| Key | Required? | Local | Staging / Production | What breaks if wrong |
+| --- | --- | --- | --- | --- |
+| `JOIN_ATTEMPT_RETENTION_DAYS` | Optional (default 90) | `90` | `90` | Narrows or widens the funnel window the admin widget shows; same window as the access log on purpose. |
+| `AGENT_EVENTS_IDEMPOTENCY_RETENTION_DAYS` | Optional (default 90) | `90` | `90` | Well past any retry horizon (job backoffs top out at hours). A retry arriving after its row was pruned re-executes; the quota and optimistic-concurrency guards make that duplicate-safe. |
+
 ## 9. Member-data access log
 
 Reads of member data through the admin panel are logged (who, when, which
@@ -173,6 +186,12 @@ restart-card/operator calls fail.
 | Key | Required? | Local | Staging / Production | What breaks if wrong |
 | --- | --- | --- | --- | --- |
 | `VITE_APP_NAME` | Optional | `"${APP_NAME}"` (interpolates at build time) | Same | Only the display name baked into built assets. Note the quoting: it references `APP_NAME`, so renaming means rebuilding frontend assets. |
+
+## 14. Community pages
+
+| Key | Required? | Local | Staging / Production | What breaks if wrong |
+| --- | --- | --- | --- | --- |
+| `RULES_LAST_UPDATED` | Optional — **leave blank** unless bumping the stamp (default lives in `config/community.php`) | Blank | Set to the last review date (YYYY-MM-DD) whenever the house rules change | Shown as the "Last updated" stamp on `/rules`. Empty or unparseable: the stamp is hidden and a warning is logged — the page stays 200, so a typo degrades, never breaks. Wrong-but-parseable: the stamp shows the wrong date; bump it with the rules change. |
 
 ## Quick checklists
 

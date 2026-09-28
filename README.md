@@ -301,3 +301,8 @@ issue before a line is written.
 ## License
 
 BUSL-1.1 — see [LICENSE](LICENSE). Change License: MIT.
+
+## Security
+
+Found a vulnerability? Report it privately — never in a public issue. See
+[SECURITY.md](SECURITY.md) for the reporting channel, scope, and response SLA.
