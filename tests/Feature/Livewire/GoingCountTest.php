@@ -82,7 +82,7 @@ it('re-reads the aggregate when its own event is answered', function () {
 
     $component->call('refreshCount', eventKey: $this->event->event_key, viewerState: 'going')
         ->assertSee('1 of 4 going')
-        ->assertSee("You're going.", false);
+        ->assertSee("You're going.");
 });
 
 it('follows a withdraw down as well as an RSVP up', function () {
@@ -113,7 +113,7 @@ it('ignores answers to other events on the same page', function () {
     Livewire::test(GoingCount::class, ['event' => $this->event])
         ->call('refreshCount', eventKey: $other->event_key, viewerState: 'going')
         ->assertSee('0 of 4 going')
-        ->assertDontSee("You're going.", false);
+        ->assertDontSee("You're going.");
 });
 
 /* ---------------------------------------------------------------------------
