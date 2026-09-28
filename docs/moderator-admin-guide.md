@@ -3,7 +3,7 @@
 For moderators running the TWO site week to week — publishing events,
 featuring content on the homepage, and answering members when something
 breaks. No engineering needed. If a step below asks you to deploy, edit
-code, or touch production, stop: that step is not yours (see §6).
+code, or touch production, stop: that step is not yours (see §5).
 
 Companion pages: [`docs/troubleshooting-join.md`](troubleshooting-join.md)
 (member can't get into Discord), [`docs/runbook.md`](runbook.md) and
