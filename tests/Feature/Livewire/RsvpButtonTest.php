@@ -416,6 +416,37 @@ it('disables the control while the answer is in flight so it cannot be double-se
     expect($html)->toContain('wire:loading.attr="disabled"');
 });
 
+it('leaves exactly one RSVP row when the button is fired twice', function () {
+    // The double-click: `wire:loading.attr="disabled"` stops the second request
+    // in the browser, and `updateOrCreate` behind the unique(event_id, user_id)
+    // index makes a second request that does arrive idempotent. Either way the
+    // member ends up with one answer, not two rows.
+    Livewire::actingAs($this->member)
+        ->test(RsvpButton::class, ['event' => $this->event])
+        ->call('rsvp', RsvpStatus::Going->value)
+        ->call('rsvp', RsvpStatus::Going->value)
+        ->assertSee("You're in", false);
+
+    expect(Rsvp::query()->where('user_id', $this->member->id)->count())->toBe(1);
+});
+
+it('gives the withdraw control the same in-flight treatment as the RSVP', function () {
+    Rsvp::factory()->create([
+        'event_id' => $this->event->id,
+        'user_id' => $this->member->id,
+        'status' => RsvpStatus::Going,
+    ]);
+
+    $html = Livewire::actingAs($this->member)
+        ->test(RsvpButton::class, ['event' => $this->event])
+        ->html();
+
+    expect($html)
+        ->toContain('wire:target="withdraw"')
+        ->toContain('Removing…')
+        ->toContain('aria-busy');
+});
+
 /* ---------------------------------------------------------------------------
    Focus after the re-render (TOG-6956). A successful RSVP or withdraw swaps
    the focused control for its replacement, which drops keyboard focus to
