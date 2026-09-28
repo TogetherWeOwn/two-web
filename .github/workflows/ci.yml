@@ -838,8 +838,11 @@ jobs:
           # The runners are persistent and these ports are stable per runner, so
           # a server an earlier run leaked is still bound and would answer the
           # readiness probe below while the real server silently failed to bind.
-          # See ci/reclaim-ports.sh (TOG-2847).
-          ./ci/reclaim-ports.sh "$PROXY_UPSTREAM_PORT" "$PROXY_LISTEN_PORT"
+          # See ci/reclaim-ports.sh (TOG-2847). CI_CHROME_PORT is Lighthouse's
+          # fixed debugging port (ci/lighthouserc.cjs, TOG-8177): a leaked
+          # Chrome there answers the launcher's TCP probe and then 404s
+          # /json/version, which reads as a browser crash mid-run.
+          ./ci/reclaim-ports.sh "$PROXY_UPSTREAM_PORT" "$PROXY_LISTEN_PORT" "$CI_CHROME_PORT"
 
           "$CI_PHP_BIN" artisan serve --host=127.0.0.1 --port="$PROXY_UPSTREAM_PORT" --no-reload > storage/logs/serve.log 2>&1 &
           echo $! > storage/logs/serve.pid

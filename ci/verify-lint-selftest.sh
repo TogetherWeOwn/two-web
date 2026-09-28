@@ -287,6 +287,29 @@ expect_fail lhci-chrome-flags-dropped 'without `--no-sandbox`' \
 # so checking --no-sandbox alone cannot silently satisfy both requirements.
 expect_fail lhci-chrome-shared-memory-flag-dropped 'without `--disable-dev-shm-usage`' \
   sed -i "s/chromeFlags: '--no-sandbox --disable-dev-shm-usage',/chromeFlags: '--no-sandbox',/" ci/lighthouserc.cjs
+# The fixed debugging port removed. Without `settings.port` reading
+# CI_CHROME_PORT, chrome-launcher falls back to a random ephemeral port per
+# Chrome launch — and on the shared runners a squatter on that port answers the
+# launcher's TCP probe, then 404s /json/version, which kills the whole budgets
+# job mid-run with zero assertion results (TOG-8177). The lint reads the port
+# through node with the var set, so deleting the getter — or the whole key —
+# goes red here.
+expect_fail lhci-chrome-port-removed 'does not bind Chrome to `CI_CHROME_PORT`' \
+  bash -c 'python3 - <<'"'"'EOF'"'"'
+import re
+p = "ci/lighthouserc.cjs"
+s = open(p).read()
+start = s.index("        get port() {")
+end = s.index("        },", start) + len("        },")
+open(p, "w").write(s[:start] + s[end+1:])
+EOF'
+
+# The same port repointed at a literal. The getter still exists and still reads
+# an integer, so a check that only asked "is it a number" would stay green —
+# while every environment without that exact port collides or binds wrong. The
+# lint pins the value the var produces, so a hardcoded port goes red here.
+expect_fail lhci-chrome-port-literal 'does not bind Chrome to `CI_CHROME_PORT`' \
+  sed -i 's/Number.isInteger(parsed) && parsed > 0 ? parsed : 0/19411/' ci/lighthouserc.cjs
 
 # A second entry appended for an audit that already has one. The pinned line is
 # left exactly as it was — and a JavaScript object literal keeps the *last*

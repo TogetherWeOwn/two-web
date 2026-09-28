@@ -23,6 +23,7 @@ stub_port=$((base + 1))
 driver_port=$((base + 2))
 upstream_port=$((base + 3))
 proxy_port=$((base + 4))
+chrome_port=$((base + 5))
 
 printf '%s\n' \
   "CI_APP_PORT=$app_port" \
@@ -30,6 +31,7 @@ printf '%s\n' \
   "CI_DRIVER_PORT=$driver_port" \
   "PROXY_UPSTREAM_PORT=$upstream_port" \
   "PROXY_LISTEN_PORT=$proxy_port" \
+  "CI_CHROME_PORT=$chrome_port" \
   "CI_BASE_URL=http://127.0.0.1:$proxy_port" \
   "DUSK_DRIVER_PORT=$driver_port" \
   "DUSK_DRIVER_URL=http://127.0.0.1:$driver_port"
