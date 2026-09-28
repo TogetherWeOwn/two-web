@@ -50,4 +50,10 @@ return [
      | routes/console.php.
      */
     'idempotency_retention_days' => (int) env('AGENT_EVENTS_IDEMPOTENCY_RETENTION_DAYS', 90),
+
+    // The outer route shield (TOG-8402): every hit per credential per minute,
+    // counted before auth, the grant lookup and the audit write. Sits above
+    // the inner budgets' sum on purpose — a flood guard, not the allowance —
+    // so the bot's normal burst never sees it.
+    'route_per_minute' => (int) env('AGENT_EVENTS_ROUTE_PER_MINUTE', 60),
 ];

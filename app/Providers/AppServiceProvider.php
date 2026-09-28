@@ -8,6 +8,7 @@ use App\Models\Profile;
 use App\Models\User;
 use App\Services\Bot\InternalActionClient;
 use App\Services\Paperclip\RestartCardClient;
+use App\Support\AgentEventRateLimit;
 use App\Support\Counts\CountsReader;
 use App\Support\Counts\CountsSource;
 use App\Support\Events\DiscordEventsReader;
@@ -15,12 +16,15 @@ use App\Support\Events\DiscordEventsSource;
 use App\Support\MemberDataAccess\AccessRecorder;
 use App\Support\Profiles\MemberStatsReader;
 use App\Support\Profiles\MemberStatsSource;
+use Illuminate\Cache\RateLimiting\Limit;
 use Illuminate\Contracts\Foundation\Application;
+use Illuminate\Http\Request;
 use Illuminate\Queue\Events\JobFailed;
 use Illuminate\Support\Facades\Event;
 use Illuminate\Support\Facades\Gate;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Queue;
+use Illuminate\Support\Facades\RateLimiter;
 use Illuminate\Support\Facades\View;
 use Illuminate\Support\ServiceProvider;
 use Livewire\Livewire;
@@ -103,6 +107,13 @@ class AppServiceProvider extends ServiceProvider
 
     public function boot(): void
     {
+        // The outer shield for the machine ingress (TOG-8402): named limiter
+        // resolved per request before auth, the grant lookup and the audit
+        // write. Keyed per credential by AgentEventRateLimit, never per IP —
+        // machine callers sit behind shared egress. `route:cache` serialises
+        // provider boot, so registration lives here, not in a closure route file.
+        RateLimiter::for('agent-events', fn (Request $request): Limit => AgentEventRateLimit::routeLimit($request));
+
         // Livewire injects its runtime as a plain <script src> with no defer, which
         // puts 162 KB in the critical path of every Livewire page. On the budget
         // profile (mid-range phone, 4x CPU, Slow 4G) that is about 900ms of
