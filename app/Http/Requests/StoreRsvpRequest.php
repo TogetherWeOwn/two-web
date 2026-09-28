@@ -6,6 +6,7 @@ use App\Enums\RsvpStatus;
 use App\Models\Event;
 use App\Models\Rsvp;
 use App\Models\User;
+use App\Support\SpamTrap;
 use Illuminate\Support\Facades\Gate;
 use Illuminate\Validation\Rule;
 
@@ -13,6 +14,14 @@ class StoreRsvpRequest extends AuthenticatedRequest
 {
     public function authorize(): bool
     {
+        // TOG-8715: a filled decoy authorizes trivially. The controller
+        // swallows the write and answers the success shape, so a policy denial
+        // surfacing here as 403 would be an oracle distinguishing allowed from
+        // forbidden requests — the trap must not give one.
+        if (SpamTrap::honeypotFilled($this->input(SpamTrap::HONEY_FIELD))) {
+            return true;
+        }
+
         $event = $this->route('event');
 
         return $event instanceof Event
@@ -29,6 +38,12 @@ class StoreRsvpRequest extends AuthenticatedRequest
             // answering for the caller instead would turn "RSVP for somebody else"
             // into "RSVP for yourself", which looks like it worked.
             'user_id' => ['sometimes', 'integer'],
+
+            // No rule for the TOG-8715 decoy on purpose. An unknown field is
+            // ignored by validation like any other extra input, so every shape
+            // a bot stuffs in there — string, array, nested — reaches the
+            // controller's swallow check instead of dying as a 422, which
+            // would itself be an oracle.
         ];
     }
 

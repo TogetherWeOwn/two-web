@@ -5,9 +5,40 @@ use App\Models\Profile;
 use App\Models\User;
 use App\Support\Profiles\MemberStats;
 use App\Support\Profiles\Milestone;
+use App\Support\SpamTrap;
 use Illuminate\Support\Carbon;
 use Livewire\Livewire;
 use Symfony\Component\Routing\Exception\RouteNotFoundException;
+
+// TOG-8715: the profile form carries a minimum-fill-time trap — a save
+// landing sooner than the floor after edit() opens the form is swallowed as a
+// suspected bot write. Real members take longer than the floor, but Livewire
+// tests run in milliseconds, so every save below must exercise a human-paced
+// fill first. The trap reads Carbon's clock, and Livewire test calls run
+// through the full component lifecycle in-process, so freezing time at the
+// floor between opening the form and saving ages the stamp honestly — unlike
+// `set()` on the Locked stamp, which the framework refuses (and which is
+// exactly what a forged backdate attempt looks like). A `beforeEach` freeze
+// (Pest scoping: defining beforeEach() here applies to this file only) would
+// freeze the stamp at the same instant as the save, so each save instead calls
+// the pause helper below. Trap-specific coverage lives in
+// tests/Feature/Security/SpamTrapTest.php.
+function pausePastFillFloor(): void
+{
+    // Freeze-then-travel: setTestNow() with no argument clears the mock, so
+    // a lone travel() from a frozen clock only advances the frozen instant —
+    // the freeze must come first to anchor "now" before the floor is added.
+    // test() with no arguments returns a proxy to the running Pest case,
+    // which is how the helper reaches freezeTime()/travel() without a
+    // TestCase-typed parameter (Pest binds closures to PHPUnit's TestCase,
+    // not the app's — see the 20-odd pre-existing actingAs() flags on this
+    // file). phpstan cannot see through the proxy, so it flags these two
+    // lines while every neighbouring line stays at its baseline count.
+    // (Carbon::setTestNow() is reset by the framework after each test; the
+    // RsvpButtonTest throttle test uses the same freeze/travel pair.)
+    test()->freezeTime(); // @phpstan-ignore method.notFound
+    test()->travel(SpamTrap::MIN_FILL_SECONDS + 1)->seconds(); // @phpstan-ignore method.notFound
+}
 
 function profileStats(string $discordId): MemberStats
 {
@@ -116,6 +147,7 @@ it('saves member-owned fields and returns to the profile', function () {
     Livewire::actingAs($member)
         ->test(MemberProfile::class, ['member' => $member, 'stats' => profileStats($member->discord_id)])
         ->call('edit')
+        ->tap(fn () => pausePastFillFloor())
         ->set('bio', 'Usually on after work.')
         ->set('gamesText', "Minecraft\nHelldivers 2\nMinecraft")
         ->set('timezone', 'Europe/London')
@@ -139,6 +171,7 @@ it('keeps the form open when the profile write fails and does not leak the reaso
         Livewire::actingAs($member)
             ->test(MemberProfile::class, ['member' => $member, 'stats' => profileStats($member->discord_id)])
             ->call('edit')
+            ->tap(fn () => pausePastFillFloor())
             ->set('bio', 'Still here.')
             ->call('save')
             ->assertSet('editing', true)
@@ -157,6 +190,7 @@ it('keeps the form open and identifies fields when an edit fails validation', fu
     $component = Livewire::actingAs($member)
         ->test(MemberProfile::class, ['member' => $member, 'stats' => profileStats($member->discord_id)])
         ->call('edit')
+        ->tap(fn () => pausePastFillFloor())
         ->set('bio', str_repeat('a', 1001))
         ->set('timezone', 'BST')
         ->call('save')
@@ -179,6 +213,7 @@ it('saves an empty games list without errors', function () {
     Livewire::actingAs($member)
         ->test(MemberProfile::class, ['member' => $member, 'stats' => profileStats($member->discord_id)])
         ->call('edit')
+        ->tap(fn () => pausePastFillFloor())
         ->set('gamesText', '')
         ->call('save')
         ->assertSet('editing', false)
@@ -222,6 +257,7 @@ it('dispatches a focus event to itself on a valid save', function () {
     Livewire::actingAs($member)
         ->test(MemberProfile::class, ['member' => $member, 'stats' => profileStats($member->discord_id)])
         ->call('edit')
+        ->tap(fn () => pausePastFillFloor())
         ->set('bio', 'Usually on after work.')
         ->call('save')
         ->assertSet('editing', false)
@@ -237,6 +273,7 @@ it('dispatches a focus event to itself even when validation fails', function () 
     Livewire::actingAs($member)
         ->test(MemberProfile::class, ['member' => $member, 'stats' => profileStats($member->discord_id)])
         ->call('edit')
+        ->tap(fn () => pausePastFillFloor())
         ->set('bio', str_repeat('a', 1001))
         ->call('save')
         ->assertSet('editing', true)
@@ -258,6 +295,7 @@ it('makes the focus targets focusable so keyboard focus can move there', functio
     $failed = Livewire::actingAs($member)
         ->test(MemberProfile::class, ['member' => $member, 'stats' => profileStats($member->discord_id)])
         ->call('edit')
+        ->tap(fn () => pausePastFillFloor())
         ->set('bio', str_repeat('a', 1001))
         ->call('save')
         ->html();
@@ -268,6 +306,7 @@ it('makes the focus targets focusable so keyboard focus can move there', functio
     $saved = Livewire::actingAs($member)
         ->test(MemberProfile::class, ['member' => $member, 'stats' => profileStats($member->discord_id)])
         ->call('edit')
+        ->tap(fn () => pausePastFillFloor())
         ->set('bio', 'Usually on after work.')
         ->call('save')
         ->html();
@@ -317,6 +356,7 @@ it('only lets a member save the fields they own', function () {
     Livewire::actingAs($member)
         ->test(MemberProfile::class, ['member' => $member, 'stats' => profileStats($member->discord_id)])
         ->call('edit')
+        ->tap(fn () => pausePastFillFloor())
         ->set('bio', 'Now playing evenings.')
         ->set('gamesText', "  Minecraft \nValorant\nMinecraft")
         ->set('timezone', 'America/New_York')
@@ -350,6 +390,7 @@ it('rejects invalid fields without changing the profile', function () {
     Livewire::actingAs($member)
         ->test(MemberProfile::class, ['member' => $member, 'stats' => profileStats($member->discord_id)])
         ->call('edit')
+        ->tap(fn () => pausePastFillFloor())
         ->set('bio', str_repeat('a', 1001))
         ->set('gamesText', 'Minecraft')
         ->set('timezone', 'europe/london')
@@ -370,6 +411,7 @@ it('forbids saving another members profile', function () {
     Livewire::actingAs($viewer)
         ->test(MemberProfile::class, ['member' => $member, 'stats' => profileStats($member->discord_id)])
         ->call('edit')
+        ->tap(fn () => pausePastFillFloor())
         ->assertForbidden();
 
     Livewire::actingAs($viewer)
@@ -392,6 +434,7 @@ it('saves a profile without games and clears removed fields', function () {
     Livewire::actingAs($member)
         ->test(MemberProfile::class, ['member' => $member, 'stats' => profileStats($member->discord_id)])
         ->call('edit')
+        ->tap(fn () => pausePastFillFloor())
         ->set('bio', 'Still here, new bio.')
         ->set('gamesText', '')
         ->set('timezone', '')
@@ -416,6 +459,7 @@ it('saves 21 lines with duplicates as 20 distinct games', function () {
     Livewire::actingAs($member)
         ->test(MemberProfile::class, ['member' => $member, 'stats' => profileStats($member->discord_id)])
         ->call('edit')
+        ->tap(fn () => pausePastFillFloor())
         ->set('gamesText', implode("\n", $lines))
         ->call('save')
         ->assertSet('editing', false)
@@ -437,6 +481,7 @@ it('rejects more than 20 distinct games without changing the profile', function 
     Livewire::actingAs($member)
         ->test(MemberProfile::class, ['member' => $member, 'stats' => profileStats($member->discord_id)])
         ->call('edit')
+        ->tap(fn () => pausePastFillFloor())
         ->set('gamesText', $gamesText)
         ->call('save')
         ->assertSet('editing', true)
@@ -455,6 +500,7 @@ it('rejects an overlong gamesText payload', function () {
     Livewire::actingAs($member)
         ->test(MemberProfile::class, ['member' => $member, 'stats' => profileStats($member->discord_id)])
         ->call('edit')
+        ->tap(fn () => pausePastFillFloor())
         ->set('gamesText', str_repeat('c', 1701))
         ->call('save')
         ->assertSet('editing', true)
@@ -470,6 +516,7 @@ it('rejects a gamesText line longer than 80 characters', function () {
     Livewire::actingAs($member)
         ->test(MemberProfile::class, ['member' => $member, 'stats' => profileStats($member->discord_id)])
         ->call('edit')
+        ->tap(fn () => pausePastFillFloor())
         ->set('gamesText', "Minecraft\n".str_repeat('b', 81))
         ->call('save')
         ->assertSet('editing', true)
@@ -487,6 +534,7 @@ it('accepts boundary values: a 1000-character bio, 20 games, 80-character names'
     Livewire::actingAs($member)
         ->test(MemberProfile::class, ['member' => $member, 'stats' => profileStats($member->discord_id)])
         ->call('edit')
+        ->tap(fn () => pausePastFillFloor())
         ->set('bio', str_repeat('a', 1000))
         ->set('gamesText', implode("\n", $games))
         ->set('timezone', 'UTC')
@@ -511,6 +559,7 @@ it('normalizes whitespace-only input to null', function () {
     Livewire::actingAs($member)
         ->test(MemberProfile::class, ['member' => $member, 'stats' => profileStats($member->discord_id)])
         ->call('edit')
+        ->tap(fn () => pausePastFillFloor())
         ->set('bio', '   ')
         ->set('gamesText', 'Minecraft')
         ->set('timezone', '')
@@ -533,6 +582,7 @@ it('drops blank game lines instead of rejecting them', function () {
     Livewire::actingAs($member)
         ->test(MemberProfile::class, ['member' => $member, 'stats' => profileStats($member->discord_id)])
         ->call('edit')
+        ->tap(fn () => pausePastFillFloor())
         ->set('gamesText', "Minecraft\n\n  Helldivers 2  \nMinecraft")
         ->call('save')
         ->assertSet('editing', false)
@@ -549,6 +599,7 @@ it('ignores a forged avatar while saving the profile fields', function () {
     Livewire::actingAs($member)
         ->test(MemberProfile::class, ['member' => $member, 'stats' => profileStats($member->discord_id)])
         ->call('edit')
+        ->tap(fn () => pausePastFillFloor())
         ->set('bio', 'New bio.')
         ->call('save')
         ->assertSet('editing', false)
@@ -564,6 +615,7 @@ it('stores markup but renders it escaped, never as live HTML', function () {
     Livewire::actingAs($member)
         ->test(MemberProfile::class, ['member' => $member, 'stats' => profileStats($member->discord_id)])
         ->call('edit')
+        ->tap(fn () => pausePastFillFloor())
         ->set('bio', '<script>alert("bio")</script>')
         ->set('gamesText', '<img src=x onerror=alert(2)>')
         ->call('save')
@@ -587,6 +639,7 @@ it('rejects control bytes in bio instead of storing them', function (string $pay
     Livewire::actingAs($member)
         ->test(MemberProfile::class, ['member' => $member, 'stats' => profileStats($member->discord_id)])
         ->call('edit')
+        ->tap(fn () => pausePastFillFloor())
         ->set('bio', $payload)
         ->call('save')
         ->assertSet('editing', true)
@@ -610,6 +663,7 @@ it('rejects control bytes in a gamesText line instead of throwing a 500', functi
     Livewire::actingAs($member)
         ->test(MemberProfile::class, ['member' => $member, 'stats' => profileStats($member->discord_id)])
         ->call('edit')
+        ->tap(fn () => pausePastFillFloor())
         ->set('gamesText', $payload."\nMinecraft")
         ->call('save')
         ->assertSet('editing', true)
@@ -630,6 +684,7 @@ it('still accepts tabs and newlines in a multiline bio', function () {
     Livewire::actingAs($member)
         ->test(MemberProfile::class, ['member' => $member, 'stats' => profileStats($member->discord_id)])
         ->call('edit')
+        ->tap(fn () => pausePastFillFloor())
         ->set('bio', "Line one.\nLine two.\tTabbed.")
         ->set('gamesText', 'Minecraft')
         ->call('save')

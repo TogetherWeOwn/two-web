@@ -118,6 +118,30 @@
                         @endif
 
                         <form wire:submit="save" class="mt-6 flex flex-col gap-5" data-testid="profile-edit-form">
+                            {{--
+                                Honeypot decoy (TOG-8715). Visually hidden and
+                                removed from the tab order and the accessibility
+                                tree, with no <label> on purpose: a screen reader
+                                must never announce it, and the label audit in
+                                FormLabelCoverageTest must never see it as a
+                                labelled control. Bots filling every input fill
+                                this; humans never do. autocomplete="off" keeps
+                                password managers from touching it.
+                            --}}
+                            <div aria-hidden="true" style="position:absolute;left:-9999px;top:auto;width:1px;height:1px;overflow:hidden;">
+                                {{-- id="website": not for a <label> (there is
+                                     none on purpose — the audit below exempts
+                                     this exact decoy) but so the static label
+                                     scan sees an identifiable control rather
+                                     than an id-less orphan. --}}
+                                <input id="website"
+                                       type="text"
+                                       name="website"
+                                       wire:model="website"
+                                       tabindex="-1"
+                                       autocomplete="off"
+                                       data-testid="profile-website-trap">
+                            </div>
                             <div>
                                 <label for="bio" class="mb-1.5 block text-sm font-medium text-ink">Bio</label>
                                 <textarea id="bio"
