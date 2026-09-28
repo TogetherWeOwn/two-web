@@ -38,4 +38,10 @@ return [
     'reads_per_minute' => (int) env('AGENT_EVENTS_READS_PER_MINUTE', 30),
     'service_mutating_per_minute' => (int) env('AGENT_EVENTS_SERVICE_MUTATING_PER_MINUTE', 60),
     'service_reads_per_minute' => (int) env('AGENT_EVENTS_SERVICE_READS_PER_MINUTE', 300),
+
+    // The outer route shield (TOG-8402): every hit per credential per minute,
+    // counted before auth, the grant lookup and the audit write. Sits above
+    // the inner budgets' sum on purpose — a flood guard, not the allowance —
+    // so the bot's normal burst never sees it.
+    'route_per_minute' => (int) env('AGENT_EVENTS_ROUTE_PER_MINUTE', 60),
 ];
