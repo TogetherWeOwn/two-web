@@ -669,15 +669,18 @@ it('disables the action controls while their answer is in flight', function () {
         ->toMatch('/wire:click="previousMonth"\s+wire:loading\.attr="disabled"\s+wire:target="previousMonth"/')
         ->toMatch('/wire:click="nextMonth"\s+wire:loading\.attr="disabled"\s+wire:target="nextMonth"/');
 
-    mockDiscordEvents([], failed: true);
-
-    expect(Livewire::test(EventsCalendar::class)->html())
-        ->toMatch('/wire:click="retryLoad"\s+wire:loading\.attr="disabled"\s+wire:target="retryLoad"/');
-
+    // Search first, while the read is clean: once the mock below flips the
+    // read to failed, the error state takes precedence and the search empty
+    // state (with its second clear button) no longer renders.
     expect(Livewire::test(EventsCalendar::class)->set('search', 'no such event')->html())
         ->toContain('data-testid="events-search-clear"')
         ->toContain('data-testid="events-search-clear-empty"')
         ->toMatch('/wire:click="clearSearch"\s+wire:loading\.attr="disabled"\s+wire:target="clearSearch"/');
+
+    mockDiscordEvents([], failed: true);
+
+    expect(Livewire::test(EventsCalendar::class)->html())
+        ->toMatch('/wire:click="retryLoad"\s+wire:loading\.attr="disabled"\s+wire:target="retryLoad"/');
 });
 
 it('still renders the page after each loading-targeted action', function () {
@@ -732,11 +735,12 @@ it('announces the past-events reveal, and stays silent until asked', function ()
 it('announces month steps through a polite month status', function () {
     // Attribute- and whitespace-tolerant on purpose: the sibling strpos test
     // proves the element renders, while a byte-exact `">…</p>"` regex missed
-    // Livewire's serialized markup (red on 112b81a). What matters here is the
-    // announced text, not the tag shape.
+    // Livewire's serialized markup (red on 112b81a). Livewire also wraps the
+    // `@if` output in `<!--[if BLOCK]-->` markers, which are stripped before
+    // comparing — what matters here is the announced text, not the tag shape.
     $status = fn ($component) => preg_match(
         '/data-testid="calendar-month-status"[^>]*>\s*(.*?)\s*<\/p>/s', $component->html(), $m
-    ) ? trim($m[1]) : null;
+    ) ? trim(preg_replace('/<!--.*?-->/s', '', $m[1])) : null;
     $label = fn ($component) => CarbonImmutable::createFromFormat('Y-m-d', $component->get('month').'-01')
         ->format('F Y');
 
