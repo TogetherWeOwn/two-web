@@ -2,11 +2,14 @@
 
 use App\Http\Controllers\ProfileController;
 use App\Http\Middleware\RecordMemberDataAccess;
+use App\Livewire\MemberProfile;
 use App\Models\MemberDataAccessLog;
 use App\Models\Profile;
 use App\Models\User;
+use App\Support\Profiles\MemberStats;
 use Illuminate\Support\Facades\Route;
 use Illuminate\Support\Facades\Schema;
+use Livewire\Livewire;
 
 /** @return array<int, string> */
 function unloggedMemberDataRoutes(): array
@@ -19,8 +22,11 @@ function unloggedMemberDataRoutes(): array
             || str_starts_with($route->getName() ?? '', 'profiles.'));
 
     // A renamed namespace must fail loudly rather than turn this into [] == [].
+    // TOG-8440: PATCH /members/{user} (`profiles.update`) is deleted per the
+    // TOG-8433 spec — MemberProfile::save() is the single writer — so the
+    // guarded surface is the two read routes.
     expect($memberRoutes->map->getName()->all())
-        ->toContain('profile', 'profiles.show', 'profiles.update');
+        ->toContain('profile', 'profiles.show');
 
     return $memberRoutes
         ->reject(fn ($route) => collect(Route::gatherRouteMiddleware($route))->contains(
@@ -63,10 +69,11 @@ it('logs one row for every authenticated member-profile view path', function (bo
     $this->getJson(route('profiles.show', $viewer))->assertOk();
     expect(MemberDataAccessLog::query()->count())->toBe(2); // viewer-own-record exclusion
 
-    $this->patch(route('profiles.update', $viewer), ['bio' => 'self-edit'])
-        ->assertRedirect(route('profiles.show', $viewer));
-    expect(MemberDataAccessLog::query()->count())->toBe(2)
-        ->and($viewer->profile()->sole()->bio)->toBe('self-edit');
+    // TOG-8440: PATCH /members/{user} is deleted — the Livewire form is the
+    // single writer and its update endpoint never runs this middleware, so a
+    // self-edit writes no row here by construction. The save itself is pinned
+    // in tests/Feature/Livewire/MemberProfileTest.php.
+    expect(MemberDataAccessLog::query()->count())->toBe(2);
 })->with(['without profile row' => false, 'with profile row' => true]);
 
 it('fails when a member-data route ships without the access log', function () {
@@ -88,29 +95,40 @@ it('writes nothing for logged-out requests and authenticated 404s', function () 
     $member = User::factory()->create();
     $viewer = User::factory()->create();
 
+    // TOG-8440: PATCH /members/{user} no longer exists. GET still serves the
+    // member URL, so a PATCH on it is a 405 from route matching — before auth,
+    // binding and middleware — never a write and never a log row.
     $this->get(route('profile'))->assertRedirect(route('login'));
     $this->get(route('profiles.show', $member))->assertRedirect(route('login'));
     $this->get('/members/999999999')->assertRedirect(route('login'));
-    $this->patch(route('profiles.update', $member), ['bio' => 'smuggled'])->assertRedirect(route('login'));
+    $this->patch('/members/999999999', ['bio' => 'smuggled'])->assertMethodNotAllowed();
     $this->getJson(route('profiles.show', $member))->assertUnauthorized();
     $this->getJson('/members/999999999')->assertUnauthorized();
-    $this->patchJson(route('profiles.update', $member), ['bio' => 'smuggled'])->assertUnauthorized();
+    $this->patchJson('/members/999999999', ['bio' => 'smuggled'])->assertMethodNotAllowed();
 
     $this->actingAs($viewer)->get('/members/999999999')->assertNotFound();
     $this->getJson('/members/999999999')->assertNotFound();
-    $this->patch('/members/999999999', ['bio' => 'missing'])->assertNotFound();
-    $this->patchJson('/members/999999999', ['bio' => 'missing'])->assertNotFound();
+    $this->actingAs($viewer)->patch('/members/999999999', ['bio' => 'missing'])->assertMethodNotAllowed();
+    $this->actingAs($viewer)->patchJson('/members/999999999', ['bio' => 'missing'])->assertMethodNotAllowed();
 
     expect(MemberDataAccessLog::query()->count())->toBe(0)
         ->and($member->profile()->exists())->toBeFalse();
 });
 
 it('does not attribute a rejected profile update to the target as viewer', function () {
+    // TOG-8440: the HTTP writer is gone, so the denial path is the Livewire
+    // form — Gate::authorize('updateProfile') throws before any write, and
+    // the Livewire update endpoint never runs this middleware, so no row.
     $viewer = User::factory()->create();
     $member = User::factory()->create();
     Profile::factory()->for($member)->create(['bio' => 'unchanged']);
 
-    $this->actingAs($viewer)->patchJson(route('profiles.update', $member), ['bio' => 'smuggled'])
+    Livewire::actingAs($viewer)
+        ->test(MemberProfile::class, [
+            'member' => $member,
+            'stats' => MemberStats::unavailable($member->discord_id),
+        ])
+        ->call('edit')
         ->assertForbidden();
 
     expect(MemberDataAccessLog::query()->count())->toBe(0)
