@@ -52,15 +52,9 @@
                         </span>
                     @endif
 
-                    <span class="u-numeric inline-flex items-center gap-1.5 rounded-sm px-2 py-0.5 text-xs font-medium
-                                 bg-raised text-ink-muted border border-line"
-                          data-testid="event-going-count">
-                        @if ($event->capacity !== null)
-                            {{ $event->going_count }} of {{ $event->capacity }} going
-                        @else
-                            {{ $event->going_count }} going
-                        @endif
-                    </span>
+                    {{-- Live count: re-reads the aggregate when RsvpButton
+                         broadcasts after a write (TOG-7966). --}}
+                    @livewire('going-count', ['event' => $event], key('going-count-'.$event->event_key))
                 </div>
             </div>
 

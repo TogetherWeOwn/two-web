@@ -197,6 +197,35 @@ test('a member can stand down again', function () {
     });
 });
 
+test('the going count ticks with the answer without a reload', function () {
+    // TOG-7966: the badge lives outside RsvpButton, so it used to show the
+    // pre-click number until a full reload. No refresh below on purpose — the
+    // tick itself is the assertion. waitForTextIn, never pause (flake policy).
+    $member = User::factory()->create();
+    browsableEvent();
+
+    $this->browse(function (Browser $browser) use ($member) {
+        $browser->loginAs($member)
+            ->resize(360, 780)
+            ->visit('/events')
+            ->waitForText('Friday night Helldivers')
+            ->waitFor('[data-testid="event-going-count"]')
+            ->assertSeeIn('[data-testid="event-going-count"]', '0 of 4 going')
+            // Polite live region: the count changes without a reload, so the
+            // change must announce via role="status", never role="alert".
+            ->assertAttribute('[data-testid="event-going-count"]', 'role', 'status')
+            ->assertVisible('[data-testid="rsvp-going"]')
+            ->click('[data-testid="rsvp-going"]')
+            ->waitFor('[data-testid="rsvp-confirmed"]')
+            ->waitForTextIn('[data-testid="event-going-count"]', '1 of 4 going')
+            ->assertSeeIn('[data-testid="event-going-count"]', '1 of 4 going')
+            ->click('[data-testid="rsvp-withdraw"]')
+            ->waitFor('[data-testid="rsvp-going"]')
+            ->waitForTextIn('[data-testid="event-going-count"]', '0 of 4 going')
+            ->assertSeeIn('[data-testid="event-going-count"]', '0 of 4 going');
+    });
+});
+
 test('a guest is asked to log in rather than handed a button that cannot work', function () {
     browsableEvent();
 
