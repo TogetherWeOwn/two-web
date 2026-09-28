@@ -346,10 +346,10 @@ decision, 2026-08-31 — TOG-780), which supersedes Forge (TOG-407 closed).
 - **Staging deploys automatically; production is dispatch-only plus
   reviewer-gated.** The `production` job runs only from `workflow_dispatch` with
   `production` chosen, on `main`, behind the `production` environment's required
-  reviewer — enforceable on the org's Enterprise Cloud plan (reported on
-  TOG-6912; `main` ruleset `protect-main` read active 2026-09-27, environment
-  reviewer list still unverified — agent token 403 on the environments read;
-  TWO-91 superseded). It stays gated until [TOG-6902] says TWO Web may go live.
+  reviewer — enforceable on the org's Enterprise Cloud plan (verified TOG-6912
+  via host-token readback TOG-7649: required reviewer Rick7C2,
+  prevent_self_review, protected branches on; TWO-91 superseded). It stays
+  gated until [TOG-6902] says TWO Web may go live.
   Every deploy in either job posts a post-deploy smoke (`bin/smoke-staging.sh`)
   against its URL.
 - **GitHub Actions never SSHes into a server.** No deploy key lives in CI. A deploy
@@ -524,11 +524,10 @@ approval. A gate that fails silently is worse than no gate, so the job was gone
 rather than guarded (TWO-91, TOG-118).
 
 That premise is superseded. The org is on paid GitHub Enterprise Cloud (owner
-decision 2026-08-27, TOG-382 → TOG-564): the `production` environment is
-reported to carry required reviewers plus a branch policy, and `main`'s
-`protect-main` ruleset reads active (checked 2026-09-27; the environment
-reviewer list itself is still unverified — the agent token got 403 on the
-environments read). The job is therefore restored (TOG-6912). It stays
+decision 2026-08-27, TOG-382 → TOG-564): the `production` environment carries
+required reviewers plus a branch policy, and `main` is ruleset-protected —
+verified live on TOG-6912 via host-token readback (TOG-7649, 2026-09-28).
+The job is therefore restored (TOG-6912). It stays
 gated until the Ship target card ([TOG-6902]) says TWO Web may go live — the
 first production launch needs owner approval. Do not set
 `COOLIFY_PRODUCTION_DEPLOY_HOOK` / `PRODUCTION_URL` until then.

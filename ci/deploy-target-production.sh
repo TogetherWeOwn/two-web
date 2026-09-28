@@ -13,10 +13,10 @@
 #     up — the same false green in a smaller box.
 #   - Reaching this script already means a human chose `production` in
 #     `workflow_dispatch` AND the `production` environment's required reviewer
-#     approved. This script checks the target, not the approval — the org is on
-#     paid Enterprise where required reviewers enforce (reported on TOG-6912;
-#     `main` ruleset `protect-main` read active 2026-09-27, environment reviewer
-#     list still unverified — token 403 on the environments read). The job also
+#     approved. This script checks the target, not the approval — GitHub
+#     enforces that half on paid Enterprise (verified on TOG-6912 via
+#     host-token readback TOG-7649: required reviewer Rick7C2,
+#     prevent_self_review=true, protected branches on). The job also
 #     stays gated until the Ship target card
 #     ([TOG-6902]) says TWO Web may go live.
 #

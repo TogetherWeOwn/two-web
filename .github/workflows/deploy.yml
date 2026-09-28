@@ -46,12 +46,13 @@
 # it. (TWO-91, TOG-118.)
 #
 # That premise is superseded. The org is on paid GitHub Enterprise Cloud (owner
-# decision 2026-08-27, TOG-382 → TOG-564), and the `production` environment is
-# reported to carry required reviewers plus a branch policy, alongside a
-# ruleset-protected `main`. Live API verification is still pending — the agent
-# token returned 403 on the environments/deployments reads on 2026-09-27, so
-# TOG-6912 restores the job on the reported gate but does not claim a live
-# check. So the job is restored, with the gate it
+# decision 2026-08-27, TOG-382 → TOG-564), and the `production` environment
+# carries required reviewers plus a branch policy, alongside a
+# ruleset-protected `main` — verified live on TOG-6912 via host-token readback
+# (TOG-7649, 2026-09-28: required reviewer Rick7C2, prevent_self_review=true,
+# protected branches on, no custom branch policies; 148 deployment records;
+# `production` + `staging` environments exist). So the job is restored, with
+# the gate it
 # always claimed: `workflow_dispatch` with `production` chosen, AND the
 # environment's required reviewer, AND `main` only. It stays gated until the Ship
 # target card ([TOG-6902]) says TWO Web may go live — the first production launch
@@ -90,14 +91,11 @@ jobs:
     runs-on: [self-hosted, two-selfhosted]
     timeout-minutes: 15
     # Enforced on the org's Enterprise Cloud plan (required reviewers plus branch
-    # policy reported on `production`; `main` ruleset `protect-main` active —
-    # ruleset read verified 2026-09-27, environment API read 403 with this
-    # token so reviewer-list verification is still pending).
-    # This environment is expected to produce the Deployment records (with
-    # statuses) the Shipping KPI reads under
-    # `gh api repos/TogetherWeOwn/two-web/deployments` — deployments-list read
-    # also 403 with this token on 2026-09-27, so KPI visibility is still to be
-    # confirmed with a token that can read deployments.
+    # policy live on `production`; `main` ruleset-protected — verified TOG-6912
+    # via host-token readback TOG-7649).
+    # This environment also produces the Deployment records (with statuses) the
+    # Shipping KPI reads — verified: 148 records, `production` + `staging`
+    # environments present (TOG-7649 host-token readback).
     environment:
       name: staging
     # Serialise deploys so overlapping merges cannot race; never cancel one
