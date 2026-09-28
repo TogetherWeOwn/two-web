@@ -60,11 +60,10 @@ const allPages = [
     name: 'Moderator panel — the featured content a moderator edits',
     auth: true,
   },
-  {
-    path: '/admin/bot-settings',
-    name: 'Moderator panel — onboarding and automod bot settings',
-    auth: true,
-  },
+  // /admin/bot-settings is deliberately absent here: the budgets job builds a
+  // production-shaped app (APP_ENV=production), and AdminPanelProvider (TOG-3472)
+  // gates the page out of production, so the route 404s there. It ships to
+  // staging only until TOG-3093 covers the wider admin dashboard rollout.
 ];
 
 /**
