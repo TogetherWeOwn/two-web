@@ -1,6 +1,7 @@
 <?php
 
 use App\Http\Middleware\AddContentSecurityPolicy;
+use App\Http\Middleware\AddSecurityHeaders;
 use App\Http\Middleware\CompressStaticAssets;
 use App\Http\Middleware\RecordMemberDataAccess;
 use Illuminate\Foundation\Application;
@@ -40,6 +41,14 @@ return Application::configure(basePath: dirname(__DIR__))
         // that asked for gzip, and the funnel routes answer with redirects.
         // CompressStaticAssets carries the measurements and the reasoning.
         $middleware->append(CompressStaticAssets::class);
+
+        // The four static headers (TOG-7328) go on globally: every response
+        // needs framing and sniffing protection — the funnel redirect, the
+        // join page, the admin panel (which does not use `web`), JSON. This
+        // is safe for the funnel only because AddSecurityHeaders reads
+        // nothing: no config, no session, no cache, no database — the same
+        // guarantee the funnel's zero-query test pins.
+        $middleware->append(AddSecurityHeaders::class);
 
         // The site's CSP (TOG-6770) goes on `web`, not globally: the funnel
         // routes answer redirects/JSON that carry no body to protect, and the
