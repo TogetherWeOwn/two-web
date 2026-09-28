@@ -19,6 +19,9 @@ class EventResource extends JsonResource
      * Both readings of the time go out: the instant, so a client can do arithmetic
      * on it, and the local wall time with its zone, so a client can render "8pm"
      * without having to know that it is 8pm in London and not where they are.
+     * The local readings carry the abbreviation and offset (TOG-6806): on an
+     * autumn fold two instants share one wall text, and without "BST (+01:00)"
+     * vs "GMT (+00:00)" a client renders them identically.
      *
      * @return array<string, mixed>
      */
@@ -31,8 +34,8 @@ class EventResource extends JsonResource
             'description' => $this->description,
             'starts_at' => $this->starts_at->toIso8601String(),
             'ends_at' => $this->ends_at->toIso8601String(),
-            'starts_at_local' => $this->startsAtLocal()->format('Y-m-d H:i'),
-            'ends_at_local' => $this->endsAtLocal()->format('Y-m-d H:i'),
+            'starts_at_local' => $this->startsAtLocal()->format('Y-m-d H:i T (P)'),
+            'ends_at_local' => $this->endsAtLocal()->format('Y-m-d H:i T (P)'),
             'timezone' => $this->timezone,
             'location' => $this->location,
             'capacity' => $this->capacity,

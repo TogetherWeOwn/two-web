@@ -62,13 +62,15 @@
 
             {{-- The machine-readable instant and the human one: `datetime` carries
                  the offset while the visible text is the wall clock in the zone
-                 the host chose. Same contract as the calendar cards. --}}
+                 the host chose. Same contract as the calendar cards, including
+                 the visible abbreviation and offset (TOG-6806): without them
+                 the two sides of an autumn fold render identically. --}}
             <p class="mt-4 flex flex-wrap items-center gap-x-2 gap-y-1 text-sm text-ink-muted">
                 <time datetime="{{ $event->starts_at->toIso8601String() }}" class="u-numeric text-ink">
-                    {{ $event->startsAtLocal()->format('D j M, H:i') }}
+                    {{ $event->startsAtLocal()->format('D j M, H:i T (P)') }}
                 </time>
                 <span aria-hidden="true">·</span>
-                <span class="u-numeric">{{ $event->endsAtLocal()->format('H:i') }}</span>
+                <span class="u-numeric">{{ $event->endsAtLocal()->format('H:i T (P)') }}</span>
                 <span class="text-xs">{{ $event->timezone }}</span>
             </p>
 

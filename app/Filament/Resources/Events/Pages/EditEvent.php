@@ -38,9 +38,31 @@ class EditEvent extends EditRecord
             if (is_string($data[$key] ?? null)) {
                 $instant = CarbonImmutable::parse($data[$key], 'UTC');
                 $data[$hint] = $instant->toIso8601String();
-                $data[$key] = $instant
+                $wall = $instant
                     ->setTimezone($timezone)
                     ->format('Y-m-d H:i:s');
+                $data[$key] = $wall;
+
+                // A stored instant inside an autumn fold (TOG-6806) fills as a
+                // bare ambiguous wall — which the FoldDisambiguation rule
+                // refuses on save before mutateFormDataBeforeSave can vouch
+                // for it via the carrier. Backfill which side the stored
+                // instant is on so an untouched open-and-save validates: the
+                // host can still change the pick, and any keystroke to the
+                // wall drops the carrier and the new text wins.
+                $occurrenceKey = str_replace('_at', '_occurrence', $key);
+
+                if (EventInput::isAmbiguousWallTime($wall, $timezone)) {
+                    try {
+                        $first = EventInput::foldOccurrence($wall, $timezone, 'first');
+                        $data[$occurrenceKey] = $first !== null
+                            && $first->format('Y-m-d H:i:s') === $instant->utc()->format('Y-m-d H:i:s')
+                            ? 'first'
+                            : 'second';
+                    } catch (\Throwable) {
+                        // Leave it blank: the rule will ask the host to pick.
+                    }
+                }
             }
         }
 
@@ -101,10 +123,16 @@ class EditEvent extends EditRecord
      * header action — cancellation is the moderator verb for "this is off",
      * and it leaves the audit trail a deletion would erase.
      *
-     * An untouched fold/gap-ambiguous wall time keeps the exact instant the
-     * form rendered: the naive-wall guard forbids feeding that instant back
-     * through the string path, so the captured Carbon is spliced into a
-     * rebuilt input here instead.
+     * An untouched wall keeps the exact instant the form rendered. The fill
+     * backfills `starts_occurrence`/`ends_occurrence` for fold-ambiguous
+     * walls (TOG-6806), so fromValidated() parses the wall-plus-occurrence
+     * the host saw — including the first-occurrence side Carbon would never
+     * prefer on its own. One thing the wall text cannot carry is sub-minute
+     * precision the picker never displays: when the carrier instant rounds
+     * to the submitted wall minute, the carrier wins over the re-parsed
+     * wall, seconds and all (TOG-6805). Any keystroke to the wall drops the
+     * carrier in mutateFormDataBeforeSave and the new text wins, occurrence
+     * pick included.
      *
      * @param  array<string, mixed>  $data
      */
@@ -112,32 +140,38 @@ class EditEvent extends EditRecord
     {
         /** @var Event $record */
         $input = EventInput::fromValidated($data);
+        $timezone = $input->timezone;
 
-        $preserved = [];
+        $kept = [];
 
         foreach (['starts_at' => 'startsAt', 'ends_at' => 'endsAt'] as $key => $property) {
             $hint = $data[$key.'_utc'] ?? null;
+            $wall = $data[$key] ?? null;
 
-            if (! is_string($hint)) {
+            if (! is_string($hint) || ! is_string($wall)) {
                 continue;
             }
 
             try {
-                $preserved[$property] = CarbonImmutable::parse($hint, 'UTC');
+                $carrier = CarbonImmutable::parse($hint, 'UTC');
+                $unchanged = $carrier->setTimezone($timezone)->format('Y-m-d H:i')
+                    === CarbonImmutable::parse($wall, $timezone)->format('Y-m-d H:i');
             } catch (\Throwable) {
-                // A forged or mangled carrier falls back to the parsed wall
-                // text — the same answer the form gave before carriers existed.
                 continue;
+            }
+
+            if ($unchanged) {
+                $kept[$property] = $carrier;
             }
         }
 
-        if ($preserved !== []) {
+        if ($kept !== []) {
             $input = new EventInput(
                 title: $input->title,
                 game: $input->game,
                 description: $input->description,
-                startsAt: $preserved['startsAt'] ?? $input->startsAt,
-                endsAt: $preserved['endsAt'] ?? $input->endsAt,
+                startsAt: $kept['startsAt'] ?? $input->startsAt,
+                endsAt: $kept['endsAt'] ?? $input->endsAt,
                 timezone: $input->timezone,
                 location: $input->location,
                 capacity: $input->capacity,

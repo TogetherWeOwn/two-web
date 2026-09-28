@@ -342,13 +342,19 @@
                                         {{ $day['date']->format('j') }}
                                     </span>
 
+                                    {{-- The chip carries the abbreviation (TOG-6806):
+                                         on the 2026-10-25 Europe/London fold two
+                                         events both read "01:30", and without
+                                         "BST" vs "GMT" they are identical. The
+                                         full offset rides on the card it links
+                                         to; the chip has no room for it. --}}
                                     @foreach ($day['events'] as $event)
                                         <a href="#event-{{ $event->event_key }}"
                                            wire:click="setView('list')"
                                            class="mt-1 block rounded-sm bg-brand-quiet px-1.5 py-0.5
                                                   text-xs text-brand-ink
                                                   hover:bg-raised transition-colors duration-fast ease-out-quick">
-                                            {{ $event->startsAtLocal()->format('H:i') }}
+                                            {{ $event->startsAtLocal()->format('H:i T') }}
                                             {{ \Illuminate\Support\Str::limit($event->title, 18) }}
                                         </a>
                                     @endforeach

@@ -40,8 +40,17 @@ final readonly class EventInput
      * gap never existed, and Carbon resolves it to the same instant as a
      * different, real wall time (TOG-6803). Refuse it loudly rather than store
      * an instant another wall time already names.
+     *
+     * The input must name exactly one instant: a wall time inside an
+     * autumn-fallback fold occurs twice, an hour apart, and Carbon resolves it
+     * to the GMT-side (second) occurrence — so 00:30Z on 2026-10-25
+     * Europe/London is unreachable through a bare wall time (TOG-6806).
+     * Refuse the bare form unless $occurrence disambiguates it: 'first'
+     * names the clocks-back side (earlier UTC instant), 'second' the
+     * post-transition side (later UTC instant). Outside a fold the parameter
+     * is a no-op that still returns the instant the wall time names.
      */
-    public static function instant(string $localWallTime, string $timezone): CarbonImmutable
+    public static function instant(string $localWallTime, string $timezone, ?string $occurrence = null): CarbonImmutable
     {
         if (self::carriesZone($localWallTime)) {
             throw new \InvalidArgumentException(
@@ -55,7 +64,125 @@ final readonly class EventInput
             );
         }
 
+        if ($occurrence !== null) {
+            $normalized = strtolower(trim($occurrence));
+
+            if (! in_array($normalized, ['first', 'second'], true)) {
+                throw new \InvalidArgumentException(
+                    "Refusing occurrence '{$occurrence}': expected 'first' or 'second'.",
+                );
+            }
+
+            $chosen = self::foldOccurrence($localWallTime, $timezone, $normalized);
+
+            if ($chosen === null) {
+                throw new \InvalidArgumentException(
+                    "Refusing '{$localWallTime}' with occurrence '{$normalized}': it does not occur twice in '{$timezone}', so there is nothing to pick between.",
+                );
+            }
+
+            return $chosen;
+        }
+
+        if (self::isAmbiguousWallTime($localWallTime, $timezone)) {
+            throw new \InvalidArgumentException(
+                "Refusing '{$localWallTime}': that wall time occurs twice in '{$timezone}' — clocks fell back over it, so it names two instants an hour apart ".
+                "(TOG-6806). Pass occurrence 'first' for the earlier one or 'second' for the later one.",
+            );
+        }
+
         return CarbonImmutable::parse($localWallTime, $timezone)->utc();
+    }
+
+    /**
+     * Whether a naive wall time occurs twice in the zone because clocks fell
+     * back over it (an autumn DST fold).
+     *
+     * Relative phrases (`tomorrow`), unparseable strings and zone-carrying
+     * strings return false here and are left to the `date` rule (or to the
+     * carriesZone refusal in instant()), so callers never double-report the
+     * same bad input.
+     */
+    public static function isAmbiguousWallTime(string $value, string $timezone): bool
+    {
+        if (trim($value) === '' || self::carriesZone($value)) {
+            return false;
+        }
+
+        $expected = self::normalizedWallTime($value);
+
+        if ($expected === null) {
+            return false;
+        }
+
+        try {
+            $zone = new \DateTimeZone($timezone);
+        } catch (\Throwable) {
+            return false;
+        }
+
+        // Two candidate UTC instants an hour apart, built the naive way: parse
+        // the wall time as if it were UTC, then step one back. In a fold hour
+        // both render back to the same wall text in the zone; outside it at
+        // most one does.
+        $naive = \DateTimeImmutable::createFromFormat('!Y-m-d H:i:s', $expected, new \DateTimeZone('UTC'));
+
+        if ($naive === false) {
+            return false;
+        }
+
+        $matches = 0;
+
+        foreach ([$naive, $naive->modify('-1 hour')] as $candidate) {
+            if ($candidate->setTimezone($zone)->format('Y-m-d H:i:s') === $expected) {
+                $matches++;
+            }
+        }
+
+        return $matches === 2;
+    }
+
+    /**
+     * The UTC instant for one named side of an autumn fold: 'first' is the
+     * clocks-back side (earlier UTC instant), 'second' the post-transition
+     * side (later UTC instant). Outside a fold both sides collapse to the
+     * instant the wall time names. Null when the wall time has no fixed
+     * calendar shape or cannot be parsed.
+     */
+    public static function foldOccurrence(string $localWallTime, string $timezone, string $occurrence): ?CarbonImmutable
+    {
+        $expected = self::normalizedWallTime($localWallTime);
+
+        if ($expected === null) {
+            return null;
+        }
+
+        try {
+            $zone = new \DateTimeZone($timezone);
+            $naive = \DateTimeImmutable::createFromFormat('!Y-m-d H:i:s', $expected, new \DateTimeZone('UTC'));
+        } catch (\Throwable) {
+            return null;
+        }
+
+        if ($naive === false) {
+            return null;
+        }
+
+        $matching = [];
+
+        foreach ([$naive, $naive->modify('-1 hour')] as $candidate) {
+            if ($candidate->setTimezone($zone)->format('Y-m-d H:i:s') === $expected) {
+                $matching[] = CarbonImmutable::instance($candidate)->utc();
+            }
+        }
+
+        if ($matching === []) {
+            return null;
+        }
+
+        usort($matching, fn (CarbonImmutable $a, CarbonImmutable $b): int => $a->timestamp <=> $b->timestamp);
+
+        return $occurrence === 'first' ? $matching[0] : $matching[count($matching) - 1];
     }
 
     /**
@@ -151,7 +278,14 @@ final readonly class EventInput
         );
     }
 
-    /** @param  array<string, mixed>  $validated */
+    /**
+     * @param  array<string, mixed>  $validated
+     *
+     * `starts_occurrence`/`ends_occurrence` (each 'first'|'second'|absent)
+     * disambiguate autumn-fold wall times (TOG-6806): 'first' names the
+     * clocks-back side, 'second' the post-transition side. Absent is the
+     * historical behaviour — and a 422 on a bare fold-ambiguous wall time.
+     */
     public static function fromValidated(array $validated): self
     {
         $timezone = self::string($validated, 'timezone') ?? 'UTC';
@@ -161,12 +295,32 @@ final readonly class EventInput
             title: self::string($validated, 'title') ?? '',
             game: self::string($validated, 'game'),
             description: self::string($validated, 'description'),
-            startsAt: self::instant(self::string($validated, 'starts_at') ?? '', $timezone),
-            endsAt: self::instant(self::string($validated, 'ends_at') ?? '', $timezone),
+            startsAt: self::instant(
+                self::string($validated, 'starts_at') ?? '',
+                $timezone,
+                self::occurrence($validated, 'starts_occurrence'),
+            ),
+            endsAt: self::instant(
+                self::string($validated, 'ends_at') ?? '',
+                $timezone,
+                self::occurrence($validated, 'ends_occurrence'),
+            ),
             timezone: $timezone,
             location: self::string($validated, 'location'),
             capacity: is_numeric($capacity) ? (int) $capacity : null,
         );
+    }
+
+    /** @param  array<string, mixed>  $data */
+    private static function occurrence(array $data, string $key): ?string
+    {
+        $value = self::string($data, $key);
+
+        if ($value === null || trim($value) === '') {
+            return null;
+        }
+
+        return strtolower(trim($value));
     }
 
     /** @param  array<string, mixed>  $data */

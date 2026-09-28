@@ -81,11 +81,13 @@ it('keeps the field types the consumers parse against', function () {
         ->and($data['synced_to_discord'])->toBeFalse();
 
     // Both readings of the time: an instant a client can do arithmetic on, and a
-    // wall time it can render without knowing the zone.
+    // wall time it can render without knowing the zone. The local readings
+    // carry the abbreviation and offset (TOG-6806) so the two sides of an
+    // autumn fold do not render identically.
     expect(fn () => CarbonImmutable::parse($data['starts_at']))->not->toThrow(Exception::class)
         ->and(fn () => CarbonImmutable::parse($data['ends_at']))->not->toThrow(Exception::class)
-        ->and($data['starts_at_local'])->toMatch('/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$/')
-        ->and($data['ends_at_local'])->toMatch('/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$/');
+        ->and($data['starts_at_local'])->toMatch('/^\d{4}-\d{2}-\d{2} \d{2}:\d{2} [A-Z]{3,5} \([+-]\d{2}:\d{2}\)$/')
+        ->and($data['ends_at_local'])->toMatch('/^\d{4}-\d{2}-\d{2} \d{2}:\d{2} [A-Z]{3,5} \([+-]\d{2}:\d{2}\)$/');
 });
 
 it('renders nulls as nulls, not as omissions', function () {

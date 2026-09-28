@@ -292,11 +292,74 @@ it('refuses a spring-gap wall time at the domain edge, not just in HTTP validati
         ->toThrow(InvalidArgumentException::class);
 });
 
-it('still accepts gap-shoulder and autumn-overlap wall times at the domain edge', function (string $local, string $utc) {
+it('still accepts gap-shoulder wall times at the domain edge', function (string $local, string $utc) {
     expect(EventInput::instant($local, 'Europe/London')->format('Y-m-d H:i:s'))->toBe($utc);
 })->with([
     'gap shoulder' => ['2026-03-29 02:30', '2026-03-29 01:30:00'],
-    'autumn overlap' => ['2026-10-25 01:30', '2026-10-25 01:30:00'],
+]);
+
+// TOG-6806: a wall time inside the autumn-fallback fold occurs twice, an
+// hour apart — on 2026-10-25 in Europe/London both 00:30Z (BST side) and
+// 01:30Z (GMT side) read as "01:30" locally, and Carbon resolves the bare
+// wall to the second. The fix is two-sided: the bare wall is a 422 naming
+// the occurrence field, and each named occurrence is creatable on its own.
+
+it('rejects a create whose wall time occurs twice in the autumn fold', function () {
+    $host = User::factory()->create(['is_moderator' => true]);
+    $this->actingAs($host);
+
+    $response = $this->postJson(route('events.store'), [
+        'title' => 'Fold trap',
+        'starts_at' => '2026-10-25 01:30',
+        'ends_at' => '2026-10-25 03:30',
+        'timezone' => 'Europe/London',
+        'location' => 'Voice: General',
+    ]);
+
+    $response->assertStatus(422)->assertJsonValidationErrors('starts_at');
+
+    $message = implode(' ', (array) $response->json('errors.starts_at'));
+
+    expect($message)->toContain('occurs twice')
+        ->and($message)->toContain('starts_occurrence');
+
+    expect(Event::query()->count())->toBe(0);
+});
+
+it('creates each named autumn-fold occurrence as its own instant', function (string $occurrence, string $utc) {
+    $host = User::factory()->create(['is_moderator' => true]);
+    $this->actingAs($host);
+
+    $response = $this->postJson(route('events.store'), [
+        'title' => 'Fold pick',
+        'starts_at' => '2026-10-25 01:30',
+        'starts_occurrence' => $occurrence,
+        'ends_at' => '2026-10-25 03:30',
+        'timezone' => 'Europe/London',
+        'location' => 'Voice: General',
+    ]);
+
+    $response->assertStatus(201);
+
+    expect(Event::query()->latest('id')->firstOrFail()->starts_at->utc()->format('Y-m-d H:i:s'))
+        ->toBe($utc);
+})->with([
+    'first (BST side)' => ['first', '2026-10-25 00:30:00'],
+    'second (GMT side)' => ['second', '2026-10-25 01:30:00'],
+]);
+
+it('refuses a bare autumn-overlap wall time at the domain edge, not just in HTTP validation', function () {
+    // A fold wall names two instants an hour apart (TOG-6806): the bare form
+    // is refused, and each occurrence resolves to its own instant.
+    expect(fn () => EventInput::instant('2026-10-25 01:30', 'Europe/London'))
+        ->toThrow(InvalidArgumentException::class, 'occurs twice');
+});
+
+it('resolves each named autumn-fold occurrence to its own instant', function (string $occurrence, string $utc) {
+    expect(EventInput::instant('2026-10-25 01:30', 'Europe/London', $occurrence)->format('Y-m-d H:i:s'))->toBe($utc);
+})->with([
+    'first (BST side)' => ['first', '2026-10-25 00:30:00'],
+    'second (GMT side)' => ['second', '2026-10-25 01:30:00'],
 ]);
 
 it('keeps a real IANA identifier', function () {

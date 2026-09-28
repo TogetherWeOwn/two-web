@@ -62,13 +62,18 @@
 
     {{-- The machine-readable instant and the human one. `datetime` carries the
          offset so a crawler and a screen reader both get an unambiguous time,
-         while the visible text is the wall clock in the zone the host chose. --}}
+         while the visible text is the wall clock in the zone the host chose.
+         The abbreviation and offset ride visibly (TOG-6806): on the 2026-10-25
+         Europe/London autumn fold both 00:30Z and 01:30Z read as "01:30"
+         locally, and without "BST (+01:00)" vs "GMT (+00:00)" the two cards
+         are identical. The end carries its own suffix because an event can
+         span the fold (BST start, GMT end). --}}
     <p class="mt-3 flex flex-wrap items-center gap-x-2 gap-y-1 text-sm text-ink-muted">
         <time datetime="{{ $event->starts_at->toIso8601String() }}" class="u-numeric text-ink">
-            {{ $event->startsAtLocal()->format('D j M, H:i') }}
+            {{ $event->startsAtLocal()->format('D j M, H:i T (P)') }}
         </time>
         <span aria-hidden="true">·</span>
-        <span class="u-numeric">{{ $event->endsAtLocal()->format('H:i') }}</span>
+        <span class="u-numeric">{{ $event->endsAtLocal()->format('H:i T (P)') }}</span>
         <span class="text-xs">{{ $event->timezone }}</span>
         @if ($event->location)
             <span aria-hidden="true">·</span>
