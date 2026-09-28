@@ -1,6 +1,7 @@
 <?php
 
 use App\Http\Controllers\DiscordInviteController;
+use App\Http\Controllers\PrivacyController;
 use App\Http\Middleware\AddContentSecurityPolicy;
 use Illuminate\Support\Facades\Route;
 
@@ -12,7 +13,10 @@ use Illuminate\Support\Facades\Route;
 | `/discord` is the database-free floor under the web-to-Discord funnel
 | (TOG-77, docs/dns.md). `/about` lives here too (TOG-6853), as does `/faq`
 | (TOG-8396): static `Route::view` leaves with no controller, no query and no
-| Livewire, and they must stay 200 when the app database is down.
+| Livewire, and they must stay 200 when the app database is down. `/privacy`
+| (TOG-8609) lives here too: a controller rather than a static view because it
+| renders the versioned content/privacy-policy-v*.md source, but its one read
+| is a file from disk — no session, no cache, no database.
 |
 | **These are not in routes/web.php on purpose.** bootstrap/app.php loads this
 | file with an empty middleware stack, so nothing in the `web` group runs here.
@@ -55,3 +59,11 @@ Route::view('/about', 'about')->middleware(AddContentSecurityPolicy::class)->nam
 // middleware is attached to the route alone for the same reason: it answers
 // with an HTML document and reads no session, cache or database.
 Route::view('/faq', 'faq')->middleware(AddContentSecurityPolicy::class)->name('faq');
+
+// Public privacy policy (TOG-8609). Same session-free funnel placement as
+// `/about` and `/faq` above: a controller rather than Route::view because the
+// page renders the versioned content/privacy-policy-v*.md source, but the one
+// read is a file from disk — no session, no cache, no database — so it stays
+// 200 during an app-DB outage. The CSP middleware is attached to the route
+// alone for the same reason: it answers with an HTML document.
+Route::get('/privacy', PrivacyController::class)->middleware(AddContentSecurityPolicy::class)->name('privacy');

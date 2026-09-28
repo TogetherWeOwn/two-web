@@ -48,6 +48,7 @@ Route::get('/sitemap_index.xml', function () {
         ['loc' => route('about'), 'changefreq' => 'monthly', 'priority' => '0.7'],
         ['loc' => route('faq'), 'changefreq' => 'monthly', 'priority' => '0.7'],
         ['loc' => route('rules'), 'changefreq' => 'monthly', 'priority' => '0.7'],
+        ['loc' => route('privacy'), 'changefreq' => 'monthly', 'priority' => '0.7'],
     ];
 
     $events = Event::query()
