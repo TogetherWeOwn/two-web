@@ -3,6 +3,7 @@
 namespace App\Filament\Resources\Events\Tables;
 
 use App\Enums\EventStatus;
+use App\Enums\RsvpStatus;
 use App\Models\Event;
 use App\Services\EventService;
 use Filament\Actions\Action;
@@ -17,9 +18,14 @@ class EventsTable
     public static function configure(Table $table): Table
     {
         return $table
-            // The series column reads each child's parent; eager-load it once
+            // The series column reads each child's parent and the fill column
+            // reads each row's going seats; eager-load/aggregate both once
             // rather than once per row.
-            ->modifyQueryUsing(fn (Builder $query): Builder => $query->with('parentEvent'))
+            ->modifyQueryUsing(fn (Builder $query): Builder => $query
+                ->with('parentEvent')
+                // `going_count` is the same aggregate the JSON listing selects
+                // (EventController): one subquery up front, not a count per row.
+                ->withCount(['rsvps as going_count' => fn ($query) => $query->where('status', RsvpStatus::Going)]))
             ->columns([
                 TextColumn::make('title')
                     ->searchable()
@@ -64,9 +70,34 @@ class EventsTable
                     })
                     ->placeholder('—')
                     ->toggleable(),
+                // Fill at a glance: "12/20" on a capped event, bare count when
+                // uncapped. A full event (going >= capacity) is a warning
+                // badge, so the row a moderator must not overbook stands out.
+                // "maybe" is not a seat (see Event::goingCount): the count only
+                // ever answers Going, same as the member-facing badge.
+                TextColumn::make('going_count')
+                    ->label('Fill')
+                    ->formatStateUsing(function (Event $record): string {
+                        // Prefer the query's aggregate; fall back to a count so
+                        // the column still renders outside the table query (the
+                        // same idiom as the events JSON resource).
+                        $going = $record->going_count ?? $record->goingCount();
+
+                        if ($record->capacity === null) {
+                            return (string) $going;
+                        }
+
+                        return "{$going}/{$record->capacity}";
+                    })
+                    ->badge(fn (Event $record): bool => $record->capacity !== null
+                        && ($record->going_count ?? $record->goingCount()) >= $record->capacity)
+                    ->color(fn (Event $record): ?string => $record->capacity !== null
+                        && ($record->going_count ?? $record->goingCount()) >= $record->capacity
+                            ? 'warning'
+                            : null),
                 TextColumn::make('capacity')
                     ->placeholder('Unlimited')
-                    ->toggleable(),
+                    ->toggleable(isToggledHiddenByDefault: true),
             ])
             ->defaultSort('starts_at', 'desc')
             ->filters([
