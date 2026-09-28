@@ -6,12 +6,15 @@
 
 return [
 
-    'denied' => 'You cancelled the Discord sign-in, so we did not sign you in. Try again whenever you like.',
-
     'expired' => 'That sign-in attempt took too long and expired. Please try again.',
 
     'not_a_member' => 'You need to be a member of the Together We Own Discord server to sign in. Join the server, then come back.',
 
     'unavailable' => 'Discord did not answer just now, so we could not sign you in. This is on Discord, not you — please try again in a minute.',
+
+    'recovery_title' => 'Sign-in did not go through',
+    'recovery_denied' => 'You cancelled the Discord sign-in, so we did not sign you in. Nothing changed — try again whenever you like.',
+    'recovery_error' => 'Discord answered with an error instead of signing you in. Nothing changed — try again whenever you like.',
+    'recovery_retry' => 'Try signing in again',
 
 ];

@@ -25,23 +25,40 @@ it('renders a human sentence for every join result code we can emit', function (
     'added' => ['added', 'status'],
     'already a member' => ['already_member', 'status'],
     'unavailable' => ['unavailable', 'alert'],
-    'denied' => ['denied', 'alert'],
     'expired' => ['expired', 'alert'],
 ]);
 
-it('pins denied when Discord reports access_denied and renders the banner', function () {
-    $this->get('/join/callback?error=access_denied&state=x')
-        ->assertRedirect(route('join'))
-        ->assertSessionHas('join_result', 'denied');
+it('pins the recovery page when Discord reports access_denied, never the banner', function () {
+    // No Socialite stub here on purpose — the callback returns before any
+    // token exchange is attempted, so an unstubbed Socialite would error if
+    // the controller tried to call Discord.
+    $response = $this->get('/join/callback?error=access_denied&error_description=The+user+denied+access&state=x');
 
-    $copy = __('join.result.denied');
-    expect($copy)->not->toBe('join.result.denied');
+    $copy = __('join.recovery_denied');
+    expect($copy)->not->toBe('join.recovery_denied');
 
-    $this->get(route('join'))
-        ->assertOk()
-        ->assertSeeHtml('data-testid="join-result"')
+    $response->assertOk()
+        ->assertSeeHtml('data-testid="oauth-recovery"')
         ->assertSeeHtml('role="alert"')
-        ->assertSee($copy, escape: false);
+        ->assertSee($copy, escape: false)
+        ->assertSeeHtml('data-testid="oauth-recovery-retry"')
+        ->assertSee(route('join.redirect'), escape: false)
+        ->assertDontSee('The user denied access', escape: false)
+        ->assertSessionMissing('join_result');
+});
+
+it('pins the recovery page with the generic message for any other OAuth error', function () {
+    $response = $this->get('/join/callback?error=server_error&error_description=Something+broke+over+there&state=x');
+
+    $copy = __('join.recovery_error');
+    expect($copy)->not->toBe('join.recovery_error');
+
+    $response->assertOk()
+        ->assertSeeHtml('data-testid="oauth-recovery"')
+        ->assertSee($copy, escape: false)
+        ->assertSeeHtml('data-testid="oauth-recovery-retry"')
+        ->assertDontSee('Something broke over there', escape: false)
+        ->assertSessionMissing('join_result');
 });
 
 it('pins expired when OAuth state is invalid and renders the banner', function () {

@@ -4,6 +4,7 @@ namespace App\Http\Requests;
 
 use App\Models\User;
 use App\Rules\IanaTimeZone;
+use App\Rules\NoControlCharacters;
 
 class UpdateProfileRequest extends AuthenticatedRequest
 {
@@ -31,10 +32,10 @@ class UpdateProfileRequest extends AuthenticatedRequest
     public function rules(): array
     {
         return [
-            'bio' => ['nullable', 'string', 'max:1000'],
+            'bio' => ['nullable', 'string', 'max:1000', new NoControlCharacters],
             'games' => ['sometimes', 'nullable', 'array', 'max:20'],
-            'games.*' => ['string', 'max:80'],
-            'games_text' => ['sometimes', 'nullable', 'string', 'max:1700'],
+            'games.*' => ['string', 'max:80', new NoControlCharacters],
+            'games_text' => ['sometimes', 'nullable', 'string', 'max:1700', new NoControlCharacters],
             'timezone' => ['nullable', 'string', new IanaTimeZone],
         ];
     }

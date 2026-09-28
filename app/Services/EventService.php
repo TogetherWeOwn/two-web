@@ -13,7 +13,9 @@ use App\Models\Event;
 use App\Models\Rsvp;
 use App\Models\User;
 use App\Support\EventInput;
+use Illuminate\Database\QueryException;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
 
 /**
  * Everything that changes an event or an answer to one.
@@ -250,6 +252,25 @@ class EventService
      * is not there yet — or, worse, one that is about to be rolled back. A draft is
      * skipped because Discord has never been shown it, so there is nothing to
      * update and the job would be a no-op that still cost a queue slot.
+     *
+     * The dispatch runs inside a savepoint, not in the write's own transaction
+     * frame. `dispatch()` returns a `PendingDispatch` whose destructor eagerly
+     * acquires the job's `ShouldBeUnique` lock — still inside whatever transaction
+     * is open here. When a write-back for this event is already queued (the 10s
+     * debounce, or a worker running behind), that `insert into cache_locks` hits
+     * the unique key, and on Postgres the one failed statement aborts the whole
+     * enclosing transaction: the fallback `update` then dies with 25P02, the
+     * exception escapes, and the member's RSVP rolls back with it (TOG-6959). The
+     * savepoint confines the lock check to its own subtransaction — a duplicate
+     * lock rolls back to the savepoint and the outer write commits untouched.
+     *
+     * The only queries inside the savepoint are the unique-lock's own
+     * insert/update (payload creation and the queue push touch no tables; the push
+     * itself is deferred by `afterCommit`). So any `QueryException` escaping it
+     * means "no fresh lock for this event", and skipping is correct either way:
+     * the already-queued job re-reads the row when it runs and carries this
+     * change with it. The log line keeps the skip observable; `events:reconcile`
+     * is the backstop if the lock store itself is ever down.
      */
     private function syncAfterCommit(Event $event): void
     {
@@ -257,6 +278,19 @@ class EventService
             return;
         }
 
-        SyncEventToDiscord::dispatch($event->event_key)->afterCommit();
+        try {
+            DB::transaction(function () use ($event): void {
+                SyncEventToDiscord::dispatch($event->event_key)->afterCommit();
+            }, 1);
+        } catch (QueryException $e) {
+            // Name the exception: the expected case is a duplicate unique lock
+            // (the already-queued job carries this change), but a QueryException
+            // from a lock store that is actually down must not read identically.
+            Log::info('Event write-back already queued; skipping duplicate dispatch.', [
+                'event_key' => $event->event_key,
+                'exception' => $e::class,
+                'sqlstate' => $e->getCode(),
+            ]);
+        }
     }
 }

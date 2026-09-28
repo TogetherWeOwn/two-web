@@ -65,6 +65,9 @@ it('serves the upcoming collection as one VCALENDAR with a VEVENT per event', fu
         ->and($lines)->toContain('BEGIN:VALARM')
         ->and($lines)->toContain('TRIGGER:-PT30M')
         ->and($lines)->toContain('END:VALARM')
+        // TOG-7941: every VEVENT carries a SEQUENCE so already-synced
+        // calendar clients apply host edits instead of keeping stale data.
+        ->and($lines)->toContain('SEQUENCE:'.$event->updated_at->getTimestamp())
         ->and(substr_count($body, 'BEGIN:VEVENT'))->toBe(1);
 });
 

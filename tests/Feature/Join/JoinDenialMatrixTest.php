@@ -167,10 +167,39 @@ it('maps a Discord-down token exchange to recovery without reaching the bot', fu
     Http::assertNothingSent();
 });
 
-it('never touches the bot or the user table on an OAuth deny', function () {
-    $this->get('/join/callback?error=access_denied&state=x')
-        ->assertRedirect(route('join'))
-        ->assertSessionHas('join_result', 'denied');
+it('renders the recovery page without touching the bot or the user table on an OAuth deny', function () {
+    // No Socialite stub: the callback returns before any token exchange is
+    // attempted. The member sees what happened, one button to retry, and the
+    // static invite fallback — same page the Discord-down path renders.
+    $response = $this->get('/join/callback?error=access_denied&error_description=The+user+denied+access&state=x');
+
+    $response->assertOk()
+        ->assertSee(__('join.recovery_denied'), escape: false)
+        ->assertSeeHtml('data-testid="oauth-recovery"')
+        ->assertSeeHtml('role="alert"')
+        ->assertSeeHtml('data-testid="oauth-recovery-retry"')
+        ->assertSee(route('join.redirect'), escape: false)
+        ->assertSee('href="https://discord.gg/testinvite"', escape: false)
+        ->assertDontSee('The user denied access', escape: false)
+        ->assertSessionMissing('join_result');
+
+    $this->assertGuest();
+    expect(User::query()->count())->toBe(0);
+    Http::assertNothingSent();
+});
+
+it('renders the recovery page with the generic message for any other OAuth error', function () {
+    // `error=server_error` and friends: Discord refused the approval for its
+    // own reasons. Same page, same retry button, different sentence — and
+    // Discord's own error_description is never echoed back.
+    $response = $this->get('/join/callback?error=server_error&error_description=Something+broke+over+there&state=x');
+
+    $response->assertOk()
+        ->assertSee(__('join.recovery_error'), escape: false)
+        ->assertSeeHtml('data-testid="oauth-recovery"')
+        ->assertSeeHtml('data-testid="oauth-recovery-retry"')
+        ->assertDontSee('Something broke over there', escape: false)
+        ->assertSessionMissing('join_result');
 
     $this->assertGuest();
     expect(User::query()->count())->toBe(0);

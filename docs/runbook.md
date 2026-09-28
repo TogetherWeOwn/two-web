@@ -206,6 +206,45 @@ Rules:
   window (writes between the dump and the stop) on the incident card. The
   window is why step 1 stops the writers first.
 
+### Rehearsing this locally (backup + restore proof)
+
+The quarterly staging rehearsal above is the real test, but the mechanics —
+take the dump the same way, prove it restores — run on a laptop with nothing
+but docker. `bin/pg-backup.sh` wraps both halves; `ci/pg-backup-selftest.sh`
+pins the script's guards offline (15 cases, runs in `static`), so a guard that
+quietly stopped guarding goes red on the next PR rather than at the rehearsal.
+
+```bash
+docker compose up -d          # the Postgres this proves against
+
+./bin/pg-backup.sh backup
+# -> backups/two-web-20260927T034500Z.dump
+
+./bin/pg-backup.sh restore-proof
+# -> PROOF OK — every table's row count matches (the script prints the count)
+```
+
+What `restore-proof` does: copies the dump into the compose container (`docker
+cp`, so `docker-compose.yml` needs no proof-only mount), restores it into a
+scratch database `two_web_restore_proof`, compares every table's exact row
+count against the live database, prints the verdict, and drops the scratch
+database — on success *and* on failure. A `PROOF FAILED` names the table and
+prints the diff; a corrupt dump fails at `pg_restore` before any comparison.
+
+Rules for the local proof, all enforced by the script:
+
+- **Local docker only.** A `.env` pointing `DB_HOST` anywhere but this machine
+  is refused outright. Production restores are the procedure above, never this
+  script.
+- **The dump is the same shape as production's** (`pg_dump -Fc`), so the proof
+  exercises the format the runbook restores from — not a SQL text dump that
+  would pass here and behave differently there.
+- **Row counts, not estimates.** `pg_stats` resets on restore, so estimates
+  would compare unequal on identical data; the proof uses `count(*)` per table.
+- **No Postgres client needed on the laptop.** Everything runs inside the
+  compose container; the password is forwarded as `-e PGPASSWORD` (name only)
+  and never appears in a command line.
+
 ---
 
 ## Quick-reference: "it is down, what do I do"

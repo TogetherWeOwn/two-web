@@ -14,8 +14,11 @@ use App\Support\MemberDataAccess\AccessRecorder;
 use App\Support\Profiles\MemberStatsReader;
 use App\Support\Profiles\MemberStatsSource;
 use Illuminate\Contracts\Foundation\Application;
+use Illuminate\Queue\Events\JobFailed;
 use Illuminate\Support\Facades\Event;
 use Illuminate\Support\Facades\Gate;
+use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\Queue;
 use Illuminate\Support\ServiceProvider;
 use Livewire\Livewire;
 use SocialiteProviders\Discord\DiscordExtendSocialite;
@@ -160,5 +163,34 @@ class AppServiceProvider extends ServiceProvider
                 fn (User|Profile $subject) => app(AccessRecorder::class)->observe($subject),
             );
         }
+
+        // A failed job is the only queue outcome nobody watches by habit. A
+        // stuck or dead worker is visible in `queue:check-depth` (pending grows,
+        // reserved sticks), but a job that fails terminally — a bot refusal, a
+        // malformed payload — just sits in `failed_jobs` while the member's
+        // RSVP reads "pending" forever. The worker already owns recovery (the
+        // reconcile pass re-dispatches); what is missing is the surfacing, so
+        // this listener is the alert half of TOG-6948: one critical log line per
+        // failed job, with the class, queue and exception message as structured
+        // context, so whatever tails the log on the box sees it without having
+        // to remember to query the table. `failing` fires for every driver —
+        // database, sync, null — and for jobs that call `fail()` themselves as
+        // well as jobs the worker gives up on, so the dead-letter path and the
+        // exhausted-retries path both land here. `job` is the class via
+        // resolveQueuedJobClass, not resolveName: a job with a displayName
+        // (like the poison probe's marker) would otherwise log the instance
+        // label where a greppable class belongs. The instance label still goes
+        // out as `display`, so the alert carries both what broke and which one.
+        Queue::failing(function (JobFailed $event): void {
+            Log::critical('Queue job failed.', [
+                'connection' => $event->connectionName,
+                'queue' => $event->job->getQueue(),
+                'job' => $event->job->resolveQueuedJobClass(),
+                'display' => $event->job->resolveName(),
+                'attempts' => $event->job->attempts(),
+                'exception' => get_class($event->exception),
+                'message' => $event->exception->getMessage(),
+            ]);
+        });
     }
 }
