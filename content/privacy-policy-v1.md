@@ -26,9 +26,7 @@ Concretely, the website keeps:
   from the bot when your profile loads; if the bot is unreachable the stats
   section shows its empty state and the rest of the page still loads.
 
-What we never store, ever: email addresses (we never ask for one), passwords
-(there is no password column — Discord OAuth is the only way in), message
-content, location, or voice audio.
+What we never store, ever — in the website database: email addresses (we never ask for one), passwords (there is no password column — Discord OAuth is the only way in), message content, location, or voice audio. Support-ticket transcripts are the one narrow exception, and they live in Discord, not here: staff-only, kept for 90 days, then deleted.
 
 ## Who can see it
 
@@ -37,18 +35,23 @@ member's profile; logged out, you get a sign-in prompt instead of a profile.
 
 Moderators see more through the admin panel, and every look is written down:
 who viewed, when, and whose records. That access log is kept for 90 days.
-Private support-ticket transcripts are staff-only, kept for 90 days, then
-deleted — your message bodies live only in that transcript table, nowhere else.
+Private support-ticket transcripts live in Discord, not in this site's
+database: staff-only, kept for 90 days, then deleted.
 
 ## Cookies and tracking
 
-One session cookie keeps you signed in while you use the site. There is no
-remember-me cookie on purpose: signing in again re-reads your Discord roles, so
-a changed role takes effect at the next login instead of lingering in a cookie.
+One session cookie keeps you signed in while you use the site (plus the XSRF
+anti-forgery cookie on form pages). There is no remember-me cookie on purpose:
+signing in again re-reads your Discord roles, so a changed role takes effect at
+the next login instead of lingering in a cookie.
 
-There are no third-party analytics, advertising trackers, or third-party embeds
-on this site. The JavaScript bundle is empty; every interaction goes through the
-site's own server-rendered pages.
+There are no third-party analytics or advertising trackers on this site. The
+one third-party embed is the live lobby widget on the join page: an
+iframe served by Discord showing who is online right now, with no fallback
+content sent anywhere else. This policy page itself ships no JavaScript at
+all — elsewhere on the site, interactivity comes from the site's own
+first-party scripts (the global bundle carries no imports; the event page
+adds a small copy-link script) and the Livewire runtime on interactive pages.
 
 ## Deletion
 
