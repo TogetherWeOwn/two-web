@@ -8,6 +8,7 @@ use App\Rules\IanaTimeZone;
 use App\Rules\NoControlCharacters;
 use App\Support\Profiles\MemberStats;
 use App\Support\Profiles\Milestone;
+use App\Support\Profiles\SaveMemberProfile;
 use Illuminate\Auth\Access\AuthorizationException;
 use Illuminate\Support\Facades\Gate;
 use Illuminate\View\View;
@@ -187,7 +188,7 @@ class MemberProfile extends Component
         try {
             $profile = is_callable(self::$profileWriter)
                 ? (self::$profileWriter)($this->member, $attributes)
-                : $this->member->profile()->updateOrCreate([], $attributes);
+                : app(SaveMemberProfile::class)->save($this->member, $attributes);
         } catch (Throwable) {
             $this->saveFailed = true;
 
