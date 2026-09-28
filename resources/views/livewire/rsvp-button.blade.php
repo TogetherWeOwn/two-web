@@ -60,7 +60,9 @@
                            hover:bg-raised hover:border-ink-muted active:bg-surface
                            transition-colors duration-fast ease-out-quick self-start">
                 <span wire:loading.remove wire:target="rsvp">Join the waitlist</span>
-                <span wire:loading wire:target="rsvp" aria-busy="true">Saving…</span>
+                {{-- Hidden up front like the main CTA below (TOG-6351):
+                     Livewire only toggles loading elements mid-request. --}}
+                <span wire:loading wire:target="rsvp" aria-busy="true" style="display: none">Saving…</span>
             </button>
 
         @elseif ($waitlisted)
@@ -92,7 +94,8 @@
                                disabled:opacity-100
                                transition-colors duration-fast ease-out-quick self-start">
                     <span wire:loading.remove wire:target="rsvp">A seat opened up — I'm in</span>
-                    <span wire:loading wire:target="rsvp" aria-busy="true">Saving…</span>
+                    {{-- Hidden up front like the main CTA below (TOG-6351). --}}
+                    <span wire:loading wire:target="rsvp" aria-busy="true" style="display: none">Saving…</span>
                 </button>
             @endif
 
