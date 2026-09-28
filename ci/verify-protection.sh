@@ -103,7 +103,7 @@ not_a_rule() {
 
   case "$msg" in
     'Branch not protected'*)
-      printf '\033[31mFAIL: `%s` is not protected. There is no rule, so every job in ci.yml is advisory: a pull request with all six checks red has a green merge button, and the six-box gate holds only while people choose to look.\033[0m\n' \
+      printf '\033[31mFAIL: `%s` is not protected. There is no rule, so every job in ci.yml is advisory: a pull request with every check red has a green merge button, and the six-box gate holds only while people choose to look.\033[0m\n' \
         "$BASE_BRANCH" >&2
       exit 1 ;;
     'Upgrade to GitHub'*)
@@ -177,7 +177,7 @@ jq -e 'type == "object" and (
 
 # 1. Required status checks exist at all. Without this block every job in the
 #    pipeline is advisory: they all run, they all report, and a pull request with
-#    six red checks has a green merge button.
+#    every red check has a green merge button.
 if ! jq -e '.required_status_checks' >/dev/null 2>&1 <<< "$json"; then
   fail "no required status checks on \`${BASE_BRANCH}\`. Every job in ci.yml is advisory — a pull request with every check red still merges."
   contexts=""

@@ -6,7 +6,7 @@
 
 ## What runs on every pull request
 
-`.github/workflows/ci.yml`. Four jobs in parallel, plus a gate.
+`.github/workflows/ci.yml`. Five jobs in parallel, plus a gate.
 
 | Job | What it does | Fails when |
 |---|---|---|
@@ -14,9 +14,10 @@
 | `pest` | Pest unit + feature, real Postgres 17 | any test fails |
 | `dusk` | Laravel Dusk, real Chrome, real server | any journey fails |
 | `budgets` | Lighthouse mobile + axe-core at 360px and 1280px | LCP ≥ 2.0s, CLS ≥ 0.1, server response ≥ 600ms, or any WCAG 2.2 AA violation |
-| `tests` | aggregates the four | any of them is not green, including *skipped* |
+| `deps-audit` | `composer audit` + `npm audit` on the lockfiles | a high/critical advisory, or an advisory with no severity |
+| `tests` | aggregates the five | any of them is not green, including *skipped* |
 
-All five are required checks on `main`, plus `gitleaks` from `secret-scan.yml`.
+Seven required checks on `main`: the five ci.yml leaves, the `tests` aggregate, plus `gitleaks` from `secret-scan.yml`.
 
 `static` is deliberately first to finish — it catches the ordinary mistakes in under
 a minute so you are not waiting on Dusk to be told about an unused import.
@@ -103,17 +104,18 @@ with no GitHub. Run it after any edit to `ci.yml` or to the protection rules.
 
 ### Required checks on `main`
 
-Six, applied by the setup script (TWO-36). This is the list, and it is the same
+Seven, applied by the setup script (TWO-36). This is the list, and it is the same
 list in `ci/verify-pipeline.sh` — `--lint` fails if the two disagree:
 
 - `static` — Pint, PHPStan, and the gate's own wiring
 - `pest` — unit + feature
 - `dusk` — the browser journeys
 - `budgets` — Lighthouse and WCAG 2.2 AA
-- `tests` — the aggregate over the four above
+- `deps-audit` — `composer audit` + `npm audit`, high/critical (TOG-8405)
+- `tests` — the aggregate over the five above
 - `gitleaks` — the secret scan
 
-The four leaves are required *as well as* the aggregate, deliberately: protection
+The five leaves are required *as well as* the aggregate, deliberately: protection
 then does not depend on the aggregate's `if: always()` guard staying correct
 through future edits. The price is that a newly added job is not required until
 someone adds it here — so `--lint` prints a warning for every job that reports on
@@ -641,14 +643,15 @@ Everything above the last two proves the *jobs* go red for the right reasons. Th
 is not the same as proving a red job blocks the merge — see "Reading the rule, not
 the list" above for the fact none of them ever read it.
 
-`--run` is the expensive one, and it got more expensive when the `lcp` case split
-off `slowserver`: **eleven pull requests** now, ten deliberate breakages and one
-clean control, each waiting on a full CI run. They run concurrently, so the cost is
-one CI run's wall clock plus the pushes, not eleven of them. Measured end to end on
+`--run` is the expensive one, and it got more expensive twice: the `lcp` case
+split off `slowserver`, and the `audit` case split off the job list. **Twelve
+pull requests** now, eleven deliberate breakages and one clean control, each
+waiting on a full CI run. They run concurrently, so the cost is
+one CI run's wall clock plus the pushes, not twelve of them. Measured end to end on
 2026-08-25 against `72f3dea`: **under five minutes**, of which the clean control's
 own six checks were 2m34s. "Budget most of an hour", which this used to say, was a
 guess written before anyone had sat through one — and it was the reason to put the
-run off. Do not put it off; sit with it. One of the eleven also pushes a 1.6 MB image on
+run off. Do not put it off; sit with it. One of the twelve also pushes a 1.6 MB image on
 purpose — the `lcp` breakage below — and since TWO-109 `--cleanup` deletes the
 `ci-verify/*` refs as well as closing the pull requests, so that blob does not
 outlive the run.
@@ -715,6 +718,7 @@ caught a real LCP breach, and only one of those means the gate works.
 | An image with no alt text | `budgets` |
 | Three seconds of server think-time before paint | `budgets` (via `server-response-time`) |
 | A 1.6 MB uncompressed hero image above the fold | `budgets` (via `largest-contentful-paint`) |
+| A dependency with a known-high advisory in the lockfile | `deps-audit` |
 | A budget threshold relaxed, downgraded to a warning, deleted, shadowed by a second entry, or its aggregation swapped | `static` |
 | Deleting the aggregate's `if: always()` | `static` — see below |
 | A credential committed to a tracked file | `gitleaks` — see below |
@@ -724,7 +728,7 @@ The Dusk case is hidden with CSS rather than deleted on purpose: the HTML still
 contains the text, so the feature test passes and only the real browser notices.
 A breakage that trips `pest` too would prove nothing about the browser job.
 
-Seven of the nine cases also assert that the aggregate `tests` check went red, not
+Eight of the ten cases also assert that the aggregate `tests` check went red, not
 merely the named job. A job failing while the required check stays green is the one
 failure mode that lets a broken PR merge while looking perfectly healthy.
 
@@ -1013,7 +1017,7 @@ dispatch-only* above) — the reviewer approves only a signed-off SHA — and th
 person triggering the deploy refusing to trigger it unsigned is the other half.
 Note the commit SHA you signed off, and deploy that SHA.
 
-- [ ] `main` is green — all of `static`, `pest`, `dusk`, `budgets`, and the `tests` aggregate
+- [ ] `main` is green — all of `static`, `pest`, `dusk`, `budgets`, `deps-audit`, and the `tests` aggregate
 - [ ] All six Dusk journeys present and passing, including the degraded path
 - [ ] Flake rate for the week is zero, or every open flake has an issue and a decision
 - [ ] Staging deployed from this exact commit, and smoke-tested by hand
