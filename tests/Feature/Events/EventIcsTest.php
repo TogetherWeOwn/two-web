@@ -116,6 +116,17 @@ it('escapes commas, semicolons and newlines in text fields', function () {
         ->and(icsLine($lines, 'DESCRIPTION:'))->toBe('DESCRIPTION:Line one\nLine two');
 });
 
+it('includes a VALARM reminding 30 minutes before the event', function () {
+    $event = Event::factory()->create(['status' => EventStatus::Published]);
+
+    $lines = icsLines($this->get(route('events.ics', $event))->assertOk()->getContent());
+
+    expect($lines)->toContain('BEGIN:VALARM')
+        ->and(icsLine($lines, 'TRIGGER:'))->toBe('TRIGGER:-PT30M')
+        ->and(icsLine($lines, 'ACTION:'))->toBe('ACTION:DISPLAY')
+        ->and($lines)->toContain('END:VALARM');
+});
+
 it('builds the download from the same model without an HTTP round trip', function () {
     $event = Event::factory()->create(['status' => EventStatus::Published]);
 

@@ -128,6 +128,47 @@ it('joins the avatar retina srcset with & when the URL already has a query strin
     expect($tag)->toContain('srcset="https://example.org/a.png?v=1&amp;size=256 2x"');
 });
 
+it('falls back to initials when the Discord CDN avatar fails to load', function () {
+    [$viewer, $member] = imageOptimizationProfile('https://cdn.discordapp.com/avatars/123/abc.jpg');
+
+    $html = $this->actingAs($viewer)->get(route('profiles.show', $member))->assertOk()->getContent();
+
+    $tag = imageTagFor($html, 'https://cdn.discordapp.com/avatars/123/abc.jpg');
+
+    // TOG-6925: a blocked/failed Discord CDN must never leave a broken-image
+    // icon. The img hides itself and reveals the initials fallback below it
+    // (the sibling the handler unhides), so the header still reads as an
+    // avatar. The null-guard stops a re-entrant error loop.
+    expect($tag)->toContain('data-testid="profile-avatar-img"')
+        ->toContain('onerror="this.onerror=null;this.hidden=true;this.nextElementSibling.hidden=false"')
+        ->toContain('alt=""');
+
+    expect($html)->toContain('data-testid="profile-avatar-fallback"')
+        ->toContain('RI');
+});
+
+it('shows the initials fallback with no img when the member has no avatar', function () {
+    $viewer = User::factory()->create();
+    $member = User::factory()->create([
+        'display_name' => 'Wren',
+        'avatar' => null,
+    ]);
+    Profile::factory()->for($member)->create(['bio' => 'Usually in co-op after work.']);
+
+    $source = Mockery::mock(MemberStatsSource::class);
+    $source->shouldReceive('forMember')
+        ->once()
+        ->with($member->discord_id)
+        ->andReturn(imageOptimizationStats($member->discord_id));
+    app()->instance(MemberStatsSource::class, $source);
+
+    $html = $this->actingAs($viewer)->get(route('profiles.show', $member))->assertOk()->getContent();
+
+    expect($html)->not->toContain('data-testid="profile-avatar-img"')
+        ->toContain('data-testid="profile-avatar-fallback"')
+        ->toContain('WR');
+});
+
 it('renders the admin featured preview with lazy loading and async decoding', function () {
     $moderator = User::factory()->create(['is_moderator' => true]);
     $row = FeaturedContent::factory()->create([

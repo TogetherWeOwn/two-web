@@ -14,19 +14,22 @@
             </p>
         </div>
 
-        {{-- A radio group, not two buttons: it is one choice with two options, and
-             that is what a screen reader should hear. The archive link sits
-             beside it, not inside it — history is a destination, not a third
-             view, and a link that acted as a radio option would lie about
-             what it does. --}}
+        {{-- A group of toggle buttons, not a radiogroup: one choice with two
+             options, each staying in the Tab order with Space/Enter to switch.
+             TOG-6958: the markup previously claimed role="radiogroup"/"radio",
+             which promises ArrowLeft/ArrowRight handling and roving tabindex
+             the buttons never implemented — a screen reader told "radio group"
+             expects arrows to work. A group with aria-pressed makes no such
+             promise and needs no JS to keep. The archive link sits beside it,
+             not inside it — history is a destination, not a third view, and a
+             link that acted as a toggle option would lie about what it does. --}}
         <div class="flex items-center gap-3 self-start">
             <div class="flex items-center gap-1 rounded-md border border-line bg-surface p-1"
-                 role="radiogroup" aria-label="How to show the events">
+                 role="group" aria-label="How to show the events">
                 @foreach (['list' => 'List', 'calendar' => 'Calendar'] as $key => $label)
                     <button type="button"
                             wire:click="setView('{{ $key }}')"
-                            role="radio"
-                            aria-checked="{{ $view === $key ? 'true' : 'false' }}"
+                            aria-pressed="{{ $view === $key ? 'true' : 'false' }}"
                             data-testid="events-view-{{ $key }}"
                             @class([
                                 'min-h-11 px-4 rounded-md text-sm font-medium transition-colors duration-fast ease-out-quick',
@@ -46,6 +49,17 @@
             </a>
         </div>
     </header>
+
+    {{-- TOG-7332: the list <-> calendar swap re-renders the content below
+         without reloading. The radio group already names the checked option;
+         this names the content change, politely. --}}
+    <p class="sr-only" role="status" data-testid="events-view-status">
+        @if ($view === 'list')
+            Showing events as a list.
+        @else
+            Showing events as a calendar.
+        @endif
+    </p>
 
     {{-- Search. Server-side: the query narrows the same rows the list and the
          grid render, and `?q=` stays in the URL so a search is a link a member
@@ -185,6 +199,13 @@
                 @endforeach
             </ul>
         @endif
+
+        {{-- TOG-7332: the "See past events" drawer reveals the list below
+             without reloading. role="status" announces the reveal politely;
+             empty until asked so initial load stays silent. $showingPast, not
+             $showPast: a search also reveals past matches, and that change is
+             already named by the search status above. --}}
+        <p class="sr-only" role="status" data-testid="events-past-status">@if ($showingPast && $past->isNotEmpty())Showing past events.@endif</p>
 
     {{-- ------------------------------------------------------------------
          Calendar view. A real table, because a month grid is tabular data and
