@@ -46,7 +46,7 @@ Optional:
 | `fields` | object | Required on `create` and `update`. See field rules below. |
 | `version` | integer | Required on `update`: the `agent_version` from your last `read`. Missing/non-integer → `422 validation_failed`. |
 
-Every response — success or denial — carries a `request_id`. Quote it when asking for help.
+Every response — success or denial — carries a `request_id`, except `409 stale_version`, `409 event_not_open`, and `429 rate_limited`, which carry none. Quote it when asking for help.
 
 ## Field rules (`fields` on create/update)
 
@@ -71,7 +71,7 @@ Field failures answer `422 validation_failed` with per-field `errors`.
 
 ### `create` — claim your one proof event
 
-Quota: one event per grant. A second `create` is `409 quota_exceeded` with the
+Quota: one event per grant. A second `create` is `409 quota_exceeded`, usually naming the
 existing `event_key`; updates reuse it.
 
 Request:
