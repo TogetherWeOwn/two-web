@@ -10,6 +10,9 @@ return [
     'unavailable_title' => 'We will be right back',
     'unavailable_body' => 'The site is down for a minute of maintenance. The Discord server never closes — come in through the invite and we will see you there.',
     'unavailable_invite' => 'Use the Discord invite instead',
+    'too_many_title' => 'Slow down a little',
+    'too_many_body' => 'You have made a lot of requests in a short time. Wait a moment and try again — the lobby is not going anywhere.',
+    'too_many_join' => 'Join with Discord',
     'retry' => 'Try again',
     'home' => 'Back to the homepage',
 ];
