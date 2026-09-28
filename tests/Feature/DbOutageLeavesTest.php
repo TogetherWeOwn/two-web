@@ -12,13 +12,12 @@ use Illuminate\Support\Facades\DB;
  * so a middleware-stack regression that reintroduces a database read fails here.
  *
  * Scope note: this covers the *bot* connection only. The app's own `pgsql`
- * going down still 500s `/rules` because it lives in the `web` group and
- * `StartSession` opens pgsql before the route runs (SESSION_DRIVER=database
- * everywhere we ship) — tracked as the sibling bug card off TOG-6779, not
- * pinned here. `/about` used to fail the same way and now survives via
- * routes/funnel.php (TOG-6853, pinned in tests/Feature/AboutPageTest.php);
- * only the session-free `/discord` and `/about` survive an app-DB outage.
- * This file must stay green.
+ * outage is pinned per-leaf where the leaf lives: `/about` survives via
+ * routes/funnel.php (TOG-6853, pinned in tests/Feature/AboutPageTest.php)
+ * and `/rules` survives the same way (TOG-6854, pinned in
+ * tests/Feature/RulesPageTest.php) — both are session-free funnel routes, so
+ * `StartSession` never opens pgsql before the view runs. Only `/discord`,
+ * `/about` and `/rules` survive an app-DB outage. This file must stay green.
  */
 
 /** Point the `bot` connection at something that cannot answer. */
