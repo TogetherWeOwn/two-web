@@ -206,3 +206,28 @@ controls) → `SESSION_DOMAIN=null` → `TWO_WEB_STAGING_QA_AUTH_TOKEN` staging-
 `TWO_INTERNAL_KEYS` → set `BOT_KEY_ID` + `BOT_SHARED_SECRET` here → verify a
 bot action → retire the old pair. `unauthorized` after a change means either
 the id or the secret is wrong — check both, the error will not say which.
+
+## 14. Staging-to-prod parity (`bin/env-parity.sh`)
+
+`bin/env-parity.sh STAGING_ENV PROD_ENV` diffs the **key names** present in
+two dotenv-format snapshots against the required set (`.env.example` plus the
+documented-but-not-in-example keys from §§ 1–13). It prints key names and
+categories only — **never values**. A snapshot full of live secrets produces
+the same output as one full of placeholders, because values are dropped in
+the extraction pipeline before they touch a variable. Values are also never
+compared: `APP_KEY`, `DB_PASSWORD`, `APP_URL` and friends are *expected* to
+differ per environment, so comparing them would cry wolf on every run.
+
+Snapshots are files you create outside the repo from the Coolify dashboard
+(or env export) and never commit. Exit `0` = parity, `1` = drift (see below),
+`2` = called wrongly. `bin/env-parity.sh --selftest` exercises the contract
+offline, including a check that fixture secret values never reach the output.
+
+Drift categories and what to do about each:
+
+| Report line | Meaning | Fix |
+| --- | --- | --- |
+| `MISSING staging/prod: KEY` | Required key absent on that side | Add it via secret controls (secret) or env config (non-secret). If the key is genuinely not needed there, the decision belongs in `.env.example` / this doc, not in a quieter env — update the source of truth, don't silence the check. |
+| `PROD-HAS-STAGING-ONLY TWO_WEB_STAGING_QA_AUTH_TOKEN` | The staging QA seam exists in prod | Remove it from prod, then **rotate** it: it existed where it must not (§10). |
+| `FORBIDDEN …: DUSK_TEST_SEAMS` / `DUSK_DISCORD_PROVIDER_URL` | A test seam left the test suite | Unset it immediately on that environment; `true` outside tests lets anyone sign in as anyone (§12). |
+| `UNKNOWN …: KEY` | In an env but in neither `.env.example` nor this doc | Either document it here (with required/secret/staging-vs-prod columns) and add it to the example if it belongs there, or remove it from the env. Unknown keys are how quiet `.env` changes become launch-day surprises. |

@@ -71,8 +71,18 @@
     @vite([...$styleBundles, 'resources/js/app.js'])
 </head>
 <body class="{{ $bodyScheme }}h-full">
+    {{-- TOG-6932: the old `sr-only focus:not-sr-only` revealed the link as bare
+         text on the page ground — a 1.4:1 smear on ledger paper. The pill the
+         revealed state needs (opaque fill, padding, focus outline) lives in
+         resources/css/app.css as `a[href='#main']:focus-visible`, so the class
+         list here stays structural: hidden until focused, then handed to CSS. --}}
     <a href="#main" class="sr-only focus:not-sr-only">Skip to content</a>
-    <main id="main">
+    {{-- `tabindex="-1"`: the skip-link target must take programmatic focus in
+         Chrome/Safari, where a plain anchor jump scrolls but leaves focus on
+         `body` — a keyboard user who skips then tabs starts over at the top.
+         `-1` keeps it out of the tab order while making it a focus target;
+         the :focus-visible ring still marks it when the skip link lands. --}}
+    <main id="main" tabindex="-1">
         {{ $slot }}
     </main>
 

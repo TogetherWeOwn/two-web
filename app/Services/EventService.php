@@ -49,10 +49,21 @@ class EventService
     public function update(Event $event, EventInput $input): Event
     {
         return DB::transaction(function () use ($event, $input): Event {
-            $this->fill($event, $input);
-            $event->save();
+            // Locked like every other seat-changing write: a capacity increase
+            // frees seats, and the freed seats are dealt to the waitlist below.
+            // A concurrent rsvp(Going) slipping between the save and the deal
+            // would take the new seat ahead of the line — the same race the
+            // capacity check in rsvp() locks against.
+            $locked = Event::query()->whereKey($event->getKey())->lockForUpdate()->firstOrFail();
 
-            $this->syncAfterCommit($event);
+            $this->fill($locked, $input);
+            $locked->save();
+
+            $this->promoteWaitlist($locked);
+
+            $this->syncAfterCommit($locked);
+
+            $event->setRawAttributes($locked->getAttributes(), true);
 
             return $event;
         });
@@ -111,6 +122,10 @@ class EventService
             $this->fill($locked, $input);
             $locked->agent_version = $expectedVersion + 1;
             $locked->save();
+
+            // A raised cap frees seats whoever raised it. Same lock, same
+            // transaction, same first-come-first-served deal as the human path.
+            $this->promoteWaitlist($locked);
 
             $this->syncAfterCommit($locked);
 
@@ -191,6 +206,16 @@ class EventService
         });
     }
 
+    /**
+     * Record that a member no longer holds (or lines up for) a seat, and deal
+     * the freed seat to the line.
+     *
+     * The delete and the promotion share the event row lock and the
+     * transaction: a concurrent rsvp(Going) that reads "full" must block until
+     * this commits, by which time the waitlist head already holds the seat and
+     * the newcomer's count is right. A promotion outside this frame would let
+     * that newcomer take the seat ahead of the member who has been waiting.
+     */
     public function withdrawRsvp(Event $event, User $user): void
     {
         DB::transaction(function () use ($event, $user): void {
@@ -202,9 +227,54 @@ class EventService
                 ->delete();
 
             if ($deleted > 0) {
+                $this->promoteWaitlist($locked);
                 $this->syncAfterCommit($locked);
             }
         });
+    }
+
+    /**
+     * Deal freed seats to the head of the waitlist, earliest answer first.
+     *
+     * Runs inside the caller's transaction behind the caller's event row lock —
+     * it takes no lock of its own. Each promotion flips one waitlisted row to
+     * Going and resets its Discord mirror stamp, exactly as if the member had
+     * claimed the seat themselves: the seat is now spoken for on both sides,
+     * so the mirror is stale. Only open events promote: an ended or cancelled
+     * event has no seats to deal, and leaving the line untouched there keeps
+     * the withdraw a plain delete. The line order is the same (created_at, id)
+     * pair `waitlistPositionFor()` numbers places by, so the member shown #1
+     * is the one who gets the seat.
+     */
+    private function promoteWaitlist(Event $locked): void
+    {
+        if ($locked->status !== EventStatus::Published || $locked->hasEnded()) {
+            return;
+        }
+
+        if ($locked->capacity === null) {
+            $free = PHP_INT_MAX;
+        } else {
+            $free = $locked->capacity - $locked->goingCount();
+
+            if ($free <= 0) {
+                return;
+            }
+        }
+
+        $heads = Rsvp::query()
+            ->where('event_id', $locked->getKey())
+            ->where('status', RsvpStatus::Waitlisted)
+            ->orderBy('created_at')
+            ->orderBy('id')
+            ->limit($free)
+            ->get();
+
+        foreach ($heads as $rsvp) {
+            $rsvp->status = RsvpStatus::Going;
+            $rsvp->synced_to_discord_at = null;
+            $rsvp->save();
+        }
     }
 
     private function transitionTo(Event $event, EventStatus $to): Event

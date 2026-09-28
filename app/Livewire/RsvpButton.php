@@ -58,6 +58,18 @@ class RsvpButton extends Component
     public bool $full = false;
 
     /**
+     * Set when the shared RSVP write budget ran out. The member waits, then
+     * retries — the button stays enabled and the wait is announced politely.
+     */
+    public bool $rateLimited = false;
+
+    /**
+     * Seconds from the limiter's Retry-After, for the announced wait. Null when
+     * the header was missing or unparseable, which selects the fallback copy.
+     */
+    public ?int $retryAfterSeconds = null;
+
+    /**
      * Set when the click arrived with no signed-in member behind it — the page
      * was rendered authenticated and the session died underneath it
      * (SESSION_LIFETIME). Distinct from $failed on purpose: the next action is
@@ -92,6 +104,8 @@ class RsvpButton extends Component
         // a successful RSVP is its own bug.
         $this->failed = false;
         $this->full = false;
+        $this->rateLimited = false;
+        $this->retryAfterSeconds = null;
         $this->sessionExpired = false;
 
         try {
@@ -124,10 +138,11 @@ class RsvpButton extends Component
             // against the fresh row is the honest answer; the reason shows there.
             $this->event = $this->event->fresh() ?? $this->event;
         } catch (ThrottleRequestsException $exception) {
-            // Unlike an internal write failure, this is an intentional HTTP refusal.
-            // Let Livewire return the 429 and its Retry-After rather than rendering a
-            // generic "try once more" message that invites an immediately doomed retry.
-            throw $exception;
+            // TOG-7976: a thrown 429 never re-renders — Livewire's JS only morphs
+            // the DOM on response.ok and shows its failure modal otherwise, so the
+            // member hears nothing. Catch the throttle and render the announced
+            // wait in the normal 200 morph instead, with the button enabled.
+            $this->flagRateLimited($exception);
         } catch (Throwable) {
             // Deliberately not surfaced. Whatever the reason is — the queue, the
             // database, the bot's client — it is ours, and the member's next action
@@ -147,6 +162,8 @@ class RsvpButton extends Component
         }
 
         $this->failed = false;
+        $this->rateLimited = false;
+        $this->retryAfterSeconds = null;
         $this->sessionExpired = false;
 
         try {
@@ -163,10 +180,49 @@ class RsvpButton extends Component
                 viewerState: 'none',
             );
         } catch (ThrottleRequestsException $exception) {
-            throw $exception;
+            // TOG-7976: same announced wait as the join path — copy is neutral
+            // ("Nothing changed") so one node covers both.
+            $this->flagRateLimited($exception);
         } catch (Throwable) {
             $this->failed = true;
         }
+    }
+
+    /**
+     * The announced throttle copy (TOG-7976, CM-frozen in TOG-7928 `copy` doc —
+     * do not reword without CM sign-off). Null unless the last attempt hit the
+     * shared write budget. {N} is the ceiling of Retry-After, min 1, so the
+     * member is never told to wait 0 seconds; an unusable header selects the
+     * "in a moment" fallback instead of a number.
+     */
+    public function rateLimitedMessage(): ?string
+    {
+        if (! $this->rateLimited) {
+            return null;
+        }
+
+        if ($this->retryAfterSeconds === null) {
+            return 'Slow down — try again in a moment. Nothing changed, just wait a bit.';
+        }
+
+        $seconds = $this->retryAfterSeconds === 1 ? '1 second' : "{$this->retryAfterSeconds} seconds";
+
+        return "Slow down — try again in {$seconds}. Nothing changed, just wait a moment.";
+    }
+
+    /**
+     * Record a throttled attempt as renderable state. The Retry-After header is
+     * the limiter's own value (RsvpRateLimit::hit throws with it set); anything
+     * missing, non-numeric or non-positive falls back to the headerless copy.
+     */
+    private function flagRateLimited(ThrottleRequestsException $exception): void
+    {
+        $raw = $exception->getHeaders()['Retry-After'] ?? null;
+
+        $seconds = is_numeric($raw) ? (int) ceil((float) $raw) : null;
+
+        $this->rateLimited = true;
+        $this->retryAfterSeconds = $seconds !== null && $seconds >= 1 ? $seconds : null;
     }
 
     public function render(): View
@@ -188,14 +244,21 @@ class RsvpButton extends Component
             // for one), and they must still be able to stand down or
             // leave the line. Trapping them at the refusal is the bug.
             'atCapacity' => ! $going && ! $waitlisted && $this->isAtCapacity(),
-            // A freed seat while in line: the waitlist does not auto-promote
-            // (that is a race of its own), so the member claims it themselves
-            // through the same locked write as everybody else.
+            // True only in the gap the auto-promote cannot cover: the row this
+            // render read says a seat is free while the member is still in
+            // line — a state that can only exist mid-flight (their promotion
+            // has not rendered yet) or when promotion was never reached. The
+            // write takes the seat through the same locked path as everybody
+            // else, first-come first-served against the line.
             'seatOpenForWaitlist' => $waitlisted && $this->event->status === EventStatus::Published && ! $this->event->hasEnded() && ! $this->isAtCapacity(),
             // One-based place in line, only when it will be shown.
             'waitlistPosition' => $waitlisted ? $this->waitlistPosition() : null,
             // Committed here, not yet in Discord. A true state, not an error.
             'syncing' => $rsvp !== null && $rsvp->synced_to_discord_at === null,
+            // TOG-7976: the announced throttle wait, or null when the last
+            // attempt was not throttled. The blade node stays beside the
+            // control with the button enabled, like rsvp-failed.
+            'rateLimitedMessage' => $this->rateLimitedMessage(),
         ]);
     }
 

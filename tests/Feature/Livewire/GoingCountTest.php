@@ -102,6 +102,28 @@ it('follows a withdraw down as well as an RSVP up', function () {
         ->assertSee('RSVP removed.', false);
 });
 
+it('names the waitlist when the line is joined', function () {
+    // TOG-8708: joining the line takes no seat, so the visible count does not
+    // move — the sr-only prefix is the only announced message, and the test
+    // observes it the way a screen reader would.
+    $component = Livewire::test(GoingCount::class, ['event' => $this->event])
+        ->assertSee('0 of 4 going');
+
+    $component->call('refreshCount', eventKey: $this->event->event_key, viewerState: 'waitlisted')
+        ->assertSee('0 of 4 going')
+        ->assertSee("You're on the waitlist.");
+});
+
+it('stays quiet on an unknown viewer state, so only named writes announce', function () {
+    // TOG-8708: no announcement spam. A refresh carrying a state the badge has
+    // no words for re-reads the count and announces nothing.
+    $html = Livewire::test(GoingCount::class, ['event' => $this->event])
+        ->call('refreshCount', eventKey: $this->event->event_key, viewerState: 'other')
+        ->html();
+
+    expect($html)->not->toContain('sr-only');
+});
+
 it('ignores answers to other events on the same page', function () {
     $other = Event::factory()->create([
         'starts_at' => now()->addDays(4),

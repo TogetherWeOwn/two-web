@@ -5,6 +5,7 @@ use App\Enums\RsvpStatus;
 use App\Models\Event;
 use App\Models\Rsvp;
 use App\Models\User;
+use App\Support\RsvpRateLimit;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Laravel\Dusk\Browser;
@@ -170,6 +171,48 @@ test('a failed RSVP write returns the control and succeeds on retry', function (
         ->where('user_id', $member->id)
         ->where('status', RsvpStatus::Going)
         ->exists())->toBeTrue();
+});
+
+test('a rate-limited RSVP click announces the wait and keeps the control', function () {
+    $member = User::factory()->create();
+    $event = browsableEvent();
+
+    // The limiter is database-backed and shared across processes, so spending
+    // the member's budget here throttles the browser journey too: the click
+    // below is the 13th write. The HTTP 429 envelope is unchanged; the control
+    // must speak instead of failing silently (TOG-7976).
+    for ($attempt = 0; $attempt < RsvpRateLimit::MAX_ATTEMPTS; $attempt++) {
+        RsvpRateLimit::hit($member);
+    }
+
+    $this->browse(function (Browser $browser) use ($member, $event) {
+        $browser->loginAs($member)
+            ->resize(360, 780)
+            ->visit('/events')
+            ->waitUntil('window.Livewire?.initialRenderIsFinished === true')
+            ->waitFor('[data-testid="rsvp-going"]')
+            ->click('[data-testid="rsvp-going"]')
+            // The exact wait depends on wall-clock seconds since the budget was
+            // spent across the process boundary, so pin the stable fragments of
+            // the CM-frozen copy, not the number.
+            ->waitFor('[data-testid="rsvp-rate-limited"]')
+            ->assertSeeIn('[data-testid="rsvp-rate-limited"]', 'Slow down — try again in')
+            ->assertSeeIn('[data-testid="rsvp-rate-limited"]', 'seconds. Nothing changed, just wait a moment.')
+            // Polite announcement for a temporary wait, never an interruption.
+            ->assertAttribute('[data-testid="rsvp-rate-limited"]', 'role', 'status')
+            // The control returns to default and stays usable — never disabled
+            // or replaced, and no failure copy for a wait.
+            ->assertVisible('[data-testid="rsvp-going"]')
+            ->assertButtonEnabled('[data-testid="rsvp-going"]')
+            ->assertMissing('[data-testid="rsvp-confirmed"]')
+            ->assertMissing('[data-testid="rsvp-failed"]');
+
+        // The throttled click changed nothing.
+        expect(Rsvp::query()
+            ->where('event_id', $event->id)
+            ->where('user_id', $member->id)
+            ->exists())->toBeFalse();
+    });
 });
 
 test('a member can stand down again', function () {
