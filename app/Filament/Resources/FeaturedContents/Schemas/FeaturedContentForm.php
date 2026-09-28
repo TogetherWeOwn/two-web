@@ -118,7 +118,7 @@ class FeaturedContentForm
                 $html .= '<p style="margin:0.5rem 0 0;">'.nl2br(e($body)).'</p>';
             }
             if ($imageUrl !== '') {
-                $html .= '<img src="'.e($imageUrl).'" alt="" loading="lazy" style="margin-top:0.75rem;max-width:100%;">';
+                $html .= '<img src="'.e($imageUrl).'" alt="" loading="lazy" decoding="async" style="margin-top:0.75rem;max-width:100%;">';
             }
         }
 

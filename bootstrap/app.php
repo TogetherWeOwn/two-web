@@ -1,5 +1,6 @@
 <?php
 
+use App\Http\Middleware\AddContentSecurityPolicy;
 use App\Http\Middleware\CompressStaticAssets;
 use App\Http\Middleware\RecordMemberDataAccess;
 use Illuminate\Foundation\Application;
@@ -35,6 +36,13 @@ return Application::configure(basePath: dirname(__DIR__))
         // that asked for gzip, and the funnel routes answer with redirects.
         // CompressStaticAssets carries the measurements and the reasoning.
         $middleware->append(CompressStaticAssets::class);
+
+        // The site's CSP (TOG-6770) goes on `web`, not globally: the funnel
+        // routes answer redirects/JSON that carry no body to protect, and the
+        // deliberately empty funnel stack must stay empty so `/discord` keeps
+        // answering during a database outage. Admin has its own middleware
+        // stack (see AdminPanelProvider) and gets the same class there.
+        $middleware->web(append: [AddContentSecurityPolicy::class]);
 
         // `/discord` is the break-glass route during a deploy. The one-click
         // `/join` flow needs a session and the bot, so maintenance mode must not

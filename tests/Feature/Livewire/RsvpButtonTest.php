@@ -216,6 +216,32 @@ it('shows a full event as full before the member ever clicks', function () {
         ->assertDontSeeHtml('data-testid="rsvp-going"');
 });
 
+it('shows the closed copy when the last seat goes while the member is deciding', function () {
+    // The stale-component edge, with no mocks: the button is offered because
+    // there is room at render, the seats fill before the click, and the real
+    // service refuses. The member must see "full", never a retryable failure.
+    $component = Livewire::actingAs($this->member)
+        ->test(RsvpButton::class, ['event' => $this->event])
+        ->assertSeeHtml('data-testid="rsvp-going"');
+
+    $takers = User::factory()->count(4)->create(['is_moderator' => false]);
+    foreach ($takers as $taker) {
+        app(EventService::class)->rsvp($this->event->fresh(), $taker, RsvpStatus::Going);
+    }
+
+    $component->call('rsvp', RsvpStatus::Going->value)
+        ->assertSee("This one's full.", false)
+        ->assertSee('Cap is 4.')
+        // Closed, not failed: nothing here may invite a retry that cannot succeed.
+        ->assertDontSee("That RSVP didn't save.", false)
+        ->assertDontSee('Try once more.', false)
+        ->assertDontSeeHtml('data-testid="rsvp-going"')
+        ->assertDontSeeHtml('data-testid="rsvp-failed"');
+
+    // And nothing was saved for the loser of the race.
+    expect(Rsvp::query()->where('user_id', $this->member->id)->exists())->toBeFalse();
+});
+
 it('still lets somebody already going stand down from a full event', function () {
     $full = Event::factory()->create([
         'starts_at' => now()->addDays(3),
@@ -312,6 +338,37 @@ it('shares the HTTP RSVP allowance and returns Retry-After from a limited Livewi
         ->assertSee("I'm in", false);
 });
 
+it('announces the closed and full states politely, not as alerts', function () {
+    // TOG-7332: a cancellation landing while the member watches, or losing
+    // the last-seat race after clicking, swaps these states in without a
+    // reload — they must announce via role="status", never role="alert".
+    $this->event->update(['status' => EventStatus::Cancelled]);
+
+    $closed = Livewire::actingAs($this->member)
+        ->test(RsvpButton::class, ['event' => $this->event->fresh()])
+        ->html();
+
+    expect($closed)->toContain('role="status"')
+        ->toContain('data-testid="rsvp-closed"')
+        ->not->toContain('role="alert"');
+
+    $full = Event::factory()->create([
+        'starts_at' => now()->addDays(3),
+        'ends_at' => now()->addDays(3)->addHours(2),
+        'status' => EventStatus::Published,
+        'capacity' => 1,
+    ]);
+    Rsvp::factory()->create(['event_id' => $full->id, 'status' => RsvpStatus::Going]);
+
+    $html = Livewire::actingAs($this->member)
+        ->test(RsvpButton::class, ['event' => $full])
+        ->html();
+
+    expect($html)->toContain('role="status"')
+        ->toContain('data-testid="event-full"')
+        ->not->toContain('role="alert"');
+});
+
 /* ---------------------------------------------------------------------------
    Closed events
    --------------------------------------------------------------------------- */
@@ -357,4 +414,53 @@ it('disables the control while the answer is in flight so it cannot be double-se
         ->html();
 
     expect($html)->toContain('wire:loading.attr="disabled"');
+});
+
+/* ---------------------------------------------------------------------------
+   Focus after the re-render (TOG-6956). A successful RSVP or withdraw swaps
+   the focused control for its replacement, which drops keyboard focus to
+   <body>. The component dispatches to itself on success so the view can move
+   focus to the new state; on failure the button stays put, so no dispatch.
+   --------------------------------------------------------------------------- */
+
+it('dispatches a focus event to itself after a successful RSVP', function () {
+    Livewire::actingAs($this->member)
+        ->test(RsvpButton::class, ['event' => $this->event])
+        ->call('rsvp', RsvpStatus::Going->value)
+        ->assertDispatched('rsvp-state-changed');
+});
+
+it('dispatches a focus event to itself after a successful withdraw', function () {
+    Rsvp::factory()->create([
+        'event_id' => $this->event->id,
+        'user_id' => $this->member->id,
+        'status' => RsvpStatus::Going,
+    ]);
+
+    Livewire::actingAs($this->member)
+        ->test(RsvpButton::class, ['event' => $this->event])
+        ->call('withdraw')
+        ->assertDispatched('rsvp-state-changed');
+});
+
+it('does not dispatch the focus event when the write fails', function () {
+    // Failure keeps the button in place, so focus is already where it belongs.
+    $this->mock(EventService::class)
+        ->shouldReceive('rsvp')
+        ->andThrow(new BotTransportException('down'));
+
+    Livewire::actingAs($this->member)
+        ->test(RsvpButton::class, ['event' => $this->event])
+        ->call('rsvp', RsvpStatus::Going->value)
+        ->assertNotDispatched('rsvp-state-changed');
+});
+
+it('makes the confirmation focusable so keyboard focus can move there', function () {
+    // tabindex="-1": out of the tab order, but focus() works after the swap.
+    $html = Livewire::actingAs($this->member)
+        ->test(RsvpButton::class, ['event' => $this->event])
+        ->call('rsvp', RsvpStatus::Going->value)
+        ->html();
+
+    expect($html)->toContain('tabindex="-1"');
 });

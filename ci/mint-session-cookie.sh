@@ -60,7 +60,15 @@ trap 'rm -f "$stderr_file"' EXIT
 # reports "exited 0" for a crash and collides with the empty-output message
 # below — it reproduces the bug this script fixes. Measured, both forms, in
 # ci/mint-session-cookie-selftest.sh.
-if stdout="$(php artisan ci:session-cookie --moderator 2>"$stderr_file")"; then
+#
+# `${CI_PHP_BIN:-php}` and never bare `php`. The runners are persistent and
+# setup-php manages a SHARED /usr/bin/php link that concurrent jobs re-point
+# (TOG-5877) — bare `php` here once executed 8.3.35 after the job had verified
+# 8.4, and Composer's platform gate red the required budgets check for a race,
+# not a regression. The workflow pins the versioned binary into CI_PHP_BIN;
+# the `:-php` fallback keeps the stubbed self-test (which puts a fake `php`
+# first on PATH and never sets CI_PHP_BIN) and any local run working.
+if stdout="$(${CI_PHP_BIN:-php} artisan ci:session-cookie --moderator 2>"$stderr_file")"; then
   rc=0
 else
   rc=$?

@@ -8,6 +8,8 @@ use App\Services\Bot\InternalActionClient;
 use App\Services\Paperclip\RestartCardClient;
 use App\Support\Counts\CountsReader;
 use App\Support\Counts\CountsSource;
+use App\Support\Events\DiscordEventsReader;
+use App\Support\Events\DiscordEventsSource;
 use App\Support\MemberDataAccess\AccessRecorder;
 use App\Support\Profiles\MemberStatsReader;
 use App\Support\Profiles\MemberStatsSource;
@@ -41,6 +43,13 @@ class AppServiceProvider extends ServiceProvider
         // only this non-throwing contract, so an unavailable bot database cannot
         // take the member-owned half of the profile down with it.
         $this->app->bind(MemberStatsSource::class, MemberStatsReader::class);
+
+        // The calendar's Discord-native rows (TOG-5168): one cached read of
+        // `web_v1.upcoming_events`, merged into the local rows by the
+        // component. Bound, not shared, for the same reason as the counts
+        // reader — the cache inside already deduplicates, and a singleton
+        // would only keep a stale bot connection alive on a worker.
+        $this->app->bind(DiscordEventsSource::class, DiscordEventsReader::class);
 
         // Bound rather than shared: it reads config at resolve time and holds no
         // state between calls, so a singleton would only buy the chance of a
@@ -136,7 +145,7 @@ class AppServiceProvider extends ServiceProvider
         // Discord roles on every login — see DiscordLoginController — so removing
         // somebody's moderator role in Discord removes it here at their next
         // sign-in. There is no way to grant it from inside the website.
-        Gate::define('access-admin', fn (User $user): bool => $user->is_moderator);
+        Gate::define('access-admin', fn (User $user): bool => $user->is_moderator === true);
 
         // Reading member data through the admin panel gets recorded, and the
         // recording hangs off model hydration rather than off each screen

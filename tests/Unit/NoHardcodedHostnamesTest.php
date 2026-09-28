@@ -14,7 +14,10 @@ $domains = ['togetherweown.com', 'togetherweown.net', 'two.gg'];
 // with — not to make a red build go green.
 $allowed = [];
 
-$scan = ['app', 'config', 'routes', 'resources/views'];
+// `public` is scanned too: a static public/robots.txt with a hardcoded Sitemap
+// host once shadowed the dynamic route on staging (TOG-7071), because nginx
+// try_files serves a static file before Laravel ever sees the request.
+$scan = ['app', 'config', 'routes', 'resources/views', 'public'];
 
 it('keeps every hostname out of the code and in the config', function () use ($domains, $allowed, $scan) {
     $offenders = [];
@@ -30,6 +33,12 @@ it('keeps every hostname out of the code and in the config', function () use ($d
 
         foreach ($files as $file) {
             if (! $file->isFile()) {
+                continue;
+            }
+
+            // Binary assets (fonts, images) carry no hostnames worth gating;
+            // scanning them only risks garbage diffs on failure output.
+            if (in_array(strtolower($file->getExtension()), ['ico', 'woff', 'woff2', 'ttf', 'otf', 'eot', 'png', 'jpg', 'jpeg', 'gif', 'webp', 'avif', 'mp4', 'pdf', 'zip'], true)) {
                 continue;
             }
 

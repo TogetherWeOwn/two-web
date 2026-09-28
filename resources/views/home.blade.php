@@ -10,7 +10,7 @@
     ruled sections rather than fabricated community imagery. Featured content is
     the honest artifact path when moderators have a sourced item to publish.
 --}}
-<x-layouts.app title="Together We Own — the lobby is open" scheme="ledger">
+<x-layouts.app title="Together We Own — the lobby is open" scheme="ledger" :canonical="route('home')" :shareDescription="$content['hero']['lead']">
     <div class="min-h-full bg-ledger-paper text-ledger-ink">
         <div class="h-2 bg-brand" aria-hidden="true"></div>
 
@@ -82,7 +82,11 @@
                                         <p class="mt-3 max-w-2xl text-lg leading-relaxed">{{ $item->body }}</p>
                                     @endif
                                     @if ($item->image_url)
-                                        <img src="{{ $item->image_url }}" alt="" loading="lazy" decoding="async" class="mt-5 w-full border border-ledger-rule">
+                                        {{-- Moderator URLs have no known dimensions, so `aspect-video`
+                                             reserves the box (no CLS) the same way the taste concept
+                                             does; `object-cover` keeps the crop honest. Lazy: this
+                                             sits beside/below the hero, not in the LCP path. --}}
+                                        <img src="{{ $item->image_url }}" alt="" loading="lazy" decoding="async" class="mt-5 aspect-video w-full border border-ledger-rule object-cover">
                                     @endif
                                 </article>
                             @endforeach
@@ -161,6 +165,50 @@
                         </li>
                     @endforeach
                 </ol>
+            </section>
+
+            {{--
+                Next up (TOG-6927). The teaser, not the calendar: the next three
+                published events as signposts, or a designed empty state when
+                there is nothing upcoming. Server-rendered Blade, never Livewire
+                — CriticalPathTest pins this page as Livewire-free. The CTA
+                routes through /join (one-click OAuth + invite fallback), never
+                the raw /discord invite — TOG-5931.
+            --}}
+            <section aria-labelledby="events-heading" class="border-b-2 border-ledger-ink py-12">
+                <p class="text-xs font-bold uppercase tracking-widest">Next up</p>
+                <h2 id="events-heading" class="u-ledger-display mt-7 text-4xl leading-tight md:text-5xl">Game nights, when they land.</h2>
+
+                @if ($upcomingEvents->isNotEmpty())
+                    <ul class="mt-9 grid gap-px border-2 border-ledger-ink bg-ledger-rule md:grid-cols-3" data-testid="home-events-list">
+                        @foreach ($upcomingEvents as $event)
+                            <li class="bg-ledger-paper p-6">
+                                <a href="{{ route('events.page', $event) }}" class="group block">
+                                    <p class="u-numeric text-sm font-bold uppercase tracking-widest text-ledger-muted">
+                                        <time datetime="{{ $event->starts_at->toIso8601String() }}">{{ $event->startsAtLocal()->format('D j M, H:i') }}</time>
+                                    </p>
+                                    <p class="u-ledger-display mt-3 text-2xl leading-tight group-hover:text-brand group-hover:underline group-hover:decoration-2 group-hover:underline-offset-4">{{ $event->title }}</p>
+                                    @if ($event->location)
+                                        <p class="mt-2 text-ledger-muted">{{ $event->location }}</p>
+                                    @endif
+                                </a>
+                            </li>
+                        @endforeach
+                    </ul>
+                    <p class="mt-6">
+                        <a href="{{ route('events.index') }}" class="font-semibold underline underline-offset-4 hover:text-brand">See all events <span aria-hidden="true">→</span></a>
+                    </p>
+                @else
+                    <div class="mt-9 border-2 border-ledger-ink bg-ledger-artifact p-6 md:p-9" data-testid="home-events-empty">
+                        <p class="u-ledger-display max-w-2xl text-3xl leading-tight md:text-4xl">Nothing scheduled yet.</p>
+                        <p class="mt-3 max-w-xl text-lg leading-relaxed">Game nights get posted here first. Join the Discord and you&rsquo;ll hear about them before they land on this page.</p>
+                        <a href="{{ route('join') }}"
+                           data-testid="home-events-join"
+                           class="mt-6 inline-flex min-h-11 items-center justify-center bg-ledger-ink px-6 font-bold uppercase tracking-wide text-ledger-paper hover:bg-brand active:bg-brand-active">
+                            Join the Discord <span aria-hidden="true">→</span>
+                        </a>
+                    </div>
+                @endif
             </section>
 
             <section id="invitation" aria-labelledby="invitation-heading" class="mt-12 grid gap-8 bg-ledger-ink p-7 text-ledger-paper md:grid-cols-12 md:items-end md:p-10">

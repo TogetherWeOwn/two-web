@@ -21,17 +21,21 @@
 
     @auth
         @if (! $open)
-            {{-- Cancelled or over. Says which, in words. --}}
+            {{-- Cancelled or over. Says which, in words. role="status": a
+                 cancellation that lands while the member is looking re-renders
+                 here, and that change has to be announced (TOG-7332). --}}
             <p class="inline-flex items-center gap-1.5 rounded-sm px-2 py-0.5 text-xs font-medium
                       bg-raised text-ink-muted border border-line self-start"
-               data-testid="rsvp-closed">
+               role="status" data-testid="rsvp-closed">
                 {{ $this->event->status === \App\Enums\EventStatus::Cancelled ? 'Cancelled' : ($this->event->status === \App\Enums\EventStatus::Draft ? 'Not published yet' : 'This one has been and gone') }}
             </p>
 
         @elseif ($full || $atCapacity)
             {{-- Colour is not carrying this: there is an icon and there are words,
-                 and the cap is named so the number is not a mystery. --}}
-            <p class="flex items-start gap-1.5 text-sm text-alert" data-testid="event-full">
+                 and the cap is named so the number is not a mystery.
+                 role="status": the race loser lands here after clicking, so the
+                 swap has to be announced politely, not as an alert (TOG-7332). --}}
+            <p class="flex items-start gap-1.5 text-sm text-alert" role="status" data-testid="event-full">
                 <svg class="size-4 shrink-0 mt-0.5" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
                     <path d="M8 1.5 15 14H1L8 1.5Zm0 4a.75.75 0 0 0-.75.75v3a.75.75 0 0 0 1.5 0v-3A.75.75 0 0 0 8 5.5Zm0 6.75a.9.9 0 1 0 0-1.8.9.9 0 0 0 0 1.8Z"/>
                 </svg>
@@ -44,7 +48,11 @@
             </p>
 
         @elseif ($going)
-            <p class="flex items-center gap-1.5 text-sm text-ink" role="status" data-testid="rsvp-confirmed">
+            {{-- tabindex="-1": not in the tab order, but focusable so a successful
+                 RSVP can move keyboard focus here after the re-render replaces
+                 the button (TOG-6956). Focusing the role="status" node also
+                 announces the confirmation to screen readers. --}}
+            <p class="flex items-center gap-1.5 text-sm text-ink" role="status" tabindex="-1" data-testid="rsvp-confirmed">
                 {{-- The check, so the confirmation is not colour alone (COPY.md). --}}
                 <svg class="size-4 shrink-0 text-online" viewBox="0 0 16 16" fill="currentColor"
                      aria-hidden="true" data-testid="rsvp-check">
@@ -120,4 +128,29 @@
             </p>
         @endif
     @endauth
+
+    @script
+        {{-- TOG-6956: after a successful RSVP/withdraw the re-render swaps the
+             focused control for its replacement, dropping focus to <body>.
+             The component dispatches `rsvp-state-changed` to itself only on a
+             successful write, which fires after the morph, so the new state is
+             already in the DOM: focus the confirmation, falling back to the
+             restored "I'm in" button after a withdraw. `$wire.on` runs once
+             per component lifecycle, never on re-render, so this cannot stack. --}}
+        <script>
+            $wire.on('rsvp-state-changed', () => {
+                const root = $wire.el;
+                const confirmed = root.querySelector('[data-testid="rsvp-confirmed"]');
+                if (confirmed) {
+                    confirmed.focus({ preventScroll: true });
+                    return;
+                }
+
+                const going = root.querySelector('[data-testid="rsvp-going"]');
+                if (going) {
+                    going.focus({ preventScroll: true });
+                }
+            });
+        </script>
+    @endscript
 </div>
