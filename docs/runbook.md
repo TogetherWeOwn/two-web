@@ -299,16 +299,23 @@ and lets cron mail be the pager.
 as the nightly backup cron above). The poller is `bin/uptime-ping.sh` — one
 `curl` against `/up`, exit 0 on `200 {"status":"ok",...}`, exit 1 on
 anything else (503 with the db/pending signal, timeout, refused connection,
-Access challenge). Cron mails stdout only on a nonzero exit, so **silence is
-UP and every mail is a page**.
+Access challenge). The UP path prints nothing — stock cron mails on *any*
+job output regardless of exit code, so a chatty UP would page the on-call
+every 5 minutes forever. **No mail is UP, and a `DOWN` mail is a page**
+(`--verbose` restores the UP one-liner for hand runs).
 
 **Cadence:** every 5 minutes, production and staging:
 
 ```cron
 MAILTO=devops@example.com
+STAGING_URL=https://staging.example.com
 */5 * * * * /var/www/two-web/bin/uptime-ping.sh https://togetherweown.com
 */5 * * * * /var/www/two-web/bin/uptime-ping.sh "$STAGING_URL"
 ```
+
+(The staging host is a placeholder — put the real one in the crontab on the
+box, never in the repo; `"$STAGING_URL"` needs the assignment above it to
+expand.)
 
 (Use the real on-call address for `MAILTO`, set in the cron environment on
 the box — never in the repo. Staging sits behind Cloudflare Access, so its
