@@ -750,9 +750,11 @@ it('announces month steps through a polite month status', function () {
     $component->call('nextMonth');
     expect($status($component))->toBe($label($component));
 
-    // The list view has no month to announce.
+    // The list view has no month to announce. The empty `@if` still
+    // serializes Livewire's block-comment markers, so those are allowed
+    // between the tags — same brittleness as the extractor above.
     expect(Livewire::test(EventsCalendar::class)->html())
-        ->toMatch('/data-testid="calendar-month-status"[^>]*>\s*<\/p>/s');
+        ->toMatch('/data-testid="calendar-month-status"[^>]*>(?:\s|<!--.*?-->)*<\/p>/s');
 });
 
 it('keeps the live regions outside the wrapper hidden mid-request', function () {
