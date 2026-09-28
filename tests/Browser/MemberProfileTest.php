@@ -38,6 +38,24 @@ it('lets a member edit their sparse profile with the keyboard-visible form', fun
         ->timezone->toBe('Europe/London');
 });
 
+it('moves focus into the form on open and back to Edit profile on cancel (TOG-5634)', function () {
+    $member = User::factory()->create();
+
+    $this->browse(function (Browser $browser) use ($member) {
+        $browser->loginAs($member)
+            ->visit('/profile')
+            ->press('Add profile details')
+            ->waitFor('[data-testid="profile-edit-form"]')
+            // The trigger unmounts when the form renders: without the focus
+            // contract the keyboard user is left on <body>.
+            ->waitUntil('document.activeElement?.id === "edit-profile-heading"')
+            ->assertSee('Edit your profile')
+            ->press('Cancel')
+            ->waitUntil('document.activeElement?.dataset?.testid === "profile-edit"')
+            ->assertVisible('[data-testid="profile-edit"]');
+    });
+});
+
 it('keeps an invalid edit open and gives the field an accessible error', function () {
     $member = User::factory()->create();
 
