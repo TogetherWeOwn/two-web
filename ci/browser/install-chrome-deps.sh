@@ -24,7 +24,7 @@
 # Usage: ./ci/browser/install-chrome-deps.sh   then   source ci/browser/env.sh
 set -euo pipefail
 
-PREFIX="${CHROME_DEPS_PREFIX:-/paperclip/.cache/chrome-deps}"
+PREFIX="${CHROME_DEPS_PREFIX:-${XDG_CACHE_HOME:-$HOME/.cache}/chrome-deps}"
 WORK="$PREFIX/.work"
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
@@ -52,7 +52,7 @@ find_chrome() {
     echo "$CHROME_BIN"; return
   fi
   local c
-  c="$(ls -d "${PUPPETEER_CACHE_DIR:-/paperclip/.cache/puppeteer}"/chrome/linux-*/chrome-linux64/chrome 2>/dev/null | sort -V | tail -1 || true)"
+  c="$(ls -d "${PUPPETEER_CACHE_DIR:-${XDG_CACHE_HOME:-$HOME/.cache}/puppeteer}"/chrome/linux-*/chrome-linux64/chrome 2>/dev/null | sort -V | tail -1 || true)"
   [ -n "$c" ] && { echo "$c"; return; }
   command -v google-chrome-stable || command -v google-chrome || command -v chromium || true
 }

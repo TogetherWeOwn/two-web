@@ -1,9 +1,5 @@
 # Your first event (new-member welcome, post 3 of 3)
 
-> DRAFT ONLY — copy proposals. No site change, no bot change, no post, no DM, no schedule.
-> For Code Reviewer docs pass (copy + links); render/publish is a separate engineering slice.
-> Part of [TOG-5230](/TOG/issues/TOG-5230). No live-guild action in this slice.
-
 | | |
 |---|---|
 | Intended audience | New TWO members deciding whether to show up, reading on the website |

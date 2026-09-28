@@ -96,8 +96,8 @@ routing around it.
 - `vendor/`, `node_modules/`, or a real `.env` in the diff. Check `git status`
   before your first commit.
 - Member personal data stored where the feature does not need it.
-- Anything that DMs or mass-messages members. That needs CEO sign-off before it
-  is written.
+- Anything that DMs or mass-messages members. That needs maintainer approval on
+  an issue before it is written.
 - A page with no empty state and no error state. Both count as part of the
   feature.
 - An abstraction with one caller.

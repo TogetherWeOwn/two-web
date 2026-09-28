@@ -152,7 +152,8 @@ resources/css/two.css
 public/fonts/        Archivo, self-hosted. Vendored — do not edit.
 resources/views/components/layouts/app.blade.php
                      The bare HTML shell. Structure and accessibility only —
-                     visual design belongs to the Designer's specs.
+                     visual design belongs to the design-system specs
+                     (`two-design/docs/COMPONENTS.md`).
 ```
 
 ### The design system is vendored, not authored here
@@ -187,7 +188,7 @@ Three rules, all enforced by `tests/Unit/DesignSystemTest.php`:
 
 - **No hex, rem or px literal in a Blade template**, and no arbitrary values
   (`text-[13px]`, `bg-[#333]`). If the value you need is not a token, the system
-  is missing it — ask the Designer, do not invent it.
+  is missing it — propose the token upstream instead of inventing it locally.
 - **`font-family` appears in `two.css` and nowhere else.** A component that needs
   its own font declaration is a bug in the tokens; report it rather than patching
   around it locally.
@@ -228,7 +229,7 @@ When it is, the site degrades — it does not white-screen. Live counters fall b
 to the last cached value. Anything that needs a Discord action is queued, retried
 with backoff, and tells the member plainly what state it is in. `rsvps` carries a
 `synced_to_discord_at` column so a page can tell the truth about whether Discord
-knows yet. QA tests this path deliberately, so build for it.
+knows yet. The degraded path is covered by tests, so build for it.
 
 ### A demo calendar for staging reviewers
 
@@ -264,8 +265,8 @@ pins what each environment sends against the list registered on the application.
 **Moving the site means *adding* a redirect URI in the Discord portal before the
 switch and removing the old one after. Swapping it is a login outage.**
 
-If you need a credential you do not have, open a blocked issue naming the exact
-credential and the CEO as the unblock owner. Do not improvise around it.
+If you need a credential you do not have, open an issue naming the exact
+credential and the maintainer as the unblock owner. Do not improvise around it.
 
 ---
 
@@ -280,11 +281,12 @@ except by pull request.
 - **Dusk covers the journeys that matter.** A journey with no Dusk test is not done.
 - **Smallest thing that works.** Any abstraction with one caller gets deleted in
   review. Adding a dependency needs a reason a reviewer can challenge, written down.
-- **Don't put design opinions in the CSS.** Layout, visuals and copy are the
-  Designer's call.
-- **Nobody merges their own PR without QA sign-off.**
+- **Don't put design opinions in the CSS.** Layout, visuals and copy follow the
+  design-system specs.
+- **Nobody merges their own PR.** A code owner approves — see
+  [CONTRIBUTING.md](CONTRIBUTING.md).
 
-Three documents you are expected to have read before your first PR, owned by QA:
+Three documents you are expected to have read before your first PR:
 
 | | |
 |---|---|
@@ -293,5 +295,9 @@ Three documents you are expected to have read before your first PR, owned by QA:
 | [docs/ci.md](docs/ci.md) | what CI runs, the budgets, the six-box merge gate, deploys |
 
 Phase 1 is: landing page, Discord login, member profile, events calendar with RSVP,
-and a Filament moderator admin. Anything else needs CEO sign-off before a line is
-written.
+and a Filament moderator admin. Anything else needs maintainer approval on an
+issue before a line is written.
+
+## License
+
+BUSL-1.1 — see [LICENSE](LICENSE). Change License: MIT.
