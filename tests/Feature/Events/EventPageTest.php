@@ -124,6 +124,48 @@ it('hides attendee names from guests while keeping the count and join pitch', fu
         ->assertDontSee('Alice Attendee');
 });
 
+it('banners a clock-ended event and hides the RSVP button before reconcile flips its status', function () {
+    // The reconcile pass flips finished rows to Past every ten minutes, so a
+    // recently finished event is still Published by status. The page must read
+    // the clock, not wait for the flip.
+    $event = publishedEvent([
+        'starts_at' => now()->subHours(3),
+        'ends_at' => now()->subHour(),
+    ]);
+
+    $this->actingAs($this->member)
+        ->get(route('events.page', $event))
+        ->assertOk()
+        ->assertSeeHtml('data-testid="event-ended"')
+        ->assertSee('This event has ended.', false)
+        ->assertSeeHtml('data-testid="rsvp-closed"')
+        ->assertDontSeeHtml('data-testid="rsvp-going"');
+});
+
+it('banners an event already marked past by reconcile', function () {
+    $event = publishedEvent([
+        'status' => EventStatus::Past,
+        'starts_at' => now()->subWeek(),
+        'ends_at' => now()->subWeek()->addHours(2),
+    ]);
+
+    $this->actingAs($this->member)
+        ->get(route('events.page', $event))
+        ->assertOk()
+        ->assertSeeHtml('data-testid="event-ended"')
+        ->assertDontSeeHtml('data-testid="rsvp-going"');
+});
+
+it('shows no ended banner on an upcoming event', function () {
+    $event = publishedEvent();
+
+    $this->actingAs($this->member)
+        ->get(route('events.page', $event))
+        ->assertOk()
+        ->assertDontSeeHtml('data-testid="event-ended"')
+        ->assertSeeHtml('data-testid="rsvp-going"');
+});
+
 it('hides a draft from guests and members but shows it to moderators', function () {
     $draft = publishedEvent(['status' => EventStatus::Draft]);
 

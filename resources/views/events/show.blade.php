@@ -25,6 +25,17 @@
             <script type="application/ld+json" data-testid="event-jsonld">
                 {!! json_encode(\App\Support\EventJsonLd::for($event), JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_AMP | JSON_HEX_QUOT) !!}
             </script>
+            @if ($event->hasEnded())
+                {{-- The reconcile pass flips finished rows to Past every ten
+                     minutes, so a recently finished event is still Published by
+                     status. The clock is the honest signal: say so up front,
+                     in words, before anything that looks actionable. --}}
+                <p class="mb-4 rounded-md border border-line bg-raised px-4 py-3 text-sm text-ink"
+                   role="status" data-testid="event-ended">
+                    <span class="font-medium">This event has ended.</span>
+                </p>
+            @endif
+
             <div class="flex flex-wrap items-start justify-between gap-3">
                 <div class="min-w-0">
                     <h1 class="u-display text-3xl text-ink lg:text-4xl">{{ $event->title }}</h1>
