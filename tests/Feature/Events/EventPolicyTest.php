@@ -86,3 +86,32 @@ it('lets a member change or withdraw only their own answer', function () {
         ->and(Gate::forUser($this->member)->allows('delete', $theirs))->toBeFalse()
         ->and(Gate::forUser($this->moderator)->allows('delete', $theirs))->toBeFalse();
 });
+
+it('lets only a moderator delete an event', function () {
+    $event = Event::factory()->create(['status' => EventStatus::Published]);
+
+    expect(Gate::forUser($this->moderator)->allows('delete', $event))->toBeTrue()
+        ->and(Gate::forUser($this->member)->allows('delete', $event))->toBeFalse();
+});
+
+it('lists events for everybody, including guests', function () {
+    // viewAny is the listing rule: drafts stay out of the listing through
+    // viewDrafts below, never by hiding the page itself.
+    expect(Gate::forUser($this->moderator)->allows('viewAny', Event::class))->toBeTrue()
+        ->and(Gate::forUser($this->member)->allows('viewAny', Event::class))->toBeTrue()
+        ->and(Gate::allows('viewAny', Event::class))->toBeTrue();
+});
+
+it('shows drafts in the listing only to moderators', function () {
+    expect(Gate::forUser($this->moderator)->allows('viewDrafts', Event::class))->toBeTrue()
+        ->and(Gate::forUser($this->member)->allows('viewDrafts', Event::class))->toBeFalse()
+        ->and(Gate::allows('viewDrafts', Event::class))->toBeFalse();
+});
+
+it('shows a published event to guests but hides drafts from them', function () {
+    $draft = Event::factory()->create(['status' => EventStatus::Draft]);
+    $published = Event::factory()->create(['status' => EventStatus::Published]);
+
+    expect(Gate::allows('view', $published))->toBeTrue()
+        ->and(Gate::allows('view', $draft))->toBeFalse();
+});
