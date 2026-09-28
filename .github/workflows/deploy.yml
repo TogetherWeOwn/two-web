@@ -85,10 +85,16 @@ permissions:
 jobs:
   staging:
     name: staging
+    # Fork-PR protection (TOG-8909): a `workflow_run` fired by a fork's CI run
+    # must never deploy. Only a push to this repo's own `main` that went green
+    # deploys — a fork PR's CI completing on the fork must not trigger staging.
     if: >-
       github.event_name == 'workflow_dispatch' && inputs.environment == 'staging' ||
-      github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success'
-    runs-on: [self-hosted, two-selfhosted]
+      github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.event == 'push' &&
+      github.event.workflow_run.head_branch == 'main' &&
+      github.event.workflow_run.head_repository.full_name == github.repository
+    runs-on: ubuntu-latest
     timeout-minutes: 15
     # Enforced on the org's Enterprise Cloud plan (required reviewers plus branch
     # policy live on `production`; `main` ruleset-protected — verified TOG-6912
@@ -178,7 +184,7 @@ jobs:
     if: >-
       github.event_name == 'workflow_dispatch' && inputs.environment == 'production' &&
       github.ref == 'refs/heads/main'
-    runs-on: [self-hosted, two-selfhosted]
+    runs-on: ubuntu-latest
     timeout-minutes: 15
     environment:
       name: production
@@ -220,6 +226,7 @@ jobs:
 
       # Coolify returns as soon as it queues the deploy, so a 200 is not "it is
       # live". Poll the health check until the new release is actually answering.
+      # Poll the health check until the new release is actually answering.
       - name: Wait for production to answer
         env:
           PRODUCTION: ${{ steps.target.outputs.url }}
