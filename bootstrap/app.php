@@ -20,7 +20,14 @@ return Application::configure(basePath: dirname(__DIR__))
         // controller runs. One route today; nothing human belongs in here.
         api: __DIR__.'/../routes/api.php',
         commands: __DIR__.'/../routes/console.php',
-        health: '/up',
+        // No `health:` parameter on purpose (TOG-8711). The framework's
+        // built-in route fires DiagnosingHealth and renders a fixed HTML page
+        // with no database signal: it answers 200 while Postgres is down or
+        // migrations are pending, so a deploy with a failed migrate looks
+        // healthy. routes/health.php registers the explicit `/up` probe
+        // instead — a DB ping plus the pending-migration count as JSON, 503
+        // when either is wrong — and the maintenance-mode exemption the
+        // framework would have added for it lives in withMiddleware below.
         // The funnel, with a deliberately empty middleware stack. `/discord` has
         // to answer when the database is down, and every route in the `web` group
         // opens a database connection inside StartSession before the controller
@@ -28,6 +35,7 @@ return Application::configure(basePath: dirname(__DIR__))
         // routes/funnel.php carries the full reasoning.
         then: function (): void {
             Route::middleware([])->group(__DIR__.'/../routes/funnel.php');
+            Route::middleware([])->group(__DIR__.'/../routes/health.php');
         },
     )
     ->withMiddleware(function (Middleware $middleware): void {
@@ -63,7 +71,12 @@ return Application::configure(basePath: dirname(__DIR__))
         // `/discord` is the break-glass route during a deploy. The one-click
         // `/join` flow needs a session and the bot, so maintenance mode must not
         // pretend it can complete; the plain invite remains available here.
-        $middleware->preventRequestsDuringMaintenance(except: ['discord']);
+        // `/up` joins it (TOG-8711): replacing the framework's `health: '/up'`
+        // route with the explicit probe in routes/health.php dropped the
+        // exemption the framework would have added, and deploys poll `/up`
+        // while the site is down for maintenance — `PreventRequestsDuringMaintenance`
+        // matches on the `up` URI, not the leading slash.
+        $middleware->preventRequestsDuringMaintenance(except: ['discord', 'up']);
 
         // nginx terminates TLS and hands PHP-FPM a plain http request, so without
         // this the application believes every https page is http. That breaks the
