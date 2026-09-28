@@ -3,6 +3,7 @@
 namespace App\Http\Requests;
 
 use App\Models\Event;
+use App\Rules\FoldDisambiguation;
 use App\Rules\IanaTimeZone;
 use App\Rules\NaiveWallTime;
 use App\Rules\RealWallTime;
@@ -39,9 +40,13 @@ class UpdateEventRequest extends AuthenticatedRequest
             'description' => ['nullable', 'string', 'max:1000'],
             // Same pair as StoreEventRequest: NaiveWallTime refuses embedded
             // offsets (TOG-6804); RealWallTime refuses spring-gap wall times
-            // that never occurred (TOG-6803). Both are 422s, never silent.
-            'starts_at' => ['required', 'date', new NaiveWallTime, new RealWallTime],
-            'ends_at' => ['required', 'date', 'after:starts_at', new NaiveWallTime, new RealWallTime],
+            // that never occurred (TOG-6803); FoldDisambiguation refuses bare
+            // autumn-fold wall times that occur twice (TOG-6806). All are
+            // 422s, never silent.
+            'starts_at' => ['required', 'date', new NaiveWallTime, new RealWallTime, new FoldDisambiguation('starts_occurrence')],
+            'starts_occurrence' => ['nullable', 'in:first,second'],
+            'ends_at' => ['required', 'date', 'after:starts_at', new NaiveWallTime, new RealWallTime, new FoldDisambiguation('ends_occurrence')],
+            'ends_occurrence' => ['nullable', 'in:first,second'],
             'timezone' => ['required', 'string', new IanaTimeZone],
             'location' => ['required', 'string', 'max:255'],
             'capacity' => ['nullable', 'integer', 'min:1'],

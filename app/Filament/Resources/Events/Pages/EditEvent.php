@@ -38,9 +38,31 @@ class EditEvent extends EditRecord
             if (is_string($data[$key] ?? null)) {
                 $instant = CarbonImmutable::parse($data[$key], 'UTC');
                 $data[$hint] = $instant->toIso8601String();
-                $data[$key] = $instant
+                $wall = $instant
                     ->setTimezone($timezone)
                     ->format('Y-m-d H:i:s');
+                $data[$key] = $wall;
+
+                // A stored instant inside an autumn fold (TOG-6806) fills as a
+                // bare ambiguous wall — which the FoldDisambiguation rule
+                // refuses on save before mutateFormDataBeforeSave can vouch
+                // for it via the carrier. Backfill which side the stored
+                // instant is on so an untouched open-and-save validates: the
+                // host can still change the pick, and any keystroke to the
+                // wall drops the carrier and the new text wins.
+                $occurrenceKey = str_replace('_at', '_occurrence', $key);
+
+                if (EventInput::isAmbiguousWallTime($wall, $timezone)) {
+                    try {
+                        $first = EventInput::foldOccurrence($wall, $timezone, 'first');
+                        $data[$occurrenceKey] = $first !== null
+                            && $first->format('Y-m-d H:i:s') === $instant->utc()->format('Y-m-d H:i:s')
+                            ? 'first'
+                            : 'second';
+                    } catch (\Throwable) {
+                        // Leave it blank: the rule will ask the host to pick.
+                    }
+                }
             }
         }
 
@@ -111,8 +133,6 @@ class EditEvent extends EditRecord
     protected function handleRecordUpdate(Model $record, array $data): Model
     {
         /** @var Event $record */
-        $input = EventInput::fromValidated($data);
-
         $preserved = [];
 
         foreach (['starts_at' => 'startsAt', 'ends_at' => 'endsAt'] as $key => $property) {
@@ -130,6 +150,68 @@ class EditEvent extends EditRecord
                 continue;
             }
         }
+
+        // Splice the kept instants over the wall text BEFORE fromValidated():
+        // the wall text an unchanged fold-ambiguous save resubmits is a bare
+        // fold wall, which fromValidated() now refuses (TOG-6806) — and the
+        // carrier is the exact instant the form rendered, so re-parsing the
+        // wall would answer a question the host already settled by not typing.
+        $wallData = $data;
+
+        foreach (['starts_at', 'ends_at'] as $key) {
+            $property = $key === 'starts_at' ? 'startsAt' : 'endsAt';
+
+            if (! isset($preserved[$property])) {
+                continue;
+            }
+
+            $wall = $wallData[$key] ?? null;
+            $kept = $preserved[$property];
+            $timezone = is_string($wallData['timezone'] ?? null) ? $wallData['timezone'] : 'UTC';
+
+            try {
+                $unchanged = is_string($wall)
+                    && CarbonImmutable::parse($wall, $timezone)->format('Y-m-d H:i')
+                        === $kept->setTimezone($timezone)->format('Y-m-d H:i');
+            } catch (\Throwable) {
+                $unchanged = false;
+            }
+
+            if ($unchanged) {
+                // Feed fromValidated() the same instant as a naive wall it
+                // parses back identically: a UTC ISO instant is zone-bearing
+                // and trips the naive-wall guard, but the kept instant's wall
+                // rendering in the event zone is naive by construction. A
+                // fold-ambiguous resubmitted wall (TOG-6806) is the one case
+                // this changes — Carbon prefers the second occurrence while
+                // the carrier may hold the first — so pin the occurrence for
+                // exactly that case by asking which side the kept instant is on.
+                $rendered = $kept->setTimezone($timezone)->format('Y-m-d H:i');
+                $wallData[$key] = $rendered;
+                $occurrenceKey = str_replace('_at', '_occurrence', $key);
+
+                if (EventInput::isAmbiguousWallTime($rendered, $timezone)
+                    && ! is_string($wallData[$occurrenceKey] ?? null)
+                ) {
+                    try {
+                        $first = EventInput::foldOccurrence($rendered, $timezone, 'first');
+                        $wallData[$occurrenceKey] = $first !== null
+                            && $first->format('Y-m-d H:i:s') === $kept->utc()->format('Y-m-d H:i:s')
+                            ? 'first'
+                            : 'second';
+                    } catch (\Throwable) {
+                        unset($wallData[$occurrenceKey]);
+                    }
+                }
+            } else {
+                // The host retyped the wall: the carrier is stale, the new
+                // text wins — including a deliberately retyped ambiguous wall
+                // plus its occurrence pick.
+                unset($preserved[$property]);
+            }
+        }
+
+        $input = EventInput::fromValidated($wallData);
 
         if ($preserved !== []) {
             $input = new EventInput(
