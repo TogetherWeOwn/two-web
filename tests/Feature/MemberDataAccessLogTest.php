@@ -120,15 +120,17 @@ it('does not log a moderator loading their own record', function () {
     expect(MemberDataAccessLog::query()->count())->toBe(0);
 });
 
-it('logs nothing on the ordinary site, where the middleware is not applied', function () {
+it('records member-profile reads on the ordinary site', function () {
     $member = User::factory()->create();
     $other = User::factory()->create();
 
-    Route::middleware(['web', 'auth'])->get('members/{id}', fn (string $id) => (string) User::query()->findOrFail($id)->getKey());
+    $this->actingAs($member)->get(route('profiles.show', $other))->assertOk();
 
-    $this->actingAs($member)->get("members/{$other->id}")->assertOk();
+    $log = MemberDataAccessLog::query()->sole();
 
-    expect(MemberDataAccessLog::query()->count())->toBe(0);
+    expect($log->viewer_user_id)->toBe($member->id)
+        ->and($log->subject_user_ids)->toBe([$other->id])
+        ->and($log->route)->toBe('profiles.show');
 });
 
 it('refuses to serve the read when the access log cannot be written', function () {
@@ -296,19 +298,19 @@ it('attributes no read to a request that did not make it', function () {
     //
     // PHP-FPM gives a fresh container per request, so this is not reachable in
     // production today. It is reachable here, which is where this control's
-    // evidence comes from: without it, `it logs nothing on the ordinary site`
-    // passes on where it sits in this file rather than on the recorder.
+    // evidence comes from. The synthetic unlogged route must not attribute its
+    // reads to the next logged request; real member-profile routes are logged.
     $moderator = User::factory()->moderator()->create();
     $onPanel = User::factory()->create();
     $offPanel = User::factory()->create();
 
     panelRoute('admin/members/{id}', fn (string $id) => (string) User::query()->findOrFail($id)->getKey());
     Route::middleware(['web', 'auth'])
-        ->get('members/{id}', fn (string $id) => (string) User::query()->findOrFail($id)->getKey())
-        ->name('test.ordinary.member');
+        ->get('test/unlogged/{id}', fn (string $id) => (string) User::query()->findOrFail($id)->getKey())
+        ->name('test.unlogged.member');
 
     $this->actingAs($moderator)->get("admin/members/{$onPanel->id}")->assertOk();
-    $this->actingAs($moderator)->get("members/{$offPanel->id}")->assertOk();
+    $this->actingAs($moderator)->get("test/unlogged/{$offPanel->id}")->assertOk();
     $this->actingAs($moderator)->get("admin/members/{$onPanel->id}")->assertOk();
 
     $rows = MemberDataAccessLog::query()->orderBy('id')->get();
