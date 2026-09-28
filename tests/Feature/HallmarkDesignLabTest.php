@@ -79,3 +79,16 @@ it('keeps design-lab concepts out of the public sitemap', function () {
         ->assertOk()
         ->assertDontSee('/design-lab/hallmark');
 });
+
+it('renders featured image alt text instead of an empty alt in the Hallmark concept', function () {
+    FeaturedContent::factory()->published()->create([
+        'title' => 'Summer social photos',
+        'image_url' => 'https://example.org/photo.jpg',
+        'image_alt' => 'Members playing board games at the summer social',
+    ]);
+
+    $this->get('/design-lab/hallmark')
+        ->assertOk()
+        ->assertSee('alt="Members playing board games at the summer social"', escape: false)
+        ->assertDontSee('alt=""', escape: false);
+});
