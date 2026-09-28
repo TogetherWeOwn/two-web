@@ -485,7 +485,9 @@ php artisan queue:restart
 
 This broadcasts an `illuminate:queue:restart` timestamp through the default
 cache. The worker daemon compares it after every job (`Worker::daemon` →
-`stopIfNecessary`) and exits 0, and Coolify respawns it on the new release. A
+`stopIfNecessary`) and exits 0, and Coolify restarts the container — on the
+worker app's *current* image, which is why the two-step release below
+redeploys the worker app rather than trusting this signal alone. A
 running job finishes — none is killed, none runs twice. Per-job `tries` still
 win over the worker's `--tries` flag (`markJobAsFailedIfAlreadyExceedsMaxAttempts`
 prefers the job's own `maxTries()`), so the restart changes *when* workers
@@ -503,8 +505,53 @@ code forever. Today both apps share the repository so they move together; if
 that ever stops being true, the worker needs its own deploy or redeploy step,
 and this section needs rewriting, not rereading.
 
+A staging release is therefore two steps, in order — the web deploy never
+rebuilds the worker app, so `queue:restart` alone recycles the worker onto
+whatever release the worker app is already running:
+
+1. Deploy `two-web-staging` (automatic on green `main`, or Redeploy in the
+   dashboard). Wait for `GET <staging>/up` to answer 200 on the new release.
+2. Redeploy `two-web-staging-worker` (Redeploy in the dashboard, or its deploy
+   webhook) so the worker image matches the web release. The restart timestamp
+   from step 1 is already broadcast; the fresh worker boots new code and the
+   running job finishes first — none is killed, none runs twice.
+3. Verify: the worker app shows a fresh container, staging `/up` answers 200,
+   and `php artisan queue:check-depth --json` on the box drains toward 0.
+
+Rollback is the mirror: roll the web release back in the dashboard, redeploy
+the worker app so its image matches, then run `php artisan queue:restart` once
+in the web container so the worker rejoins the rolled-back release. Rolling
+back the web release without redeploying the worker leaves new-code workers
+on an old release — the same skew in the other direction.
+
 Pinned by `tests/Unit/QueueDrainOnDeployTest.php`, which asserts this section
 still names the command, the placement, and the bound.
+
+### Queue drill: prove a stuck queue and a dead job both surface (TOG-6948)
+
+Two probes, one drill, run **on the staging box** after each deploy until the
+worker story settles. Both read the box's own database, which is the one place
+the answer means anything — CI never sees staging's queue.
+
+1. **Stuck queue:** `php artisan queue:check-depth --json`. Pending climbing
+   past `--warn` (default 20) is RSVP lag a member can see; past `--critical`
+   (default 100) points at the worker being down rather than busy. The counting
+   is pinned by `tests/Feature/Console/CheckQueueDepthCommandTest.php`.
+2. **Dead job:** `php artisan queue:poison-probe --json`, then tail the log for
+   `Queue job failed.` — one critical line per failed job, with the class,
+   queue and exception message, logged by the `Queue::failing` listener in
+   `AppServiceProvider`. The probe dispatches a self-failing job, runs the
+   worker once against it, and reports the `failed_jobs` row it landed in.
+   Clean the probe row up afterwards with `php artisan queue:forget <uuid>`
+   (the uuid is in the probe output), or retry it with `php artisan queue:retry`.
+   The chain is pinned by `tests/Feature/Console/QueuePoisonProbeTest.php`.
+
+A real failure lands the same way: the worker already owns recovery (the
+ten-minute `events:reconcile` pass re-dispatches what never mirrored), and the
+critical line is the part that tells a tired person to go look. If neither
+probe reports and no critical line appears, the queue is healthy — the drill
+existing is what makes that reading trustworthy, in the same tradition as
+`discord:check-moderators` above.
 
 ### Production deploys are dispatch-only, behind a required reviewer
 

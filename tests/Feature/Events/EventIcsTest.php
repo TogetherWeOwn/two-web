@@ -82,6 +82,37 @@ it('keeps the UID stable across downloads so calendars update instead of duplica
     expect($first)->not->toBeNull()->and($first)->toBe($second);
 });
 
+it('carries a SEQUENCE derived from updated_at so synced calendars apply edits', function () {
+    $event = Event::factory()->create(['status' => EventStatus::Published]);
+
+    $lines = icsLines($this->get(route('events.ics', $event))->assertOk()->getContent());
+    $sequence = icsLine($lines, 'SEQUENCE:');
+
+    expect($sequence)->toBe('SEQUENCE:'.$event->updated_at->getTimestamp());
+});
+
+it('bumps SEQUENCE on edit with the same UID and intact DTSTART/DTEND/STATUS', function () {
+    $event = Event::factory()->create(['status' => EventStatus::Published]);
+
+    $before = icsLines($this->get(route('events.ics', $event))->assertOk()->getContent());
+    $beforeUid = icsLine($before, 'UID:');
+    $beforeSequence = (int) str_replace('SEQUENCE:', '', icsLine($before, 'SEQUENCE:'));
+
+    // Second resolution: `updated_at` timestamps share a second within a fast
+    // test, so travel past the second boundary — production re-polls are minutes
+    // apart and never hit this.
+    $this->travel(2)->seconds();
+    $event->update(['title' => 'Friday night Helldivers (rescheduled)']);
+
+    $after = icsLines($this->get(route('events.ics', $event->refresh()))->assertOk()->getContent());
+
+    expect(icsLine($after, 'UID:'))->toBe($beforeUid)
+        ->and((int) str_replace('SEQUENCE:', '', icsLine($after, 'SEQUENCE:')))->toBeGreaterThan($beforeSequence)
+        ->and(icsLine($after, 'DTSTART:'))->not->toBeNull()
+        ->and(icsLine($after, 'DTEND:'))->not->toBeNull()
+        ->and(icsLine($after, 'STATUS:'))->toBe('STATUS:CONFIRMED');
+});
+
 it('maps a cancelled event to STATUS:CANCELLED', function () {
     $event = Event::factory()->create(['status' => EventStatus::Cancelled]);
 

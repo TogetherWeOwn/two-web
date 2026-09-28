@@ -5,6 +5,7 @@ namespace App\Livewire;
 use App\Models\Profile;
 use App\Models\User;
 use App\Rules\IanaTimeZone;
+use App\Rules\NoControlCharacters;
 use App\Support\Profiles\MemberStats;
 use App\Support\Profiles\Milestone;
 use Illuminate\Auth\Access\AuthorizationException;
@@ -104,8 +105,8 @@ class MemberProfile extends Component
         $this->dispatch('profile-state-changed')->self();
 
         $validated = $this->validate([
-            'bio' => ['nullable', 'string', 'max:1000'],
-            'gamesText' => ['nullable', 'string', 'max:1700'],
+            'bio' => ['nullable', 'string', 'max:1000', new NoControlCharacters],
+            'gamesText' => ['nullable', 'string', 'max:1700', new NoControlCharacters],
             'timezone' => ['nullable', 'string', new IanaTimeZone],
         ]);
 

@@ -253,6 +253,18 @@ jobs:
       - name: Mail auth self-test
         run: ./ci/mail-auth-check-selftest.sh
 
+      # The local backup script and its restore proof (TOG-5643). The real
+      # proof needs docker + Postgres and runs by hand per docs/runbook.md;
+      # what runs here is the offline half: a stubbed `docker` drives the real
+      # script through its local-only refusal, the empty-dump check, a
+      # round-trip with matching and mismatching counts, a corrupt dump, and
+      # the password-never-in-argv audit. A guard that quietly stopped
+      # guarding is otherwise indistinguishable from one that works, up until
+      # someone dumps production onto a laptop or trusts a backup that never
+      # restored. No network, no docker, no database.
+      - name: Postgres backup self-test
+        run: ./ci/pg-backup-selftest.sh
+
       - uses: shivammathur/setup-php@f3e473d116dcccaddc5834248c87452386958240 # v2
         with:
           php-version: ${{ env.PHP_VERSION }}
