@@ -26,7 +26,6 @@
  * changes a token would otherwise leave our copy silently behind.
  */
 
-use App\Filament\StagingPages\BotSettings;
 use App\Filament\Pages\Schemas\BotSettingsForm;
 use App\Filament\Resources\Events\EventResource;
 use App\Filament\Resources\Events\Pages\CreateEvent;
@@ -34,6 +33,7 @@ use App\Filament\Resources\Events\Pages\ListEvents;
 use App\Filament\Resources\FeaturedContents\FeaturedContentResource;
 use App\Filament\Resources\FeaturedContents\Pages\CreateFeaturedContent;
 use App\Filament\Resources\FeaturedContents\Pages\ListFeaturedContents;
+use App\Filament\StagingPages\BotSettings;
 use Filament\Actions\Action;
 use Filament\Actions\DeleteAction;
 use Filament\Actions\EditAction;
