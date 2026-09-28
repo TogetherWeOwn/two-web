@@ -6,7 +6,9 @@ use App\Enums\EventStatus;
 use App\Enums\RsvpStatus;
 use App\Exceptions\EventAtCapacityException;
 use App\Exceptions\EventNotOpenException;
+use App\Exceptions\StaleAgentVersionException;
 use App\Jobs\SyncEventToDiscord;
+use App\Models\AgentEventGrant;
 use App\Models\Event;
 use App\Models\Rsvp;
 use App\Models\User;
@@ -49,6 +51,68 @@ class EventService
             $event->save();
 
             $this->syncAfterCommit($event);
+
+            return $event;
+        });
+    }
+
+    /**
+     * Create the one Draft an agent grant may own (TOG-5510/web, Gate 2).
+     *
+     * The adapted attribution seam: `created_by` stays null — no human hosted
+     * this — and ownership lives in `agent_grant_id` instead. The grant's
+     * caller, scope and quota are checked by the agent ingress before this is
+     * reached; what is enforced here is the shape of the row itself. The
+     * database unique index on `agent_grant_id` is what makes the one-event
+     * quota hold under concurrency rather than under good intentions.
+     */
+    public function createForGrant(AgentEventGrant $grant, EventInput $input, string $proofMarker): Event
+    {
+        return DB::transaction(function () use ($grant, $input, $proofMarker): Event {
+            $event = new Event;
+            $this->fill($event, $input);
+            $event->created_by = null;
+            $event->status = EventStatus::Draft;
+            $event->agent_grant_id = $grant->getKey();
+            $event->proof_marker = $proofMarker;
+            $event->agent_version = 1;
+            $event->save();
+
+            // A draft is never mirrored, so this is a no-op by construction —
+            // called for the same reason as in create(): the day this stops
+            // being a draft-first flow it must not silently stop syncing.
+            $this->syncAfterCommit($event);
+
+            return $event;
+        });
+    }
+
+    /**
+     * Update an agent-owned event under optimistic concurrency (Gate 2).
+     *
+     * The row lock serialises concurrent writers; the version check turns the
+     * loser into a 409 rather than a silent overwrite. Human writes never
+     * touch `agent_version`, so a moderator correcting a typo cannot
+     * invalidate an agent's expected version and vice versa.
+     *
+     * @throws StaleAgentVersionException when the row moved since the caller read it
+     */
+    public function updateForGrant(Event $event, EventInput $input, int $expectedVersion): Event
+    {
+        return DB::transaction(function () use ($event, $input, $expectedVersion): Event {
+            $locked = Event::query()->whereKey($event->getKey())->lockForUpdate()->firstOrFail();
+
+            if ($locked->agent_version !== $expectedVersion) {
+                throw new StaleAgentVersionException($locked, $expectedVersion);
+            }
+
+            $this->fill($locked, $input);
+            $locked->agent_version = $expectedVersion + 1;
+            $locked->save();
+
+            $this->syncAfterCommit($locked);
+
+            $event->setRawAttributes($locked->getAttributes(), true);
 
             return $event;
         });

@@ -29,6 +29,9 @@ use Spatie\Activitylog\Traits\LogsActivity;
  * @property EventStatus $status
  * @property string|null $discord_event_id
  * @property int|null $created_by
+ * @property string|null $agent_grant_id
+ * @property string|null $proof_marker
+ * @property int $agent_version
  */
 class Event extends Model
 {
@@ -72,6 +75,9 @@ class Event extends Model
         'status',
         'discord_event_id',
         'created_by',
+        'agent_grant_id',
+        'proof_marker',
+        'agent_version',
     ];
 
     /** @return array<string, string> */
@@ -84,6 +90,7 @@ class Event extends Model
             'ends_at' => 'immutable_datetime',
             'capacity' => 'integer',
             'status' => EventStatus::class,
+            'agent_version' => 'integer',
         ];
     }
 
@@ -145,6 +152,23 @@ class Event extends Model
     public function creator(): BelongsTo
     {
         return $this->belongsTo(User::class, 'created_by');
+    }
+
+    /**
+     * The machine grant that owns this event, if any. Null means a human-owned
+     * event: the agent ingress may neither read nor change it, and the human
+     * paths never set or clear this column.
+     *
+     * @return BelongsTo<AgentEventGrant, $this>
+     */
+    public function agentGrant(): BelongsTo
+    {
+        return $this->belongsTo(AgentEventGrant::class, 'agent_grant_id');
+    }
+
+    public function isAgentOwned(): bool
+    {
+        return $this->agent_grant_id !== null;
     }
 
     /** @return HasMany<Rsvp, $this> */
