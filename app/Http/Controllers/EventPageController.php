@@ -7,6 +7,7 @@ use App\Enums\RsvpStatus;
 use App\Models\Event;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Http\Response;
+use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Gate;
 
 /**
@@ -64,6 +65,7 @@ final class EventPageController
             'attendees' => $attendees,
             'previousEvent' => self::neighbor($event, 'previous'),
             'nextEvent' => self::neighbor($event, 'next'),
+            'relatedEvents' => self::relatedEvents($event),
         ]);
 
         // Moderator-only preview: keep it out of the index. Published pages send
@@ -111,5 +113,52 @@ final class EventPageController
                 fn (Builder $query): Builder => $query->orderBy('starts_at')->orderBy('id'),
             )
             ->first();
+    }
+
+    /**
+     * Up to 3 sibling events for the related-events block, same game first.
+     *
+     * There is no `series` column — `game` is the series ("Helldivers 2"
+     * nights are a series the way the calendar treats them). Same-game
+     * upcoming events come first, then the nearest other upcoming events to
+     * fill up to 3, so the block is still useful for a one-off game. The
+     * current event, cancelled events (410, not a page to browse to) and —
+     * for guests — drafts are excluded, the same visibility rule as
+     * `neighbor()`. One query when there is no game or the same-game rows
+     * fill the block, two at most.
+     *
+     * @return Collection<int, Event>
+     */
+    private static function relatedEvents(Event $event): Collection
+    {
+        $upcoming = fn (): Builder => Event::query()
+            ->select(['id', 'event_key', 'title', 'starts_at', 'timezone', 'location'])
+            ->unless(
+                Gate::allows('viewDrafts', Event::class),
+                fn (Builder $query): Builder => $query->where('status', '!=', EventStatus::Draft->value),
+            )
+            ->where('status', '!=', EventStatus::Cancelled->value)
+            ->where('id', '!=', $event->id)
+            ->where('ends_at', '>=', now())
+            ->orderBy('starts_at')
+            ->orderBy('id');
+
+        $related = $event->game !== null
+            ? $upcoming()->where('game', $event->game)->limit(3)->get()
+            : collect();
+
+        if ($related->count() < 3) {
+            $more = $upcoming()
+                ->when(
+                    $related->isNotEmpty(),
+                    fn (Builder $query): Builder => $query->whereNotIn('id', $related->pluck('id')->all()),
+                )
+                ->limit(3 - $related->count())
+                ->get();
+
+            $related = $related->concat($more);
+        }
+
+        return $related->values();
     }
 }
