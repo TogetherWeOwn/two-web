@@ -645,7 +645,8 @@ it('throttles mutating calls per grant without spending reads', function () {
     $this->postJson(route('api.agent-events'), agentOp('create', ['fields' => agentFields()]), $headers)->assertConflict();
 
     // Two mutating attempts spent the budget of 2; the third is throttled
-    // rather than answered. A read on the separate budget still passes.
-    $this->postJson(route('api.agent-events'), agentOp('create', ['fields' => agentFields()]), $headers)->assertStatus(429);
+    // rather than answered, with the same shared envelope (TOG-6788) as the
+    // human throttles. A read on the separate budget still passes.
+    assertThrottleEnvelope($this->postJson(route('api.agent-events'), agentOp('create', ['fields' => agentFields()]), $headers));
     $this->postJson(route('api.agent-events'), agentOp('read'), $headers)->assertOk();
 });

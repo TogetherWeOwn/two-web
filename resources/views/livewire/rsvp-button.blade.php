@@ -207,7 +207,25 @@
                 </span>
             </p>
         @endif
+
     @endauth
+
+    {{-- Deliberately outside @auth. After the session dies the round trip
+         re-renders as a guest, which would hide a banner placed inside the
+         block above — and the guest block it shows instead carries the same
+         login link, so the message survives either way (TOG-8135). --}}
+    @if ($sessionExpired ?? false)
+        <p class="flex items-start gap-1.5 text-sm text-alert" role="alert" data-testid="rsvp-session-expired">
+            <svg class="size-4 shrink-0 mt-0.5" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+                <path d="M8 1.5 15 14H1L8 1.5Zm0 4a.75.75 0 0 0-.75.75v3a.75.75 0 0 0 1.5 0v-3A.75.75 0 0 0 8 5.5Zm0 6.75a.9.9 0 1 0 0-1.8.9.9 0 0 0 0 1.8Z"/>
+            </svg>
+            <span>
+                <span class="font-medium text-ink">Your session expired.</span>
+                <a href="{{ route('login') }}" class="font-semibold underline underline-offset-4 hover:text-ink">Log in with Discord</a>
+                and try again.
+            </span>
+        </p>
+    @endif
 
     @script
         {{-- TOG-6956: after a successful RSVP/withdraw the re-render swaps the

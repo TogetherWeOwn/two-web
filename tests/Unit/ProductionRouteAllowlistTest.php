@@ -97,6 +97,7 @@ function expectedProductionRoutes(): array
         'GET|HEAD events/past',
         'GET|HEAD events/{event}',
         'GET|HEAD events/{event}.ics',
+        'GET|HEAD faq',
         'GET|HEAD filament/exports/{export}/download',
         'GET|HEAD filament/imports/{import}/failed-rows/download',
         'GET|HEAD join',

@@ -5,6 +5,7 @@ use App\Enums\RsvpStatus;
 use App\Models\Event;
 use App\Models\Rsvp;
 use App\Models\User;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Laravel\Dusk\Browser;
 
@@ -266,18 +267,90 @@ test('an empty calendar reads as early rather than broken', function () {
     // on its own terms instead of inheriting whatever the previous test created.
     expect(Event::query()->count())->toBe(0);
 
-    $this->browse(function (Browser $browser) {
-        $browser->resize(360, 780)
-            ->visit('/events')
-            ->waitFor('[data-testid="events-empty-never"]')
-            ->assertSeeIn('[data-testid="events-empty-never"]', 'Nothing on the calendar yet.')
-            // Exactly one action, and it is the one that helps.
-            ->assertSeeLink('Join the Discord')
-            // Nothing on this page is an error. A member who lands here early must
-            // not think the site is down.
-            ->assertMissing('[data-testid="rsvp-failed"]')
-            ->assertDontSee('No events found');
-    });
+    // A healthy empty read is not an unavailable bot. The shared cache makes
+    // the fixture visible to the separate HTTP process without a test route.
+    Cache::put('events.discord-upcoming', [], 600);
+
+    try {
+        $this->browse(function (Browser $browser) {
+            $browser->resize(360, 780)
+                ->visit('/events')
+                ->waitFor('[data-testid="events-empty-never"]')
+                ->assertSeeIn('[data-testid="events-empty-never"]', 'Nothing on the calendar yet.')
+                ->assertAttribute('[data-testid="events-empty-never"] [data-testid="discord-join"]', 'href', route('discord'))
+                ->assertSeeLink('Join the Discord')
+                ->assertMissing('[data-testid="events-empty-error"]')
+                ->assertMissing('[data-testid="rsvp-failed"]')
+                ->click('[data-testid="events-view-calendar"]')
+                ->waitFor('[data-testid="events-calendar-grid"]')
+                ->assertAttribute('[data-testid="events-view-calendar"]', 'aria-pressed', 'true')
+                ->assertVisible('[data-testid="events-empty-never"]')
+                ->assertDontSee('No events found');
+        });
+    } finally {
+        Cache::forget('events.discord-upcoming');
+    }
+});
+
+test('the gap calendar shows five past names and keeps the selected view', function () {
+    Cache::put('events.discord-upcoming', [], 600);
+
+    for ($days = 1; $days <= 7; $days++) {
+        browsableEvent([
+            'title' => "Past game night {$days}",
+            'starts_at' => now()->subDays($days)->subHours(2),
+            'ends_at' => now()->subDays($days),
+        ]);
+    }
+
+    try {
+        $this->browse(function (Browser $browser) {
+            $browser->resize(360, 780)
+                ->visit('/events')
+                ->waitFor('[data-testid="events-empty-gap"]')
+                ->assertSeeIn('[data-testid="events-empty-gap"]', 'No upcoming events — check back soon.')
+                ->assertSeeIn('[data-testid="events-empty-gap"]', 'Last time: Past game night 1')
+                ->assertCount('[data-testid="events-empty-gap-item"]', 5)
+                ->assertDontSee('Past game night 6')
+                ->assertMissing('[data-testid="events-empty-never"]')
+                ->click('[data-testid="events-view-calendar"]')
+                ->waitFor('[data-testid="events-calendar-grid"]')
+                ->assertAttribute('[data-testid="events-view-calendar"]', 'aria-pressed', 'true')
+                ->assertVisible('[data-testid="events-empty-gap"]');
+        });
+    } finally {
+        Cache::forget('events.discord-upcoming');
+    }
+});
+
+test('a failed calendar read retries in the browser without losing the view', function () {
+    // An invalid cached read triggers the reader's error path deterministically,
+    // without reaching Discord or adding a production-accessible failure seam.
+    Cache::put('events.discord-upcoming', 'invalid-event-result', 600);
+
+    try {
+        $this->browse(function (Browser $browser) {
+            $browser->resize(360, 780)
+                ->visit('/events')
+                ->waitFor('[data-testid="events-empty-error"]')
+                ->assertSeeIn('[data-testid="events-empty-error"]', "We couldn't load the calendar.")
+                ->assertSeeIn('[data-testid="events-empty-error"]', 'The Discord always has the latest — come ask there.')
+                ->assertMissing('[data-testid="events-empty-never"]')
+                ->click('[data-testid="events-view-calendar"]')
+                ->waitFor('[data-testid="events-calendar-grid"]')
+                ->assertAttribute('[data-testid="events-view-calendar"]', 'aria-pressed', 'true');
+
+            Cache::put('events.discord-upcoming', [], 600);
+
+            $browser->click('[data-testid="events-retry"]')
+                ->waitFor('[data-testid="events-empty-never"]')
+                ->assertMissing('[data-testid="events-empty-error"]')
+                ->assertAttribute('[data-testid="events-view-calendar"]', 'aria-pressed', 'true')
+                ->assertVisible('[data-testid="events-calendar-grid"]');
+        });
+    } finally {
+        Cache::forget('events.discord-upcoming');
+    }
 });
 
 test('the calendar view renders a month grid and jumps to the event', function () {

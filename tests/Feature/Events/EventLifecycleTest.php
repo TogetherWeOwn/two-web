@@ -136,7 +136,11 @@ it('answers a full event with a 409 and not a 500', function () {
     $this->actingAs($this->member)
         ->putJson(route('events.rsvp.update', $event), ['status' => RsvpStatus::Going->value])
         ->assertStatus(409)
-        ->assertJsonPath('reason', 'event_at_capacity');
+        ->assertJsonPath('reason', 'event_at_capacity')
+        // The loser of the race is a member, not a client to debug: the body
+        // carries the sentence they would read and the cap, not just a code.
+        ->assertJsonPath('message', 'This event is full.')
+        ->assertJsonPath('capacity', 1);
 });
 
 it('still takes a maybe for a full event, because maybe is not a seat', function () {
@@ -176,9 +180,9 @@ it('shares one member-safe limit across HTTP RSVP writes and recovers when it ex
     }
 
     $limited = $this->actingAs($this->member)
-        ->deleteJson(route('events.rsvp.destroy', $event))
-        ->assertStatus(429)
-        ->assertHeader('Retry-After', RsvpRateLimit::DECAY_SECONDS);
+        ->deleteJson(route('events.rsvp.destroy', $event));
+
+    assertThrottleEnvelope($limited, RsvpRateLimit::DECAY_SECONDS);
 
     expect((int) $limited->headers->get('Retry-After'))->toBeGreaterThan(0);
 
