@@ -187,6 +187,12 @@ restart-card/operator calls fail.
 | --- | --- | --- | --- | --- |
 | `VITE_APP_NAME` | Optional | `"${APP_NAME}"` (interpolates at build time) | Same | Only the display name baked into built assets. Note the quoting: it references `APP_NAME`, so renaming means rebuilding frontend assets. |
 
+## 14. Community pages
+
+| Key | Required? | Local | Staging / Production | What breaks if wrong |
+| --- | --- | --- | --- | --- |
+| `RULES_LAST_UPDATED` | Optional — **leave blank** unless bumping the stamp (default lives in `config/community.php`) | Blank | Set to the last review date (YYYY-MM-DD) whenever the house rules change | Shown as the "Last updated" stamp on `/rules`. Empty or unparseable: the stamp is hidden and a warning is logged — the page stays 200, so a typo degrades, never breaks. Wrong-but-parseable: the stamp shows the wrong date; bump it with the rules change. |
+
 ## Quick checklists
 
 **New developer:** copy example → `key:generate` → fill `DISCORD_CLIENT_ID` /
