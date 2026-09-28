@@ -187,6 +187,15 @@ jobs:
       - name: Env docs check self-test
         run: ./ci/check-env-docs-selftest.sh
 
+      # The Vite bundle budget checker (TOG-5629). Its own `--selftest` runs
+      # here, in `static`, for the same reason the line below exists: the byte
+      # comparison needs a real manifest so it runs in `budgets`, and a checker
+      # that quietly stopped checking is indistinguishable from a fitting
+      # bundle unless something offline proves it still fails. No build, no
+      # network — synthetic manifests in a temp dir, milliseconds.
+      - name: Bundle budget self-test
+        run: node ci/check-bundle-budget.mjs --selftest
+
       # The `budgets` verdict, which had no test until it shipped a defect. lhci
       # runs there under `continue-on-error: true`, so its exit code is discarded
       # and `ci/lh-annotate.mjs` is what actually turns the job red — the whole
@@ -772,6 +781,14 @@ jobs:
 
       - run: npm ci --include=dev
       - run: npm run build
+
+      # The Vite bundle budget (TOG-5629): every emitted entrypoint against its
+      # raw + gzip ceiling in ci/bundle-budget.json. Fails the job, not a
+      # warning — an over-budget bundle is bytes on Slow 4G competing with the
+      # font LCP is waiting on (TOG-53). Runs here, right after the build, so a
+      # breach fails before the twenty minutes of Lighthouse that follow.
+      - name: Bundle budget
+        run: node ci/check-bundle-budget.mjs
 
       # Five runner processes share one host network namespace. Derive stable
       # per-runner ports so parallel Dusk/budgets jobs never bind the same socket.
