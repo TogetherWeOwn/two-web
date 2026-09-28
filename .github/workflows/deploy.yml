@@ -226,7 +226,6 @@ jobs:
 
       # Coolify returns as soon as it queues the deploy, so a 200 is not "it is
       # live". Poll the health check until the new release is actually answering.
-      # Poll the health check until the new release is actually answering.
       - name: Wait for production to answer
         env:
           PRODUCTION: ${{ steps.target.outputs.url }}
