@@ -175,7 +175,7 @@
          is, so a screen reader user stepping months is not moving blind
          through the grid.
          ------------------------------------------------------------------ --}}
-    <p class="sr-only" role="status" data-testid="events-past-status">@if ($view === 'list' && $showingPast && $past->isNotEmpty())Showing past events.@endif</p>
+    <p class="sr-only" role="status" data-testid="events-past-status">@if ($showingPast && $past->isNotEmpty())Showing past events.@endif</p>
     <p class="sr-only" role="status" data-testid="calendar-month-status">@if ($view === 'calendar'){{ $monthLabel }}@endif</p>
 
     <div wire:loading.flex
@@ -205,7 +205,6 @@
     <div wire:loading.remove.block
          wire:target="setView, previousMonth, nextMonth, showPast, clearSearch, retryLoad"
          data-testid="events-content">
-         ------------------------------------------------------------------ --}}
     @if ($emptyState === 'never')
         <div class="u-hatch mt-8 rounded-lg border border-line p-8 text-center"
              data-testid="events-empty-never">

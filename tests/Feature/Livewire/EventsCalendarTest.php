@@ -632,7 +632,7 @@ it('targets the member-started actions, not debounced typing', function () {
     $html = Livewire::test(EventsCalendar::class)->html();
 
     // One skeleton block, and its targets: the view toggle, the month
-    // steps, the past drawer, clearing a search, and TOG-5318's retry.
+    // steps, the past drawer, clearing a search, and the error state's retry.
     expect(substr_count($html, 'data-testid="events-loading"'))->toBe(1);
 
     expect($html)
@@ -657,8 +657,10 @@ it('hides the skeleton and shows the content up front, never both', function () 
 
 it('disables the action controls while their answer is in flight', function () {
     // Each control is asserted in the state that renders it: the view toggle
-    // always, the month steps in the calendar, "See past events" in the
-    // no-upcoming state, and the clear-search buttons only while searching.
+    // always, the month steps in the calendar, the retry in the error state,
+    // and the clear-search buttons only while searching. There is no past
+    // button to assert — the drawer opens through the archive link and the
+    // gap state's inline history — so `showPast` stays a skeleton target only.
     expect(Livewire::test(EventsCalendar::class)->html())
         ->toMatch('/wire:click="setView\(\'list\'\)"\s+wire:loading\.attr="disabled"\s+wire:target="setView"/')
         ->toMatch('/wire:click="setView\(\'calendar\'\)"\s+wire:loading\.attr="disabled"\s+wire:target="setView"/');
@@ -667,10 +669,10 @@ it('disables the action controls while their answer is in flight', function () {
         ->toMatch('/wire:click="previousMonth"\s+wire:loading\.attr="disabled"\s+wire:target="previousMonth"/')
         ->toMatch('/wire:click="nextMonth"\s+wire:loading\.attr="disabled"\s+wire:target="nextMonth"/');
 
-    pastEvent();
+    mockDiscordEvents([], failed: true);
 
     expect(Livewire::test(EventsCalendar::class)->html())
-        ->toMatch('/wire:click="showPast"\s+wire:loading\.attr="disabled"\s+wire:target="showPast"/');
+        ->toMatch('/wire:click="retryLoad"\s+wire:loading\.attr="disabled"\s+wire:target="retryLoad"/');
 
     expect(Livewire::test(EventsCalendar::class)->set('search', 'no such event')->html())
         ->toContain('data-testid="events-search-clear"')
@@ -728,9 +730,13 @@ it('announces the past-events reveal, and stays silent until asked', function ()
 });
 
 it('announces month steps through a polite month status', function () {
+    // Attribute- and whitespace-tolerant on purpose: the sibling strpos test
+    // proves the element renders, while a byte-exact `">…</p>"` regex missed
+    // Livewire's serialized markup (red on 112b81a). What matters here is the
+    // announced text, not the tag shape.
     $status = fn ($component) => preg_match(
-        '/data-testid="calendar-month-status">([^<]*)<\/p>/', $component->html(), $m
-    ) ? $m[1] : null;
+        '/data-testid="calendar-month-status"[^>]*>\s*(.*?)\s*<\/p>/s', $component->html(), $m
+    ) ? trim($m[1]) : null;
     $label = fn ($component) => CarbonImmutable::createFromFormat('Y-m-d', $component->get('month').'-01')
         ->format('F Y');
 
@@ -742,7 +748,7 @@ it('announces month steps through a polite month status', function () {
 
     // The list view has no month to announce.
     expect(Livewire::test(EventsCalendar::class)->html())
-        ->toMatch('/data-testid="calendar-month-status"><\/p>/');
+        ->toMatch('/data-testid="calendar-month-status"[^>]*>\s*<\/p>/s');
 });
 
 it('keeps the live regions outside the wrapper hidden mid-request', function () {
