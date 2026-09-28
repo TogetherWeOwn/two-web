@@ -96,7 +96,7 @@
                     @foreach ($featured as $item)
                         <article data-testid="featured-item" class="border-t-4 border-taste-ink pt-5 {{ $loop->first ? 'lg:col-span-7' : 'lg:col-span-5' }}">
                             @if ($item->image_url)
-                                <img src="{{ $item->image_url }}" alt="" loading="lazy" decoding="async" class="mb-6 aspect-video w-full object-cover grayscale transition duration-slow ease-out-quick hover:grayscale-0">
+                                <img src="{{ $item->image_url }}" alt="{{ $item->imageAltText() }}" loading="lazy" decoding="async" class="mb-6 aspect-video w-full object-cover grayscale transition duration-slow ease-out-quick hover:grayscale-0">
                             @endif
                             <h3 class="u-taste-display text-4xl leading-tight">
                                 @if ($item->url)
