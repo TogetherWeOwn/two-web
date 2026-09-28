@@ -28,6 +28,8 @@ use Spatie\Activitylog\Traits\LogsActivity;
  * @property int|null $capacity
  * @property EventStatus $status
  * @property string|null $discord_event_id
+ * @property CarbonImmutable|null $discord_sync_failed_at
+ * @property string|null $discord_sync_failure_code
  * @property int|null $created_by
  * @property string|null $agent_grant_id
  * @property string|null $proof_marker
@@ -46,13 +48,15 @@ class Event extends Model
      * Only dirty attributes are stored; a save that changed nothing writes no
      * row. `discord_event_id` is excluded because the bot writes it, not a
      * person, and a trail of bot bookkeeping buries the moderator actions the
-     * log exists to make reviewable.
+     * log exists to make reviewable. The sync-failure stamp is excluded with
+     * it: the bot writes both, and the stamp's home is the job's own error
+     * log line, which already carries the code and the request id.
      */
     public function getActivitylogOptions(): LogOptions
     {
         return LogOptions::defaults()
             ->logFillable()
-            ->logExcept(['discord_event_id'])
+            ->logExcept(['discord_event_id', 'discord_sync_failed_at', 'discord_sync_failure_code'])
             ->logOnlyDirty()
             ->dontSubmitEmptyLogs();
     }
@@ -74,6 +78,8 @@ class Event extends Model
         'capacity',
         'status',
         'discord_event_id',
+        'discord_sync_failed_at',
+        'discord_sync_failure_code',
         'created_by',
         'agent_grant_id',
         'proof_marker',
@@ -90,6 +96,7 @@ class Event extends Model
             'ends_at' => 'immutable_datetime',
             'capacity' => 'integer',
             'status' => EventStatus::class,
+            'discord_sync_failed_at' => 'immutable_datetime',
             'agent_version' => 'integer',
         ];
     }

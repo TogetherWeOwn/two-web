@@ -178,6 +178,14 @@
             <p class="text-xs text-ink-muted" role="status" data-testid="rsvp-syncing">
                 Saved. Syncing to Discord.
             </p>
+        @elseif ($syncFailed && $going)
+            {{-- TOG-6990: the third state. The bot refused the mirror terminally,
+                 so this will not retry until somebody changes something — but
+                 the answer is saved and counts. role="status", not alert: there
+                 is nothing to act on and nobody did anything wrong. --}}
+            <p class="text-xs text-ink-muted" role="status" data-testid="rsvp-sync-failed">
+                Saved. Discord sync didn't go through — your spot is still held.
+            </p>
         @elseif ($going)
             <p class="text-xs text-ink-muted" role="status" data-testid="rsvp-synced">
                 Synced to Discord.

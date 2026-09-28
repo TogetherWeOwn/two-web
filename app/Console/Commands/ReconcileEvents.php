@@ -76,11 +76,20 @@ class ReconcileEvents extends Command
      *
      * The job is `ShouldBeUnique` on the event key, so a still-queued write-back
      * absorbs this dispatch rather than doubling it.
+     *
+     * A terminally-refused row is neither shape, even though it looks like the
+     * first: published with `discord_event_id` null. The bot answered — no —
+     * and re-sending the same operation every ten minutes spends bot budget on
+     * an answer already given while writing a `failed_jobs` row per pass
+     * (TOG-6990). The stamp (`discord_sync_failed_at`) marks that verdict, so
+     * this pass skips the row until a genuinely new member or moderator change
+     * clears it in EventService and re-arms the next attempt.
      */
     private function resyncStaleEvents(): int
     {
         $stale = Event::query()
             ->where('status', EventStatus::Published)
+            ->whereNull('discord_sync_failed_at')
             ->where(function (Builder $query): void {
                 $query->whereNull('discord_event_id')
                     ->orWhereHas('rsvps', fn (Builder $rsvps) => $rsvps->whereNull('synced_to_discord_at'));
