@@ -21,6 +21,7 @@ use Spatie\Activitylog\Traits\LogsActivity;
  * @property string|null $body
  * @property string|null $url
  * @property string|null $image_url
+ * @property string|null $image_alt
  * @property bool $is_published
  * @property int $position
  * @property CarbonImmutable|null $starts_at
@@ -40,6 +41,7 @@ class FeaturedContent extends Model
         'body',
         'url',
         'image_url',
+        'image_alt',
         'is_published',
         'position',
         'starts_at',
@@ -69,6 +71,20 @@ class FeaturedContent extends Model
             ->logFillable()
             ->logOnlyDirty()
             ->dontSubmitEmptyLogs();
+    }
+
+    /**
+     * The alt text every featured <img> renders with. A moderator-written
+     * description wins; when the row predates the column (or the moderator
+     * cleared it) the headline stands in rather than an empty string, so a
+     * screen-reader visitor always gets something meaningful. Title is
+     * non-nullable, so this is never empty when an image is present.
+     */
+    public function imageAltText(): string
+    {
+        $alt = trim((string) ($this->getAttribute('image_alt') ?? ''));
+
+        return $alt !== '' ? $alt : (string) $this->getAttribute('title');
     }
 
     /** What the landing page shows, in the order moderators arranged it. */

@@ -114,7 +114,7 @@
                                     <p>{{ $item->body }}</p>
                                 @endif
                                 @if ($item->image_url)
-                                    <img src="{{ $item->image_url }}" alt="" loading="lazy" decoding="async">
+                                    <img src="{{ $item->image_url }}" alt="{{ $item->imageAltText() }}" loading="lazy" decoding="async">
                                 @endif
                             </article>
                         @endforeach
