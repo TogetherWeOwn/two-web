@@ -125,7 +125,10 @@ it('keeps the strict CSP on the funnel-served about page', function () {
     // read. Unlike /discord's redirect, /about answers with HTML, so it earns
     // the same strict policy as the guest homepage. The expected value is
     // pinned in full, like tests/Feature/ContentSecurityPolicyTest.php pins
-    // it — a widening has to edit an assertion, not slip past one.
+    // it — a widening has to edit an assertion, not slip past one. Keep the
+    // two in sync: both quote App\Http\Middleware\AddContentSecurityPolicy.
+    // (TOG-7095 removed `form-action` and made `upgrade-insecure-requests`
+    // https-only, so the http expectation carries neither.)
     $this->get('/about')
         ->assertOk()
         ->assertHeader('Content-Security-Policy', "default-src 'self'; "
@@ -134,9 +137,7 @@ it('keeps the strict CSP on the funnel-served about page', function () {
             ."img-src 'self' data: https:; "
             ."font-src 'self' data:; "
             .'connect-src \'self\'; '
-            ."form-action 'self'; "
             ."frame-ancestors 'none'; "
             ."base-uri 'self'; "
-            ."object-src 'none'; "
-            .'upgrade-insecure-requests');
+            ."object-src 'none'");
 });
