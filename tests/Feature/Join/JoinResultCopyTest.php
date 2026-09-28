@@ -2,6 +2,7 @@
 
 use Laravel\Socialite\Facades\Socialite;
 use Laravel\Socialite\Two\AbstractProvider;
+use Laravel\Socialite\Two\InvalidStateException;
 
 it('renders a human sentence for every join result code we can emit', function (string $code, string $role) {
     // Join-side parity with the login banner pin
@@ -43,12 +44,12 @@ it('pins denied when Discord reports access_denied and renders the banner', func
         ->assertSee($copy, escape: false);
 });
 
-it('pins expired when the token exchange throws and renders the banner', function () {
+it('pins expired when OAuth state is invalid and renders the banner', function () {
     // The Socialite driver is mocked, so no Discord credentials are needed —
     // the throw happens inside `user()` before any network call.
     $provider = Mockery::mock(AbstractProvider::class)->makePartial();
     $provider->shouldReceive('redirectUrl')->andReturnSelf();
-    $provider->shouldReceive('user')->andThrow(new RuntimeException('expired code'));
+    $provider->shouldReceive('user')->andThrow(new InvalidStateException);
     Socialite::shouldReceive('driver')->with('discord')->andReturn($provider);
 
     $this->get('/join/callback?code=stale&state=x')

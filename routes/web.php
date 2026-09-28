@@ -5,6 +5,7 @@ use App\Http\Controllers\Auth\DiscordLoginController;
 use App\Http\Controllers\Auth\StagingQaLoginController;
 use App\Http\Controllers\DesignLab\HallmarkController;
 use App\Http\Controllers\EventController;
+use App\Http\Controllers\EventFeedController;
 use App\Http\Controllers\EventIcsController;
 use App\Http\Controllers\EventPageController;
 use App\Http\Controllers\EventRssController;
@@ -141,6 +142,13 @@ Route::get('/events/{event}.ics', EventIcsController::class)->name('events.ics')
 // download above: one URL, one media type, public like the page because a
 // feed reader has no session.
 Route::get('/events.rss', EventRssController::class)->name('events.rss');
+
+// The collection as a subscribable calendar. Same `.suffix` trick as the feeds
+// above: one URL, one media type, public like the page because a calendar
+// client has no session. The per-event download keeps its own route above; this
+// is the URL a client polls, and the events page subscribe button points at its
+// `webcal://` form.
+Route::get('/events.ics', EventFeedController::class)->name('events.feed');
 
 // Discord is the only way in, so the route Laravel redirects guests to *is* the
 // Discord handoff. There is no login form to design because there is nothing to

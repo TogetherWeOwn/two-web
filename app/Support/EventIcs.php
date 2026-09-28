@@ -6,7 +6,8 @@ use App\Enums\EventStatus;
 use App\Models\Event;
 
 /**
- * One event as an RFC 5545 `VCALENDAR` download.
+ * One event as an RFC 5545 `VCALENDAR` download, or the whole upcoming
+ * collection as one subscribable `VCALENDAR` (`collection()`).
  *
  * This is a pure builder over the same `Event` model the JSON API and the
  * shareable page read — no query, no auth, no HTTP. The controller owns the
@@ -23,11 +24,58 @@ final class EventIcs
 {
     public static function for(Event $event): string
     {
+        return self::calendar(self::vevent($event));
+    }
+
+    /**
+     * The collection as one `VCALENDAR` with a `VEVENT` per event — the body
+     * behind `GET /events.ics`, which calendar clients poll as a subscription.
+     * Same per-event contracts as the single download (UTC instants, stable
+     * `UID`s, 30-minute `VALARM`); the controller owns the scope (published
+     * plus cancelled upcoming — cancelled included, unlike RSS, so a client
+     * that already synced the entry retracts it).
+     *
+     * Takes any iterable of `Event` models — including the Eloquent collection
+     * `->get()` returns, which is *not* an `Illuminate\Support\Collection`.
+     *
+     * @param  iterable<int, Event>  $events
+     */
+    public static function collection(iterable $events): string
+    {
+        $lines = [];
+
+        foreach ($events as $event) {
+            array_push($lines, ...self::vevent($event));
+        }
+
+        return self::calendar($lines);
+    }
+
+    /** Wrap pre-built inner lines in the `VCALENDAR` envelope. */
+    /** @param  array<int, string>  $inner */
+    private static function calendar(array $inner): string
+    {
+        $lines = array_merge(
+            [
+                'BEGIN:VCALENDAR',
+                'VERSION:2.0',
+                'PRODID:-//TogetherWeOwn//Events//EN',
+                'METHOD:PUBLISH',
+            ],
+            $inner,
+            ['END:VCALENDAR'],
+        );
+
+        // CRLF, not PHP_EOL: RFC 5545 §3.1 names the line break, and a download
+        // built on a Linux box is opened on whatever the member uses.
+        return implode("\r\n", array_map(self::fold(...), $lines))."\r\n";
+    }
+
+    /** One event as `VEVENT` lines, without the `VCALENDAR` envelope. */
+    /** @return  array<int, string> */
+    private static function vevent(Event $event): array
+    {
         $lines = [
-            'BEGIN:VCALENDAR',
-            'VERSION:2.0',
-            'PRODID:-//TogetherWeOwn//Events//EN',
-            'METHOD:PUBLISH',
             'BEGIN:VEVENT',
             'UID:'.self::uid($event),
             'DTSTAMP:'.now('UTC')->format('Ymd\THis\Z'),
@@ -51,11 +99,8 @@ final class EventIcs
         $lines[] = 'DESCRIPTION:'.self::text($event->title);
         $lines[] = 'END:VALARM';
         $lines[] = 'END:VEVENT';
-        $lines[] = 'END:VCALENDAR';
 
-        // CRLF, not PHP_EOL: RFC 5545 §3.1 names the line break, and a download
-        // built on a Linux box is opened on whatever the member uses.
-        return implode("\r\n", array_map(self::fold(...), $lines))."\r\n";
+        return $lines;
     }
 
     /**
