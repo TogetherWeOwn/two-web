@@ -38,15 +38,18 @@ test('the execCommand fallback copies when there is no async clipboard', functio
     $this->browse(function (Browser $browser) use ($member) {
         $browser->loginAs($member)
             ->visit(route('profiles.show', $member))
-            ->waitFor('[data-testid="profile-copy-link"]')
-            // No secure-context clipboard here (plain http, old browser), and a
-            // stubbed execCommand that records the call instead of touching a
-            // real clipboard headless Chrome may or may not grant.
-            ->script([
-                "Object.defineProperty(window.navigator, 'clipboard', {value: undefined, configurable: true});",
-                'window.__fallbackCalls = []; document.execCommand = function (cmd) { window.__fallbackCalls.push(cmd); return true; };',
-            ])
-            ->click('[data-testid="profile-copy-link"]')
+            ->waitFor('[data-testid="profile-copy-link"]');
+
+        // No secure-context clipboard here (plain http, old browser), and a
+        // stubbed execCommand that records the call instead of touching a
+        // real clipboard headless Chrome may or may not grant. script()
+        // returns the results array, not the browser, so it stands alone.
+        $browser->script([
+            "Object.defineProperty(window.navigator, 'clipboard', {value: undefined, configurable: true});",
+            'window.__fallbackCalls = []; document.execCommand = function (cmd) { window.__fallbackCalls.push(cmd); return true; };',
+        ]);
+
+        $browser->click('[data-testid="profile-copy-link"]')
             ->waitUntil("window.__fallbackCalls.length === 1 && window.__fallbackCalls[0] === 'copy'")
             ->waitForText('Profile link copied.');
     });
@@ -58,13 +61,15 @@ test('a failed copy says so instead of confirming', function () {
     $this->browse(function (Browser $browser) use ($member) {
         $browser->loginAs($member)
             ->visit(route('profiles.show', $member))
-            ->waitFor('[data-testid="profile-copy-link"]')
-            // Both paths dead: no async clipboard, execCommand refuses.
-            ->script([
-                "Object.defineProperty(window.navigator, 'clipboard', {value: undefined, configurable: true});",
-                'document.execCommand = function () { return false; };',
-            ])
-            ->click('[data-testid="profile-copy-link"]')
+            ->waitFor('[data-testid="profile-copy-link"]');
+
+        // Both paths dead: no async clipboard, execCommand refuses.
+        $browser->script([
+            "Object.defineProperty(window.navigator, 'clipboard', {value: undefined, configurable: true});",
+            'document.execCommand = function () { return false; };',
+        ]);
+
+        $browser->click('[data-testid="profile-copy-link"]')
             ->waitForText("That link didn't copy");
     });
 });
