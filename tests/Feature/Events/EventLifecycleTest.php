@@ -176,9 +176,9 @@ it('shares one member-safe limit across HTTP RSVP writes and recovers when it ex
     }
 
     $limited = $this->actingAs($this->member)
-        ->deleteJson(route('events.rsvp.destroy', $event))
-        ->assertStatus(429)
-        ->assertHeader('Retry-After', RsvpRateLimit::DECAY_SECONDS);
+        ->deleteJson(route('events.rsvp.destroy', $event));
+
+    assertThrottleEnvelope($limited, RsvpRateLimit::DECAY_SECONDS);
 
     expect((int) $limited->headers->get('Retry-After'))->toBeGreaterThan(0);
 

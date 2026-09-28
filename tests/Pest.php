@@ -5,6 +5,11 @@ use Illuminate\Foundation\Testing\RefreshDatabase;
 use Tests\DuskTestCase;
 use Tests\TestCase;
 
+// Shared cross-file assertions (TOG-6788: the one 429 assertion every
+// throttled route uses). Required here rather than autoloaded so the helpers
+// exist whichever test file runs first.
+require_once __DIR__.'/Support/ThrottleEnvelope.php';
+
 pest()->extend(TestCase::class)
     ->use(RefreshDatabase::class)
     ->in('Feature');

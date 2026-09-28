@@ -3,9 +3,12 @@
 use App\Http\Middleware\AddContentSecurityPolicy;
 use App\Http\Middleware\CompressStaticAssets;
 use App\Http\Middleware\RecordMemberDataAccess;
+use App\Support\ThrottleEnvelope;
 use Illuminate\Foundation\Application;
 use Illuminate\Foundation\Configuration\Exceptions;
 use Illuminate\Foundation\Configuration\Middleware;
+use Illuminate\Http\Exceptions\ThrottleRequestsException;
+use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Route;
 
 return Application::configure(basePath: dirname(__DIR__))
@@ -72,5 +75,12 @@ return Application::configure(basePath: dirname(__DIR__))
         ]);
     })
     ->withExceptions(function (Exceptions $exceptions): void {
-        //
+        // One 429 shape for every throttle (TOG-6788): the auth callbacks, the
+        // RSVP writes and the machine ingress all throw
+        // ThrottleRequestsException, but the framework's default rendering
+        // answers JSON with a stack trace when debug is on and HTML with an
+        // unbranded page. ThrottleEnvelope normalises both.
+        $exceptions->render(
+            fn (ThrottleRequestsException $exception, Request $request) => ThrottleEnvelope::render($request, $exception)
+        );
     })->create();

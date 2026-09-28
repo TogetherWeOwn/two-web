@@ -47,12 +47,14 @@ it('returns a 429 envelope when the RSVP write budget is hammered', function () 
     }
 
     // Alternating verbs must not multiply the budget: the 13th write 429s
-    // even though it is a DELETE on a different verb, with the limiter's
-    // envelope (Retry-After plus the rate-limit headers, no stack).
-    $this->actingAs($member)
-        ->deleteJson(route('events.rsvp.destroy', $events[0]))
-        ->assertStatus(429)
-        ->assertHeader('Retry-After', RsvpRateLimit::DECAY_SECONDS)
+    // even though it is a DELETE on a different verb, with the shared
+    // throttle envelope (TOG-6788) plus the limiter's rate-limit headers.
+    $throttled = $this->actingAs($member)
+        ->deleteJson(route('events.rsvp.destroy', $events[0]));
+
+    assertThrottleEnvelope($throttled, RsvpRateLimit::DECAY_SECONDS);
+
+    $throttled
         ->assertHeader('X-RateLimit-Limit', (string) RsvpRateLimit::MAX_ATTEMPTS)
         ->assertHeader('X-RateLimit-Remaining', '0');
 
