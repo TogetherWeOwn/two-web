@@ -181,6 +181,19 @@
             </p>
         @endif
 
+        @if ($rateLimitedMessage !== null)
+            {{-- TOG-7976: the throttle wait. role="status", not alert: a throttle is
+                 temporary, not a failure that interrupts (CM spec in TOG-7928
+                 `copy` doc). Beside the control with the button enabled, like
+                 rsvp-failed below — never disabling or replacing the control. --}}
+            <p class="flex items-start gap-1.5 text-sm text-ink-muted" role="status" data-testid="rsvp-rate-limited">
+                <svg class="size-4 shrink-0 mt-0.5" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+                    <path d="M8 1.5a6.5 6.5 0 1 0 0 13 6.5 6.5 0 0 0 0-13Zm.75 3.75a.75.75 0 0 0-1.5 0v3.5a.75.75 0 0 0 1.5 0V5.25ZM8 11.5a.9.9 0 1 0 0-1.8.9.9 0 0 0 0 1.8Z"/>
+                </svg>
+                <span>{{ $rateLimitedMessage }}</span>
+            </p>
+        @endif
+
         @if ($failed)
             {{-- role="alert": this interrupted something they were doing, unlike the
                  confirmation above (ACCESSIBILITY.md 4.1.3). --}}
