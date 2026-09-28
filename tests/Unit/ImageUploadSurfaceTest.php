@@ -2,7 +2,7 @@
 
 use App\Http\Requests\StoreEventRequest;
 use App\Http\Requests\UpdateEventRequest;
-use App\Http\Requests\UpdateProfileRequest;
+use App\Livewire\MemberProfile;
 use App\Models\Event;
 use App\Models\Profile;
 use Illuminate\Support\Str;
@@ -18,9 +18,10 @@ use Illuminate\Support\Str;
 //   rule (pinned below).
 // - `users.avatar` is written only from `$discordUser->getAvatar()` at
 //   login/join — a `https://cdn.discordapp.com/...` template filled from
-//   Discord's own API response, never from member input. A forged `avatar`
-//   param on PATCH /members/{user} is already pinned ignored in
-//   ProfileUpdateValidationTest ('ignores a forged avatar...').
+//   Discord's own API response, never from member input. (TOG-8440: the PATCH
+//   writer that test used to forge through is deleted; the surviving pin is
+//   'ignores a forged avatar...' in tests/Feature/Livewire/MemberProfileTest,
+//   where a save leaves the user row untouched.)
 // - FeaturedContent.image_url is a TextInput->url() string rendered through
 //   Blade {{ }} escaping. `Str::isUrl` rejects javascript:/data: schemes
 //   (pinned below); it still accepts any https URL including .svg and ftp —
@@ -105,7 +106,7 @@ it('has no file-upload machinery in app code', function () use ($appCode, $uploa
 it('accepts no image or file input on the profile write path', function () {
     $forbidden = ['avatar', 'image', 'cover', 'file', 'photo', 'picture', 'upload'];
 
-    $ruleKeys = array_keys((new UpdateProfileRequest)->rules());
+    $ruleKeys = array_keys(MemberProfile::validationRules());
 
     expect(array_intersect($ruleKeys, $forbidden))->toBe([]);
 

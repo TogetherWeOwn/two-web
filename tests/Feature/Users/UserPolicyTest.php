@@ -5,7 +5,8 @@ use Illuminate\Support\Facades\Gate;
 
 // Same shape as EventPolicyTest: the rule, not the caller. `view` is the auth
 // boundary (ProfileController and MemberProfile both ask it); `updateProfile`
-// is the self-only rule (MemberProfile and UpdateProfileRequest both ask it).
+// is the self-only rule (MemberProfile asks it — TOG-8440 deleted the PATCH
+// writer that used to ask it too).
 
 beforeEach(function () {
     $this->moderator = User::factory()->create(['is_moderator' => true]);

@@ -51,7 +51,9 @@ it('carries throttle middleware on every app-owned write route', function () {
     // Guard against the filter failing open: if the App\ prefix ever stops
     // matching (namespace rename), the list below would be [] == [] and green
     // for nothing. These names must exist first.
-    foreach (['logout', 'events.store', 'events.update', 'events.publish', 'events.cancel', 'profiles.update', 'events.rsvp.update', 'events.rsvp.destroy'] as $name) {
+    // TOG-8440: `profiles.update` (PATCH /members/{user}) is deleted — the
+    // Livewire form is the single writer — so it leaves this guard list.
+    foreach (['logout', 'events.store', 'events.update', 'events.publish', 'events.cancel', 'events.rsvp.update', 'events.rsvp.destroy'] as $name) {
         expect(Route::getRoutes()->getByName($name))
             ->not->toBeNull("route {$name} is missing — the coverage filter may be failing open");
     }
