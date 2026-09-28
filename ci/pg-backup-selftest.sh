@@ -36,6 +36,14 @@
 #   proof-missing-dump    explicit path that is absent  -> exit 1, names it
 #   proof-no-dump         empty backups/, no argument   -> exit 1, says run backup
 #   proof-no-container    compose service down          -> exit 1, says compose up
+#   rotate-dry-run        8 dailies, --dry-run          -> exit 0, keeps newest 7,
+#                         names the 8th for delete, removes nothing
+#   rotate-real           8 dailies                     -> exit 0, oldest gone, 7 kept
+#   rotate-weekly         5 weeklies                    -> keeps newest 4, deletes 1
+#   rotate-no-docker      rotate runs with no docker on PATH (pure files)
+#   promote-weekly        promotes newest daily to a two-web-weekly-*.dump
+#   copy-dest             BACKUP_COPY_DEST set          -> finished dump copied there
+#   copy-dest-missing     BACKUP_COPY_DEST absent       -> exit 1 naming it, backup kept
 #
 # No network, no docker, no Postgres. Runs anywhere bash lives.
 #
@@ -369,10 +377,147 @@ else
   printf '%s\n' "$out" | sed 's/^/        /'
 fi
 
+printf '\n\033[1m==> Rotation keeps newest 7 dailies + 4 weeklies, and copies offsite\033[0m\n'
+
+# Eight dailies, staggered mtimes so newest-first order is unambiguous.
+# Rotation reads mtime, not filename timestamps — the selftest sets mtimes
+# explicitly, so a change to name-parsing instead of mtime order fails here.
+seed_dailies() {
+  local dir="$1" i=1
+  mkdir -p "$dir/backups"
+  for d in 01 02 03 04 05 06 07 08; do
+    printf "dump-%s" "$d" > "$dir/backups/two-web-202609${d}T030000Z.dump"
+    touch -d "2026-09-${d} 03:00 UTC" "$dir/backups/two-web-202609${d}T030000Z.dump"
+    i=$((i + 1))
+  done
+}
+
+# Rotation without docker anywhere on PATH: rotate and promote-weekly are
+# pure file operations. If they ever grow a docker dependency (e.g. by
+# calling the guard at top level again), this case goes red — the production
+# cron and the CI proof run with no docker, and must keep working.
+run_bare() {
+  local dir="$1"; shift
+  ( cd "$dir" && env -i PATH="/usr/bin:/bin" HOME="$HOME" TMPDIR="${TMPDIR:-/tmp}" ./bin/pg-backup.sh "$@" 2>&1 )
+}
+
+# The acceptance case: dry-run over 8 dailies keeps the newest 7, names the
+# 8th (oldest) for delete, and removes nothing.
+dir="$(fixture rotatedry)"
+seed_dailies "$dir"
+out="$(run_bare "$dir" rotate --dry-run)"; status=$?
+if [ "$status" -eq 0 ] \
+    && [ "$(ls "$dir"/backups/*.dump | wc -l | tr -d ' ')" -eq 8 ] \
+    && grep -qF "delete: backups/two-web-20260901T030000Z.dump" <<< "$out" \
+    && grep -qF "keep: backups/two-web-20260908T030000Z.dump" <<< "$out" \
+    && grep -qF "Nothing removed" <<< "$out"; then
+  pass "rotate-dry-run"
+else
+  fail "rotate-dry-run: expected exit 0, 8 files intact, keep newest 7 + delete oldest (got ${status})"
+  printf '%s\n' "$out" | sed 's/^/        /'
+fi
+
+# Same fixture, for real: the oldest is gone, 7 remain.
+dir="$(fixture rotatereal)"
+seed_dailies "$dir"
+out="$(run_bare "$dir" rotate 2>&1)"; status=$?
+if [ "$status" -eq 0 ] \
+    && [ ! -f "$dir/backups/two-web-20260901T030000Z.dump" ] \
+    && [ "$(ls "$dir"/backups/*.dump | wc -l | tr -d ' ')" -eq 7 ] \
+    && grep -qF "delete: backups/two-web-20260901T030000Z.dump" <<< "$out"; then
+  pass "rotate-real"
+else
+  fail "rotate-real: expected exit 0 with the oldest dump deleted and 7 kept (got ${status})"
+  printf '%s\n' "$out" | sed 's/^/        /'
+fi
+
+# Five weeklies keep the newest 4. Weeklies never count against the daily
+# quota: with 8 dailies + 5 weeklies present, the run must keep the newest 7
+# dailies and the newest 4 weeklies, deleting exactly the oldest of each.
+# The daily count uses the structural glob two-web-2*.dump (dailies start
+# with a year digit by the script's own naming; weeklies have `weekly-`
+# there and can never match) — filtering `ls` output through grep would
+# match the fixture path itself, not just the filenames.
+dir="$(fixture rotateboth)"
+seed_dailies "$dir"
+i=1
+for d in 21 22 23 24 25; do
+  printf "weekly-%s" "$d" > "$dir/backups/two-web-weekly-202609${d}T030000Z.dump"
+  touch -d "2026-09-${d} 03:00 UTC" "$dir/backups/two-web-weekly-202609${d}T030000Z.dump"
+done
+out="$(run_bare "$dir" rotate 2>&1)"; status=$?
+if [ "$status" -eq 0 ] \
+    && [ ! -f "$dir/backups/two-web-weekly-20260921T030000Z.dump" ] \
+    && [ "$(ls "$dir"/backups/two-web-weekly-*.dump | wc -l | tr -d ' ')" -eq 4 ] \
+    && [ "$(ls "$dir"/backups/two-web-2*.dump 2>/dev/null | wc -l | tr -d ' ')" -eq 7 ]; then
+  pass "rotate-weekly"
+else
+  fail "rotate-weekly: expected the oldest weekly gone, 4 weeklies + 7 dailies kept (got ${status})"
+  printf '%s\n' "$out" | sed 's/^/        /'
+fi
+
+# Rotate works with no docker at all (asserted by run_bare above — every
+# rotation case in this section runs docker-free). This case names it, so a
+# future reader knows the bare PATH is the point, not an accident.
+dir="$(fixture rotatenodocker)"
+seed_dailies "$dir"
+out="$(run_bare "$dir" rotate --dry-run 2>&1)"; status=$?
+if [ "$status" -eq 0 ] && grep -qF "Nothing removed" <<< "$out"; then
+  pass "rotate-no-docker"
+else
+  fail "rotate-no-docker: rotate --dry-run must succeed with no docker on PATH (got ${status})"
+  printf '%s\n' "$out" | sed 's/^/        /'
+fi
+
+# promote-weekly copies the newest daily under a weekly name; the daily stays.
+dir="$(fixture promote)"
+seed_dailies "$dir"
+out="$(run_bare "$dir" promote-weekly 2>&1)"; status=$?
+weekly="$(ls -t "$dir"/backups/two-web-weekly-*.dump 2>/dev/null | head -n 1 || true)"
+if [ "$status" -eq 0 ] && [ -n "$weekly" ] \
+    && cmp -s "$dir/backups/two-web-20260908T030000Z.dump" "$weekly" \
+    && [ -f "$dir/backups/two-web-20260908T030000Z.dump" ]; then
+  pass "promote-weekly"
+else
+  fail "promote-weekly: expected a weekly copy of the newest daily, daily intact (got ${status})"
+  printf '%s\n' "$out" | sed 's/^/        /'
+fi
+
+# BACKUP_COPY_DEST set to a directory: the backup lands in both places. The
+# backup itself runs against the stub (it needs docker); the assertion is on
+# the copy existing with identical content.
+dir="$(fixture copydest)"
+mkdir -p "$dir/offsite"
+out="$(cd "$dir" && PATH="$STUB_DIR:$PATH" STUB_LOG="$dir/docker.log" \
+  BACKUP_COPY_DEST="$dir/offsite" ./bin/pg-backup.sh backup 2>&1)"; status=$?
+dump="$(ls -t "$dir"/backups/two-web-*.dump 2>/dev/null | head -n 1 || true)"
+copied="$(ls -t "$dir"/offsite/*.dump 2>/dev/null | head -n 1 || true)"
+if [ "$status" -eq 0 ] && [ -n "$dump" ] && [ -n "$copied" ] \
+    && cmp -s "$dump" "$copied" && grep -qF "copied" <<< "$out"; then
+  pass "copy-dest"
+else
+  fail "copy-dest: expected exit 0 with an identical copy in BACKUP_COPY_DEST (got ${status})"
+  printf '%s\n' "$out" | sed 's/^/        /'
+fi
+
+# BACKUP_COPY_DEST pointing nowhere: loud failure, backup kept. A silent
+# copy that never lands is the failure this check exists for — an unmounted
+# offsite volume must page the operator, not pass.
+dir="$(fixture copymissing)"
+out="$(cd "$dir" && PATH="$STUB_DIR:$PATH" STUB_LOG="$dir/docker.log" \
+  BACKUP_COPY_DEST="$dir/no-such-mount" ./bin/pg-backup.sh backup 2>&1)"; status=$?
+dump="$(ls -t "$dir"/backups/two-web-*.dump 2>/dev/null | head -n 1 || true)"
+if [ "$status" -eq 1 ] && grep -qF "no-such-mount" <<< "$out" && [ -n "$dump" ]; then
+  pass "copy-dest-missing"
+else
+  fail "copy-dest-missing: expected exit 1 naming the missing dest with the backup kept (got ${status})"
+  printf '%s\n' "$out" | sed 's/^/        /'
+fi
+
 printf '\n'
 if [ "$rc" -ne 0 ]; then
   printf '\033[31mthe backup script does not do what it claims. Fix it before trusting a dump.\033[0m\n'
 else
-  printf '\033[1m%d/%d — the backup script refuses, backs up, and proves, for the stated reasons.\033[0m\n' "$n" "$n"
+  printf '\033[1m%d/%d — the backup script refuses, backs up, proves, rotates, and copies, for the stated reasons.\033[0m\n' "$n" "$n"
 fi
 exit "$rc"
