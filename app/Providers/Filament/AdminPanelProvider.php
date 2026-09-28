@@ -2,6 +2,7 @@
 
 namespace App\Providers\Filament;
 
+use App\Filament\Widgets\JoinFunnelStats;
 use App\Http\Middleware\AddContentSecurityPolicy;
 use App\Http\Middleware\RecordMemberDataAccess;
 use Filament\FontProviders\LocalFontProvider;
@@ -98,6 +99,7 @@ class AdminPanelProvider extends PanelProvider
             ])
             ->widgets([
                 AccountWidget::class,
+                JoinFunnelStats::class,
             ])
             ->middleware([
                 EncryptCookies::class,
