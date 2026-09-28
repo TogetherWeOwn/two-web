@@ -104,6 +104,19 @@ class RsvpButton extends Component
             // success: on failure the button stays put, so focus is already
             // where it belongs.
             $this->dispatch('rsvp-state-changed')->self();
+            // TOG-7966: the going-count badge lives outside this component, so
+            // it never re-renders with it. Broadcast globally (not self) so the
+            // sibling GoingCount for this event re-reads the aggregate. The
+            // viewer state tells the badge what to announce politely.
+            $this->dispatch(
+                'going-count-updated',
+                eventKey: $this->event->event_key,
+                viewerState: match ($answer) {
+                    RsvpStatus::Going => 'going',
+                    RsvpStatus::Waitlisted => 'waitlisted',
+                    default => 'other',
+                },
+            );
         } catch (EventAtCapacityException) {
             $this->full = true;
         } catch (EventNotOpenException) {
@@ -142,6 +155,13 @@ class RsvpButton extends Component
             // TOG-6956: same swap in reverse — the withdraw control is replaced
             // by the "I'm in" button. Refocus after the successful round trip.
             $this->dispatch('rsvp-state-changed')->self();
+            // TOG-7966: the badge outside this component must follow the write
+            // down as well as up — withdraw re-reads the aggregate too.
+            $this->dispatch(
+                'going-count-updated',
+                eventKey: $this->event->event_key,
+                viewerState: 'none',
+            );
         } catch (ThrottleRequestsException $exception) {
             throw $exception;
         } catch (Throwable) {
