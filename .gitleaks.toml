@@ -70,4 +70,19 @@ regexes = [
   # not match this, so `discord-bot-token` above still fires. `=>` is in the
   # separator list because these land in PHP arrays, not just env files.
   '''(?i)(DISCORD|GUILD|CHANNEL|ROLE|APPLICATION|CLIENT|USER|CATEGORY)_IDS?['"]?\s*(?:=>|[:=])\s*['"]?[0-9]{17,20}['"]?''',
+
+  # --- added 2026-09-28 (TOG-6928) ---
+  #
+  # `config()->set('services.discord.guild_id', '32647...')` in
+  # tests/Feature/Join/JoinWidgetFallbackTest.php at 798b180: the same public
+  # guild id as above, but through the `config()->set(key, value)` comma form
+  # instead of the `=>` array shape, so the TWO-83 entry cannot match it. The
+  # history scan (`gitleaks git --log-opts=HEAD`) sees that superseded commit
+  # even though f475277 replaced the fixture with a fake, so de-literal alone
+  # can never clear it — the allowlist must cover the old line too.
+  #
+  # Same narrowness rules: quoted dotted `services.discord.*_id` key, comma
+  # separator, bare digit run, closing quote. A bot token (base64 with dots)
+  # does not match.
+  '''services\.discord\.[a-z_]*_id['"]\s*,\s*['"][0-9]{17,20}['"]''',
 ]

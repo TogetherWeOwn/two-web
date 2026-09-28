@@ -21,17 +21,21 @@
 
     @auth
         @if (! $open)
-            {{-- Cancelled or over. Says which, in words. --}}
+            {{-- Cancelled or over. Says which, in words. role="status": a
+                 cancellation that lands while the member is looking re-renders
+                 here, and that change has to be announced (TOG-7332). --}}
             <p class="inline-flex items-center gap-1.5 rounded-sm px-2 py-0.5 text-xs font-medium
                       bg-raised text-ink-muted border border-line self-start"
-               data-testid="rsvp-closed">
+               role="status" data-testid="rsvp-closed">
                 {{ $this->event->status === \App\Enums\EventStatus::Cancelled ? 'Cancelled' : ($this->event->status === \App\Enums\EventStatus::Draft ? 'Not published yet' : 'This one has been and gone') }}
             </p>
 
         @elseif ($full || $atCapacity)
             {{-- Colour is not carrying this: there is an icon and there are words,
-                 and the cap is named so the number is not a mystery. --}}
-            <p class="flex items-start gap-1.5 text-sm text-alert" data-testid="event-full">
+                 and the cap is named so the number is not a mystery.
+                 role="status": the race loser lands here after clicking, so the
+                 swap has to be announced politely, not as an alert (TOG-7332). --}}
+            <p class="flex items-start gap-1.5 text-sm text-alert" role="status" data-testid="event-full">
                 <svg class="size-4 shrink-0 mt-0.5" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
                     <path d="M8 1.5 15 14H1L8 1.5Zm0 4a.75.75 0 0 0-.75.75v3a.75.75 0 0 0 1.5 0v-3A.75.75 0 0 0 8 5.5Zm0 6.75a.9.9 0 1 0 0-1.8.9.9 0 0 0 0 1.8Z"/>
                 </svg>
@@ -84,13 +88,17 @@
                            disabled:opacity-100
                            transition-colors duration-fast ease-out-quick self-start">
                 <span class="size-4 shrink-0" aria-hidden="true" wire:loading.remove wire:target="rsvp"></span>
+                {{-- Hidden up front: Livewire only toggles loading elements during a
+                     request and never at init, so without this the spinner and the
+                     loading copy render beside the default copy (TOG-6351). The
+                     directive sets style.display itself mid-request, overriding this. --}}
                 <svg class="size-4 shrink-0 animate-spin" viewBox="0 0 16 16" fill="none"
-                     aria-hidden="true" wire:loading wire:target="rsvp">
+                     aria-hidden="true" wire:loading wire:target="rsvp" style="display: none">
                     <circle cx="8" cy="8" r="6" stroke="currentColor" stroke-opacity="0.3" stroke-width="2"/>
                     <path d="M14 8a6 6 0 0 0-6-6" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
                 </svg>
                 <span wire:loading.remove wire:target="rsvp">I'm in</span>
-                <span wire:loading wire:target="rsvp" aria-busy="true">Saving…</span>
+                <span wire:loading wire:target="rsvp" aria-busy="true" style="display: none">Saving…</span>
             </button>
         @endif
 

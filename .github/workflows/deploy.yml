@@ -134,3 +134,17 @@ jobs:
           done
           echo "::error title=Staging never answered::Deploy was queued but ${STAGING}/up did not answer within 10 minutes. The site is down; roll back from the Coolify dashboard."
           exit 1
+
+      # Post-deploy smoke check (TOG-7285): asserts /up, /discord, / and
+      # /events.json on the live staging URL via bin/smoke-staging.sh. No `if:`
+      # here either — a deploy that is never smoke-checked must fail loudly,
+      # not pass quietly. The script exits non-zero on any check failure, which
+      # fails this job. CF Access service-token secrets are passed through when
+      # set so the probe reaches the app; without them the script reports the
+      # Access challenge as a FAIL rather than misreading it.
+      - name: Smoke-check staging
+        env:
+          STAGING: ${{ steps.target.outputs.url }}
+          CF_ACCESS_CLIENT_ID: ${{ secrets.CF_ACCESS_CLIENT_ID }}
+          CF_ACCESS_CLIENT_SECRET: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}
+        run: ./bin/smoke-staging.sh "$STAGING"

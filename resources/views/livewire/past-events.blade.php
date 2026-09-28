@@ -45,6 +45,12 @@
         </ul>
 
         @if ($events->hasPages())
+            {{-- TOG-7332: pagination swaps the list without reloading, so the
+                 page change has to be announced or a screen reader user is
+                 moving blind through the archive. --}}
+            <p class="sr-only" role="status" data-testid="past-events-page-status">
+                Showing page {{ $events->currentPage() }} of {{ $events->lastPage() }}.
+            </p>
             <nav class="mt-8" aria-label="Past events pages" data-testid="past-events-pagination">
                 {{ $events->links() }}
             </nav>
