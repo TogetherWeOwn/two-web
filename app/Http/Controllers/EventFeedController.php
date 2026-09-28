@@ -5,6 +5,7 @@ namespace App\Http\Controllers;
 use App\Enums\EventStatus;
 use App\Models\Event;
 use App\Support\EventIcs;
+use Illuminate\Http\Request;
 use Illuminate\Http\Response;
 use Illuminate\Support\Facades\Gate;
 
@@ -25,7 +26,7 @@ use Illuminate\Support\Facades\Gate;
  */
 final class EventFeedController
 {
-    public function __invoke(): Response
+    public function __invoke(Request $request): Response
     {
         Gate::authorize('viewAny', Event::class);
 
@@ -35,7 +36,7 @@ final class EventFeedController
             ->orderBy('starts_at')
             ->get();
 
-        return response(EventIcs::collection($events), 200, [
+        $response = response(EventIcs::collection($events), 200, [
             'Content-Type' => 'text/calendar; charset=utf-8',
             // `inline`, not `attachment`: this URL is for subscribing, not for
             // saving a file, and a plain click should not force a download
@@ -43,5 +44,15 @@ final class EventFeedController
             'Content-Disposition' => 'inline; filename="events.ics"',
             'Cache-Control' => 'public, max-age=300',
         ]);
+
+        // Same strong-validator-over-bytes pattern as the RSS feed (`TOG-7330`):
+        // `DTSTAMP` rides the content clock (`EventIcs` stamps the row's
+        // `updated_at`), so unchanged content is byte-identical and a repeat
+        // poll with `If-None-Match` answers 304 with no body.
+        $content = $response->getContent();
+        $response->setEtag(hash('sha256', $content === false ? '' : $content));
+        $response->isNotModified($request);
+
+        return $response;
     }
 }
