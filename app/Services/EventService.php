@@ -278,6 +278,22 @@ class EventService
             return;
         }
 
+        // A genuinely new member or moderator change re-arms a terminally-refused
+        // row (TOG-6990): the stamp answered an older operation, and the dispatch
+        // below carries a new one the bot has not ruled on. Cleared in the outer
+        // write, never inside the unique-lock savepoint below — a failed clear
+        // there would read as "no fresh lock" and skip silently. If the write
+        // rolls back, the stamp stays with it, which is correct: the change
+        // never happened. A lock-skip keeps the clear: the already-queued job
+        // re-reads the row and either lands (clearing the stamp itself) or is
+        // refused again (re-stamping it), so the verdict is always re-confirmed.
+        if ($event->discord_sync_failed_at !== null) {
+            $event->forceFill([
+                'discord_sync_failed_at' => null,
+                'discord_sync_failure_code' => null,
+            ])->save();
+        }
+
         try {
             DB::transaction(function () use ($event): void {
                 SyncEventToDiscord::dispatch($event->event_key)->afterCommit();
