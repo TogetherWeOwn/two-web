@@ -74,3 +74,43 @@
    the paginator and any packaged Blade component render unstyled. */
 @source '../../vendor/laravel/framework/src/Illuminate/Pagination/resources/views/*.blade.php';
 @source '../../storage/framework/views/*.php';
+
+/* TOG-6932: the public focus pass. The vendored two.css focus treatment is
+   correct on the dark system it was designed for — a near-white ring at
+   17.5:1 on canvas — but the homepage renders on ledger paper, where the same
+   ring measures 1.05:1 and is invisible (WCAG 2.4.13 needs 3:1 against
+   adjacent colours). This layer overrides it per scheme with each scheme's
+   own ink, which two-design's contrast gate already pins at 15.2:1
+   (ledger) and 14.5:1 (taste) on its paper.
+
+   Lives here, not in two.css: that file is vendored from two-design and
+   digest-pinned by tests/Unit/VendoredTokensTest.php. A dark-ground page keeps
+   the vendored ring untouched. */
+:where(.bg-ledger-paper, .bg-taste-paper) :where(a, button, input, select, textarea, summary, [tabindex]):focus-visible {
+    outline-color: var(--color-ledger-ink);
+}
+
+.bg-taste-paper :where(a, button, input, select, textarea, summary, [tabindex]):focus-visible {
+    outline-color: var(--color-taste-ink);
+}
+
+/* The skip link. `sr-only focus:not-sr-only` reveals it on keyboard focus,
+   but revealed as bare text on the page ground it is a 1.4:1 smear on ledger
+   paper; nobody can read the control they just found. This makes the revealed
+   state an opaque pill: canvas fill, near-white text (16.7:1 on the fill), and
+   the fill itself at 16.6:1 on ledger paper / 17.4:1 on taste paper, so the
+   pill reads as one control on every public page. The ledger-ink outline
+   (15.2:1 on the pill) marks it focused; `z-index` keeps it above the hero. */
+a[href='#main']:focus-visible {
+    background-color: var(--color-canvas);
+    color: var(--color-ink);
+    outline: 2px solid var(--color-ledger-ink);
+    outline-offset: 2px;
+    border-radius: var(--radius-sm);
+    padding: 0.5rem 1rem;
+    z-index: 50;
+}
+
+.bg-taste-paper a[href='#main']:focus-visible {
+    outline-color: var(--color-taste-ink);
+}

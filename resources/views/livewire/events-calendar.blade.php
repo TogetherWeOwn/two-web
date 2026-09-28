@@ -299,7 +299,13 @@
             </button>
         </div>
 
+        {{-- TOG-6932: a tabindex="0" scroll region is a tab stop on every visit,
+             keyboard or not. `role="region"` keeps the label; the region only
+             joins the tab order when it can actually scroll (narrow viewport),
+             which is the WCAG 2.1.1-correct behaviour — no keyboard trap on
+             wide screens, reachable overflow on narrow ones. --}}
         <div class="mt-4 overflow-x-auto"
+             role="region"
              tabindex="0"
              aria-label="Events calendar; scroll horizontally to see all days"
              data-testid="events-calendar-scroll">
