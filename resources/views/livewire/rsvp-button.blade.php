@@ -80,9 +80,12 @@
             </p>
 
             @if ($seatOpenForWaitlist)
-                {{-- A seat freed while in line. The waitlist never auto-promotes
-                     — that claim would be its own race — so the member takes it
-                     through the same locked write as everybody else. --}}
+                {{-- A seat reads free while the member is still in line — only
+                     possible mid-flight before their promotion renders, or when
+                     a promotion never fired. A withdraw (or a raised cap) deals
+                     freed seats to the head of the line in the same locked
+                     write (TOG-8394); this control takes the seat through the
+                     same locked write for whatever gap remains. --}}
                 <button type="button"
                         wire:click="rsvp('{{ \App\Enums\RsvpStatus::Going->value }}')"
                         wire:loading.attr="disabled"

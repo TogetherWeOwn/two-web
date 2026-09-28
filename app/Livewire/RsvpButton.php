@@ -147,9 +147,12 @@ class RsvpButton extends Component
             // for one), and they must still be able to stand down or
             // leave the line. Trapping them at the refusal is the bug.
             'atCapacity' => ! $going && ! $waitlisted && $this->isAtCapacity(),
-            // A freed seat while in line: the waitlist does not auto-promote
-            // (that is a race of its own), so the member claims it themselves
-            // through the same locked write as everybody else.
+            // True only in the gap the auto-promote cannot cover: the row this
+            // render read says a seat is free while the member is still in
+            // line — a state that can only exist mid-flight (their promotion
+            // has not rendered yet) or when promotion was never reached. The
+            // write takes the seat through the same locked path as everybody
+            // else, first-come first-served against the line.
             'seatOpenForWaitlist' => $waitlisted && $this->event->status === EventStatus::Published && ! $this->event->hasEnded() && ! $this->isAtCapacity(),
             // One-based place in line, only when it will be shown.
             'waitlistPosition' => $waitlisted ? $this->waitlistPosition() : null,
