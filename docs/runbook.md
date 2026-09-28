@@ -286,6 +286,60 @@ has. Local dev leaves `BACKUP_COPY_DEST` unset and keeps one copy.
 
 ---
 
+## Uptime ping (TOG-8727)
+
+`/up` already answers the structured health signal (database + pending
+migrations, 503 when either is wrong). The deploy pipeline and CI poll it
+around deploys, but nothing polls it *between* deploys — an outage that is
+not a deploy reads as silence until a member reports it. This section closes
+that gap with no paid service and no new vendor: a cron job that curls `/up`
+and lets cron mail be the pager.
+
+**Who pings:** cron on the box, owned by DevOps (same box and same ownership
+as the nightly backup cron above). The poller is `bin/uptime-ping.sh` — one
+`curl` against `/up`, exit 0 on `200 {"status":"ok",...}`, exit 1 on
+anything else (503 with the db/pending signal, timeout, refused connection,
+Access challenge). Cron mails stdout only on a nonzero exit, so **silence is
+UP and every mail is a page**.
+
+**Cadence:** every 5 minutes, production and staging:
+
+```cron
+MAILTO=devops@example.com
+*/5 * * * * /var/www/two-web/bin/uptime-ping.sh https://togetherweown.com
+*/5 * * * * /var/www/two-web/bin/uptime-ping.sh "$STAGING_URL"
+```
+
+(Use the real on-call address for `MAILTO`, set in the cron environment on
+the box — never in the repo. Staging sits behind Cloudflare Access, so its
+line needs the same `CF_ACCESS_CLIENT_ID` / `CF_ACCESS_CLIENT_SECRET`
+service-token pair `bin/smoke-staging.sh` uses, exported in the cron
+environment; without them the edge challenge reads as DOWN, and the script
+says so in the mail rather than misreading it.)
+
+**Who is paged:** whoever `MAILTO` names — DevOps by default, the on-call
+rotation when one exists. A `DOWN` mail carries the probe's own signal
+(`http=503 db=ok pending=3` names the failed migrate; `http=000` names the
+refused connection), so the first triage step is reading the mail, not
+re-probing. Then follow "it is down, what do I do" below.
+
+**Honest limit:** this is a "complains when down" check, not a dead-man
+switch that proves the checker is alive — if cron itself dies, no mail
+arrives and nothing pages. The backstops are the nightly backup cron (its
+own mail going quiet is noticed the next morning) and the staging deploy
+poll (every push to `main` re-proves `/up` answers). If paging ever needs a
+true dead-man (alert on *missing* pings), that is a new decision with a new
+card — it needs an external watcher, which this page deliberately does not
+invent.
+
+**Proving the poller:** `bin/uptime-ping.sh --selftest` drives the real
+script against stub `/up` endpoints (ok, db-down, pending, gated, refused)
+entirely offline, the same pattern as `bin/smoke-staging.sh --selftest`.
+Run it after any edit to the script; CI does not run it (like the smoke
+script's self-test, it binds local ports).
+
+---
+
 ## Quick-reference: "it is down, what do I do"
 
 1. `curl -sSI https://togetherweown.com/up` — is the app answering at all?
