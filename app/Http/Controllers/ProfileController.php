@@ -2,6 +2,8 @@
 
 namespace App\Http\Controllers;
 
+use App\Enums\DataRequestStatus;
+use App\Models\DataRequest;
 use App\Models\Profile;
 use App\Models\User;
 use App\Support\Profiles\MemberStatsSource;
@@ -34,10 +36,22 @@ class ProfileController
             'games' => [],
         ]);
 
+        // The self-service data section (TOG-8705) renders owner-only, on
+        // both /profile and /members/{self}. Resolved here, not in the view,
+        // so someone else's page never pays for — or leaks — the caller's
+        // queue state.
+        $isOwner = auth()->user()?->is($member) ?? false;
+
         return view('profiles.show', [
             'member' => $member,
             'profile' => $profile,
             'stats' => $stats->forMember($member->discord_id),
+            'pendingDataRequest' => $isOwner
+                ? DataRequest::query()
+                    ->where('user_id', $member->getKey())
+                    ->where('status', DataRequestStatus::Pending)
+                    ->exists()
+                : false,
         ]);
     }
 }

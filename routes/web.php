@@ -3,6 +3,8 @@
 use App\Enums\EventStatus;
 use App\Http\Controllers\Auth\DiscordLoginController;
 use App\Http\Controllers\Auth\StagingQaLoginController;
+use App\Http\Controllers\DataDeletionRequestController;
+use App\Http\Controllers\DataExportController;
 use App\Http\Controllers\DesignLab\HallmarkController;
 use App\Http\Controllers\EventController;
 use App\Http\Controllers\EventFeedController;
@@ -183,6 +185,19 @@ Route::middleware('auth')->group(function () {
         ->middleware('member-access-log:member,view')->name('profile');
     Route::get('/members/{user}', [ProfileController::class, 'show'])
         ->middleware('member-access-log:member,view')->name('profiles.show');
+
+    // Self-service data (TOG-8705, runbook docs/moderator-export-deletion.md).
+    // Self-only by construction: both routes read the caller and take no id,
+    // so there is nothing to smuggle. Logged-out access redirects to login
+    // via `auth`, same as the profile pages. The download needs the
+    // member-access-log line like every member-data read; the deletion ask
+    // carries it too, because creating a queue row off the caller's identity
+    // is itself a member-data touch worth recording. The POST carries
+    // `throttle:` like every other app-owned write (TOG-8709).
+    Route::get('/profile/data.json', DataExportController::class)
+        ->middleware('member-access-log:member,view')->name('profile.data-export');
+    Route::post('/profile/deletion-request', DataDeletionRequestController::class)
+        ->middleware(['member-access-log:member,update', 'throttle:30,1'])->name('profile.deletion-request');
 
     // Events. The wildcard binds on `event_key`, not the autoincrement id — see
     // Event::getRouteKeyName(). That is the same string the bot keys its Discord

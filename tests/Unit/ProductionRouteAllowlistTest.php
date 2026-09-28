@@ -77,6 +77,7 @@ function expectedProductionRoutes(): array
         'GET|HEAD /',
         'GET|HEAD about',
         'GET|HEAD admin',
+        'GET|HEAD admin/data-requests',
         'GET|HEAD admin/events',
         'GET|HEAD admin/events/create',
         'GET|HEAD admin/events/{record}/edit',
@@ -109,6 +110,8 @@ function expectedProductionRoutes(): array
         'GET|HEAD members/{user}',
         'GET|HEAD privacy',
         'GET|HEAD profile',
+        // TOG-8705: self-service data — the member's own JSON download.
+        'GET|HEAD profile/data.json',
         'GET|HEAD robots.txt',
         'GET|HEAD rules',
         'GET|HEAD sitemap_index.xml',
@@ -126,6 +129,8 @@ function expectedProductionRoutes(): array
         'POST livewire/update',
         'POST livewire/upload-file',
         'POST logout',
+        // TOG-8705: self-service data — the member's deletion ask.
+        'POST profile/deletion-request',
         'PUT events/{event}/rsvp',
         'PUT storage/{path}',
     ];
