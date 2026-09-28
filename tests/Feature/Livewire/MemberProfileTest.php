@@ -5,9 +5,9 @@ use App\Models\Profile;
 use App\Models\User;
 use App\Support\Profiles\MemberStats;
 use App\Support\Profiles\Milestone;
-use Illuminate\Routing\Exceptions\RouteNotFoundException;
 use Illuminate\Support\Carbon;
 use Livewire\Livewire;
+use Symfony\Component\Routing\Exception\RouteNotFoundException;
 
 function profileStats(string $discordId): MemberStats
 {
