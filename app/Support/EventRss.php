@@ -3,6 +3,7 @@
 namespace App\Support;
 
 use App\Models\Event;
+use DateTimeInterface;
 
 /**
  * The event collection as an RSS 2.0 feed.
@@ -22,15 +23,25 @@ final class EventRss
      * Takes any iterable of `Event` models — including the Eloquent collection
      * `->get()` returns, which is *not* an `Illuminate\Support\Collection`.
      *
+     * `$lastBuildDate` is the moment the feed's *content* last changed, not the
+     * moment it is rendered: defaulting to `now()` would stamp a fresh instant
+     * into every body, so no two responses would ever share bytes and no ETag
+     * could survive a second. The controller passes the newest `updated_at` in
+     * its scope (falling back to `now()` only when there are no items); callers
+     * that build a feed from unsaved models, like the unit test below, still get
+     * a truthful "just now".
+     *
      * @param  iterable<int, Event>  $events
      */
-    public static function for(iterable $events): string
+    public static function for(iterable $events, ?DateTimeInterface $lastBuildDate = null): string
     {
         $items = '';
 
         foreach ($events as $event) {
             $items .= self::item($event);
         }
+
+        $built = ($lastBuildDate ?? now('UTC'))->format(DATE_RSS);
 
         return '<?xml version="1.0" encoding="UTF-8"?>'."\n"
             .'<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom">'
@@ -42,7 +53,7 @@ final class EventRss
             // self-identifying and autodiscovery only works from our pages.
             .'<atom:link href="'.self::e(route('events.rss')).'" rel="self" type="application/rss+xml" />'
             .'<description>'.self::e('Upcoming events from '.config('app.name')).'</description>'
-            .'<lastBuildDate>'.now('UTC')->format(DATE_RSS).'</lastBuildDate>'
+            .'<lastBuildDate>'.$built.'</lastBuildDate>'
             .$items
             .'</channel>'
             .'</rss>';
