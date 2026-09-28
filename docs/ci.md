@@ -589,6 +589,39 @@ probe reports and no critical line appears, the queue is healthy — the drill
 existing is what makes that reading trustworthy, in the same tradition as
 `discord:check-moderators` above.
 
+### Pre-deploy DB snapshot lives in Coolify, not in `deploy.yml` (TOG-9253)
+
+Migrations run on the box, inside Coolify's `post_deployment_command`
+(`php artisan migrate --force`), after the deploy webhook fires. The staging
+database (`two-web-staging-db`) is not public and GitHub Actions never SSHes
+in, so no step in `deploy.yml` can reach it — and `bin/pg-backup.sh` refuses
+any host that is not local docker, so it cannot run there either. A snapshot
+step in the workflow would be TOG-913 theater: green without doing anything.
+That is why `deploy.yml` has no snapshot step, and why none should be added:
+the snapshot is a Coolify database backup instead (provider-native `pg_dump`
+custom format — the same shape `docs/runbook.md` restores from).
+
+1. **Scheduled backup on `two-web-staging-db`**, daily, keeping the newest 7
+   local copies — the same 7-daily rule `bin/pg-backup.sh rotate` enforces
+   ([TOG-8418](/TOG/issues/TOG-8418)). Set once, in the Coolify panel
+   (database → Backups → Add). Agents have no host access, so enabling it was
+   the one host step for this wiring.
+2. **Before any deploy carrying migrations: Backup Now** on the same schedule,
+   and log the execution ID and size on the release card. The execution ID is
+   the proof a snapshot exists; the deploy log's migration lines are the proof
+   it ran before them. The release checklist (QA-owned, below) names whether a
+   release migrates — when it does, this Backup Now is mandatory, not optional.
+3. **Restore rehearsal stays quarterly on staging** (`docs/runbook.md`); a
+   backup with no restore test is a rumour.
+
+The bound, stated plainly: the schedule is cron-based, not per-deploy — a
+deploy nobody flagged as migration-carrying has only the last daily snapshot
+to fall back on. That is why step 2 keys off the checklist, not off the clock.
+
+Pinned by `tests/Unit/PreDeploySnapshotDocTest.php`, which asserts this section
+still names the schedule, the Backup Now rule, the bound — and that
+`deploy.yml` still carries no snapshot step of its own.
+
 ### Production deploys are dispatch-only, behind a required reviewer
 
 Production ships from GitHub Actions, and only ever that way: `workflow_dispatch`

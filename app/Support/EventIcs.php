@@ -86,7 +86,7 @@ final class EventIcs
             'BEGIN:VEVENT',
             'UID:'.self::uid($event),
             'SEQUENCE:'.self::sequence($event),
-            'DTSTAMP:'.now('UTC')->format('Ymd\THis\Z'),
+            'DTSTAMP:'.self::dtstamp($event),
             'DTSTART:'.$event->starts_at->setTimezone('UTC')->format('Ymd\THis\Z'),
             'DTEND:'.$event->ends_at->setTimezone('UTC')->format('Ymd\THis\Z'),
             'SUMMARY:'.self::text($event->title),
@@ -133,6 +133,21 @@ final class EventIcs
         }
 
         return $event->event_key.'@'.$host;
+    }
+
+    /**
+     * The content clock behind `DTSTAMP`: the moment the row last changed, not
+     * the moment it is rendered. RFC 5545 wants the entry's creation or last
+     * revision instant here; stamping `now()` instead made every render unique
+     * bytes, so no validator could ever match and calendar clients re-downloaded
+     * the full body on every poll. `updated_at` already advances on any `save()`
+     * (same contract `SEQUENCE` below relies on), so unchanged content renders
+     * byte-identical bodies. The `?? 0` fallback (epoch) only fires for an
+     * unsaved model, which both controllers can never serve.
+     */
+    private static function dtstamp(Event $event): string
+    {
+        return gmdate('Ymd\THis\Z', $event->updated_at?->getTimestamp() ?? 0);
     }
 
     /**

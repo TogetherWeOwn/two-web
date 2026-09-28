@@ -5,12 +5,13 @@ namespace App\Console\Commands;
 use App\Enums\EventStatus;
 use App\Jobs\SyncEventToDiscord;
 use App\Models\Event;
+use App\Services\EventService;
 use Illuminate\Console\Command;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Support\Facades\Log;
 
 /**
- * Keep event state fresh, and clean up past events.
+ * Keep event state fresh, materialise recurring series, and clean up past events.
  *
  * This is the half of "degrades, never white-screens" that nobody sees. The queued
  * write-back can exhaust its five retries during a long Discord outage, and when it
@@ -19,27 +20,56 @@ use Illuminate\Support\Facades\Log;
  * recovery depends on a member happening to change their answer again, which for a
  * quiet event is never.
  *
- * Two passes, deliberately in this order. Closing finished events first means the
+ * Three passes, deliberately in this order. Closing finished events first means the
  * sync pass cannot pick one up and upsert an event Discord has already dropped.
+ * Materialising second means a newly created published instance is picked up by
+ * the sync pass in the same run, instead of sitting unmirrored for ten minutes.
  */
 class ReconcileEvents extends Command
 {
     protected $signature = 'events:reconcile';
 
-    protected $description = 'Re-sync events Discord never confirmed, and close events that have finished.';
+    protected $description = 'Re-sync events Discord never confirmed, materialise recurring series, and close events that have finished.';
 
     public function handle(): int
     {
         $closed = $this->closeFinishedEvents();
+        $materialized = $this->materializeRecurringSeries();
         $resynced = $this->resyncStaleEvents();
 
-        $this->info("Closed {$closed} finished event(s); re-dispatched {$resynced} write-back(s).");
+        $this->info("Closed {$closed} finished event(s); materialized {$materialized} series instance(s); re-dispatched {$resynced} write-back(s).");
 
-        if ($closed > 0 || $resynced > 0) {
-            Log::info('Event reconcile pass completed.', ['closed' => $closed, 'resynced' => $resynced]);
+        if ($closed > 0 || $materialized > 0 || $resynced > 0) {
+            Log::info('Event reconcile pass completed.', ['closed' => $closed, 'materialized' => $materialized, 'resynced' => $resynced]);
         }
 
         return self::SUCCESS;
+    }
+
+    /**
+     * Create whatever each live series' rule names that is not a row yet.
+     *
+     * The backstop, not the creator: the create and edit pages materialise
+     * immediately, and this pass covers rule changes made anywhere else. Only
+     * live parents (draft or published) grow — a cancelled series stays
+     * cancelled, and a finished one stays finished. Materialisation is
+     * idempotent, so re-running a pass that created nothing changes nothing.
+     */
+    private function materializeRecurringSeries(): int
+    {
+        $parents = Event::query()
+            ->whereNotNull('recurrence_frequency')
+            ->whereIn('status', [EventStatus::Draft->value, EventStatus::Published->value])
+            ->get();
+
+        $service = app(EventService::class);
+        $created = 0;
+
+        foreach ($parents as $parent) {
+            $created += $service->materializeMissingInstances($parent);
+        }
+
+        return $created;
     }
 
     /**
@@ -76,11 +106,20 @@ class ReconcileEvents extends Command
      *
      * The job is `ShouldBeUnique` on the event key, so a still-queued write-back
      * absorbs this dispatch rather than doubling it.
+     *
+     * A terminally-refused row is neither shape, even though it looks like the
+     * first: published with `discord_event_id` null. The bot answered — no —
+     * and re-sending the same operation every ten minutes spends bot budget on
+     * an answer already given while writing a `failed_jobs` row per pass
+     * (TOG-6990). The stamp (`discord_sync_failed_at`) marks that verdict, so
+     * this pass skips the row until a genuinely new member or moderator change
+     * clears it in EventService and re-arms the next attempt.
      */
     private function resyncStaleEvents(): int
     {
         $stale = Event::query()
             ->where('status', EventStatus::Published)
+            ->whereNull('discord_sync_failed_at')
             ->where(function (Builder $query): void {
                 $query->whereNull('discord_event_id')
                     ->orWhereHas('rsvps', fn (Builder $rsvps) => $rsvps->whereNull('synced_to_discord_at'));

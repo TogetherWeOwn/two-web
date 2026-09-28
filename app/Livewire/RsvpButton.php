@@ -40,6 +40,11 @@ use Throwable;
  *    and the session died underneath it. Saying "try once more" would be a lie
  *    — no retry can succeed without logging in first — so the click names the
  *    expired session and points at the way back in instead.
+ *
+ *  - **A terminal Discord refusal is a mirror failure, never an RSVP failure.**
+ *    The bot answered no (`discord_sync_failed_at` is stamped), so "Syncing…"
+ *    would be a lie — nothing is on its way — but so would the error banner:
+ *    the answer is committed and counts. The member is told exactly that.
  */
 class RsvpButton extends Component
 {
@@ -111,6 +116,11 @@ class RsvpButton extends Component
         try {
             RsvpRateLimit::hit($user);
             $events->rsvp($this->event, $user, $answer);
+            // TOG-6990: a re-arming write clears the terminal stamp on the
+            // service's own row instance. Re-read so this render sees the
+            // cleared stamp — otherwise the banner shows "failed" for an
+            // attempt that is already back to "syncing".
+            $this->event = $this->event->fresh() ?? $this->event;
             // TOG-6956: a successful write swaps the focused button for the
             // confirmation, which drops keyboard focus to <body>. The
             // self-dispatch fires after Livewire has morphed the new state in,
@@ -254,7 +264,16 @@ class RsvpButton extends Component
             // One-based place in line, only when it will be shown.
             'waitlistPosition' => $waitlisted ? $this->waitlistPosition() : null,
             // Committed here, not yet in Discord. A true state, not an error.
-            'syncing' => $rsvp !== null && $rsvp->synced_to_discord_at === null,
+            // A terminally-refused row is never "syncing": the bot answered no
+            // (TOG-6990), so that copy would be a lie. It reads as failed below.
+            'syncing' => $rsvp !== null && $rsvp->synced_to_discord_at === null
+                && $this->event->discord_sync_failed_at === null,
+            // The third state (TOG-6990): saved here, refused over there. The
+            // answer counts — this is never the error banner — but no retry is
+            // coming until somebody changes something, so it must not read as
+            // pending either.
+            'syncFailed' => $rsvp !== null && $rsvp->synced_to_discord_at === null
+                && $this->event->discord_sync_failed_at !== null,
             // TOG-7976: the announced throttle wait, or null when the last
             // attempt was not throttled. The blade node stays beside the
             // control with the button enabled, like rsvp-failed.

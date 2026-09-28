@@ -10,12 +10,16 @@ use Filament\Actions\EditAction;
 use Filament\Tables\Columns\TextColumn;
 use Filament\Tables\Filters\SelectFilter;
 use Filament\Tables\Table;
+use Illuminate\Database\Eloquent\Builder;
 
 class EventsTable
 {
     public static function configure(Table $table): Table
     {
         return $table
+            // The series column reads each child's parent; eager-load it once
+            // rather than once per row.
+            ->modifyQueryUsing(fn (Builder $query): Builder => $query->with('parentEvent'))
             ->columns([
                 TextColumn::make('title')
                     ->searchable()
@@ -34,6 +38,32 @@ class EventsTable
                         EventStatus::Cancelled => 'danger',
                         EventStatus::Past => 'warning',
                     }),
+                // Series at a glance: "Weekly 2/4" on a child, "Weekly ×4" on
+                // the parent, nothing on a one-off. A moderator scanning the
+                // table can tell which rows move together before cancelling.
+                // The frequency word comes from the enum so a second frequency
+                // here never disagrees with the value the form stored.
+                TextColumn::make('recurrence_index')
+                    ->label('Series')
+                    ->formatStateUsing(function (Event $record): ?string {
+                        $frequency = ($record->isSeriesChild() ? $record->parentEvent?->recurrence_frequency : $record->recurrence_frequency)?->value;
+
+                        if ($frequency === null) {
+                            return null;
+                        }
+
+                        $label = ucfirst($frequency);
+
+                        if ($record->isSeriesChild()) {
+                            $count = $record->parentEvent?->recurrence_count;
+
+                            return $count === null ? $label : "{$label} {$record->recurrence_index}/{$count}";
+                        }
+
+                        return $record->recurrence_count === null ? $label : "{$label} ×{$record->recurrence_count}";
+                    })
+                    ->placeholder('—')
+                    ->toggleable(),
                 TextColumn::make('capacity')
                     ->placeholder('Unlimited')
                     ->toggleable(),
@@ -56,7 +86,13 @@ class EventsTable
                     ->authorize(fn (Event $record): bool => auth()->user()?->can('publish', $record) ?? false)
                     ->visible(fn (Event $record): bool => $record->status === EventStatus::Draft)
                     ->requiresConfirmation()
-                    ->modalDescription('Publishing announces the event to Discord. Members can RSVP from that moment.')
+                    // A series parent names its consequence: publishing the first
+                    // meeting announces every instance that exists, not just this
+                    // row. A closure so the copy sees the record — one-offs read
+                    // exactly as before.
+                    ->modalDescription(fn (Event $record): string => $record->isSeriesParent()
+                        ? 'Publishing announces the whole series to Discord — every instance that exists goes live and members can RSVP on each one.'
+                        : 'Publishing announces the event to Discord. Members can RSVP from that moment.')
                     ->action(fn (Event $record, EventService $service) => $service->publish($record))
                     ->icon('heroicon-o-megaphone')
                     ->color('success'),
@@ -64,7 +100,9 @@ class EventsTable
                     ->authorize(fn (Event $record): bool => auth()->user()?->can('cancel', $record) ?? false)
                     ->visible(fn (Event $record): bool => in_array($record->status, [EventStatus::Draft, EventStatus::Published], true))
                     ->requiresConfirmation()
-                    ->modalDescription('Cancelling is permanent. Discord will be told; RSVPs are not coming back.')
+                    ->modalDescription(fn (Event $record): string => $record->isSeriesParent()
+                        ? 'Cancelling calls off every instance in the series. This is permanent — Discord will be told and RSVPs are not coming back.'
+                        : 'Cancelling is permanent. Discord will be told; RSVPs are not coming back.')
                     ->action(fn (Event $record, EventService $service) => $service->cancel($record))
                     ->icon('heroicon-o-x-circle')
                     ->color('danger'),
