@@ -46,6 +46,7 @@ Route::get('/sitemap_index.xml', function () {
         ['loc' => route('join'), 'changefreq' => 'monthly', 'priority' => '0.9'],
         ['loc' => route('events.index'), 'changefreq' => 'daily', 'priority' => '0.8'],
         ['loc' => route('about'), 'changefreq' => 'monthly', 'priority' => '0.7'],
+        ['loc' => route('faq'), 'changefreq' => 'monthly', 'priority' => '0.7'],
         ['loc' => route('rules'), 'changefreq' => 'monthly', 'priority' => '0.7'],
     ];
 

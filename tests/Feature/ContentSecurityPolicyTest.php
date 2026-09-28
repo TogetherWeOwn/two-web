@@ -137,8 +137,9 @@ it('does not put a CSP on non-HTML responses', function () {
 
     // A JSON collection carrying a document policy protects nothing and only
     // confuses caches; a redirect carries no body at all. The HTML funnel
-    // path (`/about`) is pinned separately in AboutPageTest, which owns the
-    // funnel-served document — this test owns the negative.
+    // paths (`/about`, `/faq`) are pinned separately in AboutPageTest and
+    // FaqPageTest, which own the funnel-served documents — this test owns
+    // the negative.
     $this->actingAs($member)->getJson(route('events.json'))
         ->assertOk()
         ->assertHeaderMissing('Content-Security-Policy');
