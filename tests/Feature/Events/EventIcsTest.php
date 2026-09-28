@@ -73,6 +73,39 @@ it('serves a published event as text/calendar with the right DTSTART, DTEND and 
         ->and(icsLine($lines, 'LOCATION:'))->toBe('LOCATION:Voice: General');
 });
 
+it('names the calendar and links the event back to its shareable page', function () {
+    // TOG-7942: without X-WR-CALNAME Apple Calendar labels the subscription
+    // with the raw URL, and without URL the entry has no tap-through to the
+    // page the feed exists to drive traffic to.
+    $event = Event::factory()->create(['status' => EventStatus::Published]);
+
+    $body = $this->get(route('events.ics', $event))->assertOk()->getContent();
+    $lines = icsLines($body);
+
+    expect(icsLine($lines, 'X-WR-CALNAME:'))->toBe('X-WR-CALNAME:'.config('app.name').' Events')
+        ->and(icsLine($lines, 'X-WR-CALDESC:'))->toBe('X-WR-CALDESC:Upcoming events from '.config('app.name'))
+        ->and(icsLine($lines, 'URL:'))->toBe('URL:'.route('events.page', $event));
+});
+
+it('emits a URL that survives the strict fold/unfold round trip as a valid URL', function () {
+    $event = Event::factory()->create(['status' => EventStatus::Published]);
+
+    $body = $this->get(route('events.ics', $event))->assertOk()->getContent();
+
+    // No bare LFs: every line break is CRLF, so a strict parser's unfolding
+    // (join continuation lines starting with a space) reconstructs the URL.
+    // `preg_match`, not `toContain("\n")`: every CRLF contains an LF, so only
+    // an LF *not* preceded by CR is a violation.
+    expect(preg_match('/(?<!\r)\n/', $body))->toBe(0, 'bare LF would corrupt a strict parse')
+        ->and(substr_count($body, "\r\n"))->toBeGreaterThan(0);
+
+    $url = (string) str_replace('URL:', '', icsLine(icsLines($body), 'URL:'));
+
+    expect($url)->toBe(route('events.page', $event))
+        ->and(parse_url($url, PHP_URL_SCHEME))->not->toBeNull()
+        ->and(parse_url($url, PHP_URL_HOST))->not->toBeNull();
+});
+
 it('keeps the UID stable across downloads so calendars update instead of duplicating', function () {
     $event = Event::factory()->create(['status' => EventStatus::Published]);
 
