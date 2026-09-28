@@ -15,4 +15,9 @@ return [
     'too_many_join' => 'Join with Discord',
     'retry' => 'Try again',
     'home' => 'Back to the homepage',
+    'not_found_suggestions' => 'Happening soon',
+    'not_found_all_events' => 'Browse all events',
+    'not_found_search' => 'Search events',
+    'not_found_search_placeholder' => 'Search events…',
+    'not_found_empty' => 'Nothing is on the calendar right now — check back soon.',
 ];
