@@ -264,10 +264,10 @@ it('promotes inside the withdraw lock, not after it (TOG-8394)', function () {
     // the withdraw commits, and by then the head of the line already holds
     // the seat, so the newcomer finds the event full again.
     //
-    // SQLite (the test database) serialises writers rather than blocking, so
-    // the interleave is modelled at the assertion level: the withdraw's delete
-    // and the promotion commit atomically — there is no observable state where
-    // the seat is free and the line is unmoved.
+    // Forced at the assertion level rather than with a second connection —
+    // the withdraw's delete and the promotion share one transaction and one
+    // row lock, so there is no observable state where the seat reads free
+    // beside an unmoved line. No sleeps, no timing.
     app(EventService::class)->rsvp($this->full->fresh(), $this->member, RsvpStatus::Waitlisted);
 
     app(EventService::class)->withdrawRsvp($this->full->fresh(), $this->seatHolder);
@@ -287,6 +287,37 @@ it('promotes inside the withdraw lock, not after it (TOG-8394)', function () {
 
     expect(fn () => app(EventService::class)->rsvp($event->fresh(), $latecomer, RsvpStatus::Going))
         ->toThrow(EventAtCapacityException::class);
+});
+
+it('compacts the line without promoting when a waitlisted member leaves (TOG-8394)', function () {
+    $second = User::factory()->create(['is_moderator' => false]);
+
+    app(EventService::class)->rsvp($this->full->fresh(), $this->member, RsvpStatus::Waitlisted);
+    app(EventService::class)->rsvp($this->full->fresh(), $second, RsvpStatus::Waitlisted);
+
+    // Leaving the line frees no seat: nobody is promoted, the seat holder
+    // stays, and the second member moves to #1.
+    app(EventService::class)->withdrawRsvp($this->full->fresh(), $this->member);
+
+    expect(Rsvp::query()->where('user_id', $this->member->id)->exists())->toBeFalse();
+
+    expect($this->full->fresh()->waitlistPositionFor($second))->toBe(1)
+        ->and(Rsvp::query()->where('user_id', $this->seatHolder->id)->first()?->status)
+        ->toBe(RsvpStatus::Going)
+        ->and($this->full->fresh()->goingCount())->toBe(1);
+});
+
+it('leaves the line untouched when the event is closed (TOG-8394)', function () {
+    app(EventService::class)->rsvp($this->full->fresh(), $this->member, RsvpStatus::Waitlisted);
+    app(EventService::class)->cancel($this->full->fresh());
+
+    // A closed event has no seats to deal: the withdraw stays a plain delete
+    // and the line is untouched.
+    app(EventService::class)->withdrawRsvp($this->full->fresh(), $this->seatHolder);
+
+    expect(Rsvp::query()->where('user_id', $this->member->id)->first()?->status)
+        ->toBe(RsvpStatus::Waitlisted)
+        ->and($this->full->fresh()->waitlistPositionFor($this->member))->toBe(1);
 });
 
 it('keeps the claim control for the gap a promotion cannot cover', function () {
