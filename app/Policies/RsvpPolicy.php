@@ -23,6 +23,23 @@ use App\Models\User;
  */
 class RsvpPolicy
 {
+    /**
+     * The moderator roster on the event admin page (EventResource's RSVP
+     * relation manager) reads through here. Moderators see every answer;
+     * members never reach the panel at all — its own gate turns them away —
+     * so this is moderator-only rather than member-scoped like the answering
+     * rules below.
+     */
+    public function viewAny(User $user): bool
+    {
+        return $user->is_moderator === true;
+    }
+
+    public function view(User $user, Rsvp $rsvp): bool
+    {
+        return $user->is_moderator === true;
+    }
+
     public function create(User $user, Event $event, User $subject): bool
     {
         if (! $user->is($subject)) {
