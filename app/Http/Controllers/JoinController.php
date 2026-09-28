@@ -5,6 +5,7 @@ namespace App\Http\Controllers;
 use App\Models\User;
 use App\Services\Bot\Exceptions\BotException;
 use App\Services\Bot\InternalActionClient;
+use App\Support\DiscordWidget;
 use Illuminate\Contracts\View\View;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
@@ -25,7 +26,16 @@ final class JoinController
 
     public function show(): View
     {
-        return view('join', ['inviteUrl' => $this->inviteUrl()]);
+        // TOG-6928: the widget iframe is a live look, never the conversion
+        // path. It renders beside the one-click button and the static invite,
+        // and is absent entirely when the guild id is unusable — the fallback
+        // copy is always in the HTML either way.
+        $guildId = config('services.discord.guild_id');
+
+        return view('join', [
+            'inviteUrl' => $this->inviteUrl(),
+            'widgetUrl' => DiscordWidget::url(is_string($guildId) ? $guildId : null),
+        ]);
     }
 
     public function redirect(Request $request): RedirectResponse
