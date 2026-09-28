@@ -192,5 +192,56 @@
                 @endif
             </nav>
         @endif
+
+        {{-- Related events: the next step for a visitor who will not RSVP to
+             this one. Same game first, then the nearest other upcoming events,
+             at most 3 — see EventPageController::relatedEvents(). Hidden
+             entirely when there are no siblings: an empty "related" heading
+             with nothing under it is worse than nothing. Guests get the join
+             pitch with it, members already have the RSVP control above. --}}
+        @if ($relatedEvents->isNotEmpty())
+            <section class="mt-6 rounded-lg bg-surface border border-line p-5 md:p-8"
+                     aria-label="Related events"
+                     data-testid="event-related">
+                <h2 class="text-sm font-semibold text-ink">
+                    More events you might like
+                </h2>
+                <ul class="mt-3 space-y-3">
+                    @foreach ($relatedEvents as $relatedEvent)
+                        <li>
+                            <a href="{{ route('events.page', $relatedEvent) }}"
+                               data-testid="event-related-link"
+                               class="block rounded-lg border border-line bg-surface p-4
+                                      hover:bg-raised transition-colors duration-fast ease-out-quick">
+                                <span class="block truncate text-sm font-medium text-ink">{{ $relatedEvent->title }}</span>
+                                <span class="mt-0.5 block text-sm text-ink-muted">
+                                    <time datetime="{{ $relatedEvent->starts_at->toIso8601String() }}" class="u-numeric">
+                                        {{ $relatedEvent->startsAtLocal()->format('D j M, H:i') }}
+                                    </time>
+                                    @if ($relatedEvent->location)
+                                        <span aria-hidden="true"> · </span>{{ $relatedEvent->location }}
+                                    @endif
+                                </span>
+                            </a>
+                        </li>
+                    @endforeach
+                </ul>
+
+                @guest
+                    <p class="mt-4 max-w-prose text-sm text-ink-muted">
+                        These fill up fast for members. Join the Discord and you'll
+                        hear about the next one before it lands here.
+                    </p>
+                    <a href="{{ route('join') }}"
+                       data-testid="event-related-join"
+                       class="mt-4 inline-flex items-center justify-center gap-2 min-h-11 px-6 rounded-md
+                              bg-brand text-on-brand font-semibold
+                              hover:bg-brand-hover active:bg-brand-active
+                              transition-colors duration-fast ease-out-quick">
+                        Join the Discord
+                    </a>
+                @endguest
+            </section>
+        @endif
     </div>
 </x-layouts.app>
