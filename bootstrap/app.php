@@ -65,6 +65,15 @@ return Application::configure(basePath: dirname(__DIR__))
         // If that ever stops being true, name the proxy address here instead.
         $middleware->trustProxies(at: '*');
 
+        // URL generation uses the request host, including X-Forwarded-Host.
+        // Only this deployment's APP_URL host may reach routes: otherwise an
+        // attacker can poison canonical links and Discord callback URLs. Do not
+        // implicitly trust sibling/subdomains. Laravel exempts local/testing.
+        $middleware->trustHosts(
+            at: fn (): array => ['^'.preg_quote((string) parse_url(config('app.url'), PHP_URL_HOST)).'$'],
+            subdomains: false,
+        );
+
         // Goes on the admin panel and member-profile routes, not on `web`.
         // Every member-data screen must carry it — see docs/member-data-access-log.md.
         $middleware->alias([
