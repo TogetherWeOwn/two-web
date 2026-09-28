@@ -33,6 +33,10 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta name="color-scheme" content="{{ $lightScheme ? 'light' : 'dark' }}">
+    <meta name="theme-color" content="#0b0714">
+    <link rel="manifest" href="/site.webmanifest">
+    <link rel="icon" href="/icons/icon-192.png" type="image/png" sizes="192x192">
+    <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png" sizes="180x180">
     @if ($robots ?? false)
         <meta name="robots" content="{{ $robots }}">
     @endif
