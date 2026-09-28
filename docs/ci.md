@@ -485,7 +485,9 @@ php artisan queue:restart
 
 This broadcasts an `illuminate:queue:restart` timestamp through the default
 cache. The worker daemon compares it after every job (`Worker::daemon` →
-`stopIfNecessary`) and exits 0, and Coolify respawns it on the new release. A
+`stopIfNecessary`) and exits 0, and Coolify restarts the container — on the
+worker app's *current* image, which is why the two-step release below
+redeploys the worker app rather than trusting this signal alone. A
 running job finishes — none is killed, none runs twice. Per-job `tries` still
 win over the worker's `--tries` flag (`markJobAsFailedIfAlreadyExceedsMaxAttempts`
 prefers the job's own `maxTries()`), so the restart changes *when* workers
@@ -502,6 +504,25 @@ if the worker app itself never redeploys, the worker runs new timestamps on old
 code forever. Today both apps share the repository so they move together; if
 that ever stops being true, the worker needs its own deploy or redeploy step,
 and this section needs rewriting, not rereading.
+
+A staging release is therefore two steps, in order — the web deploy never
+rebuilds the worker app, so `queue:restart` alone recycles the worker onto
+whatever release the worker app is already running:
+
+1. Deploy `two-web-staging` (automatic on green `main`, or Redeploy in the
+   dashboard). Wait for `GET <staging>/up` to answer 200 on the new release.
+2. Redeploy `two-web-staging-worker` (Redeploy in the dashboard, or its deploy
+   webhook) so the worker image matches the web release. The restart timestamp
+   from step 1 is already broadcast; the fresh worker boots new code and the
+   running job finishes first — none is killed, none runs twice.
+3. Verify: the worker app shows a fresh container, staging `/up` answers 200,
+   and `php artisan queue:check-depth --json` on the box drains toward 0.
+
+Rollback is the mirror: roll the web release back in the dashboard, redeploy
+the worker app so its image matches, then run `php artisan queue:restart` once
+in the web container so the worker rejoins the rolled-back release. Rolling
+back the web release without redeploying the worker leaves new-code workers
+on an old release — the same skew in the other direction.
 
 Pinned by `tests/Unit/QueueDrainOnDeployTest.php`, which asserts this section
 still names the command, the placement, and the bound.
