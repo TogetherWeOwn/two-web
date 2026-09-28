@@ -890,10 +890,35 @@ jobs:
       # below re-raises it and fails the job. It exists so the breached numbers get
       # turned into annotations before the job stops, which is the difference
       # between a red build that names the audit and one that says only "exit 1".
+      # TOG-7021: LHCI shelled out to whatever Chrome the persistent host
+      # happened to have — unpinned binary, no sandbox workarounds — and when
+      # that Chrome died at startup the job failed with `Invalid URL:
+      # undefined`, the DevTools endpoint of a browser that never started, and
+      # zero assertion results. No retry: the flake policy forbids it. The fix
+      # is declared up front instead — the same pinned Chromium every other
+      # browser step in this job already measures with, plus launch flags that
+      # match ci/browser/launch.mjs and ci/a11y.mjs — and the run log is kept
+      # so the next crash is diagnosable from the artifact, not the log tail.
       - name: Lighthouse — performance budget
         id: lighthouse
         continue-on-error: true
-        run: npx lhci autorun --config=./ci/lighthouserc.cjs
+        run: |
+          set +e
+          # chrome-launcher reads CHROME_PATH before any install detection, so
+          # this is the Chromium downloaded with the pinned puppeteer above —
+          # not whatever google-chrome-stable apt last put on this host.
+          export CHROME_PATH="$(node -e "import('puppeteer').then(p => console.log(p.default.executablePath()))")"
+          echo "measuring with $CHROME_PATH"
+          # Tee the run into .lighthouseci so it ships inside the
+          # budget-reports artifact below. A startup crash leaves no assertion
+          # results; without this its error lives only in the step log.
+          # Explicit exit code: steps.lighthouse.outcome below depends on it,
+          # and a pipe through tee would report tee's status instead.
+          mkdir -p .lighthouseci
+          npx lhci autorun --config=./ci/lighthouserc.cjs > .lighthouseci/lhci.log 2>&1
+          rc=$?
+          cat .lighthouseci/lhci.log
+          exit $rc
 
       # Reads what lhci already wrote and re-emits it as ::error::, then exits
       # non-zero if anything breached. Same verdict, readable without the job log.
