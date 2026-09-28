@@ -8,6 +8,7 @@ use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Http;
 use Laravel\Socialite\Facades\Socialite;
 use Laravel\Socialite\Two\AbstractProvider;
+use Laravel\Socialite\Two\InvalidStateException;
 use SocialiteProviders\Manager\OAuth2\User as SocialiteUser;
 
 // TOG-5617: every terminal path of the one-click join writes exactly one
@@ -102,9 +103,14 @@ it('records AlreadyMember on a re-join', function () {
 });
 
 it('records Denied without touching the bot when Discord reports an error', function () {
+    // TOG-5606: the member sees the recovery page in place (200); the funnel
+    // still records the Denied row next to it.
     $this->get('/join/callback?error=access_denied&error_description=the+user+denied+access&state=x')
-        ->assertRedirect(route('join'))
-        ->assertSessionHas('join_result', 'denied');
+        ->assertOk()
+        ->assertSee(__('join.recovery_denied'), escape: false)
+        ->assertSeeHtml('data-testid="oauth-recovery"')
+        ->assertSeeHtml('data-testid="oauth-recovery-retry"')
+        ->assertSessionMissing('join_result');
 
     $attempt = JoinAttempt::query()->sole();
     expect($attempt->outcome)->toBe(JoinOutcome::Denied)
@@ -114,13 +120,34 @@ it('records Denied without touching the bot when Discord reports an error', func
     Http::assertNothingSent();
 });
 
-it('records Error when the token exchange throws', function () {
+it('records Error when Discord is down during the token exchange', function () {
+    // Discord itself unreachable: the 503 recovery page (TOG-7098 split),
+    // still an Error row per the TOG-5617 mapping — the member did nothing
+    // wrong, the funnel just records that the exchange failed.
     $provider = Mockery::mock(AbstractProvider::class)->makePartial();
     $provider->shouldReceive('redirectUrl')->andReturnSelf();
     $provider->shouldReceive('user')->andThrow(new ConnectionException('discord.com:443 timeout'));
     Socialite::shouldReceive('driver')->with('discord')->andReturn($provider);
 
     $this->get('/join/callback?code=good&state=x')
+        ->assertServiceUnavailable();
+
+    $attempt = JoinAttempt::query()->sole();
+    expect($attempt->outcome)->toBe(JoinOutcome::Error)
+        ->and($attempt->discord_id)->toBeNull();
+
+    Http::assertNothingSent();
+});
+
+it('records Error when the approval expired', function () {
+    // Stale or replayed OAuth state: the expired banner with an immediate
+    // retry — and the same Error row, since the token exchange threw.
+    $provider = Mockery::mock(AbstractProvider::class)->makePartial();
+    $provider->shouldReceive('redirectUrl')->andReturnSelf();
+    $provider->shouldReceive('user')->andThrow(new InvalidStateException);
+    Socialite::shouldReceive('driver')->with('discord')->andReturn($provider);
+
+    $this->get('/join/callback?code=stale&state=x')
         ->assertRedirect(route('join'))
         ->assertSessionHas('join_result', 'expired');
 
@@ -209,8 +236,13 @@ it('never stores the token, an exception message, or the error_description', fun
     $this->get('/join/callback?code=good&state=x')->assertSessionHas('join_result', 'unavailable');
 
     // Path 2: OAuth deny carrying an attacker-shaped error_description.
+    // TOG-5606: the description is never rendered and no flash is set — the
+    // member sees the recovery page in place.
     $this->get('/join/callback?error=access_denied&error_description='.urlencode($description).'&state=x')
-        ->assertSessionHas('join_result', 'denied');
+        ->assertOk()
+        ->assertSee(__('join.recovery_denied'), escape: false)
+        ->assertDontSee($description, escape: false)
+        ->assertSessionMissing('join_result');
 
     $dump = JoinAttempt::query()->get()->toJson();
     expect($dump)->not->toContain($token)

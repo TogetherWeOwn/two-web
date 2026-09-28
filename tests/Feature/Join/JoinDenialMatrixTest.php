@@ -145,9 +145,10 @@ it('keeps an authenticated member signed in on already_member re-entry', functio
     expect(User::query()->where('discord_id', MATRIX_ID)->count())->toBe(1);
 });
 
-it('maps a Discord-down token exchange to expired without reaching the bot', function () {
-    // Discord itself unreachable during the code exchange: same expired banner
-    // as a stale code ("try again or use the invite"), and the one-use token
+it('serves the retry page at 503 when Discord is down during the token exchange', function () {
+    // Discord itself unreachable during the code exchange: the 503 recovery
+    // page with retry + invite fallback, never the expired banner (the member
+    // did nothing wrong) and never the exception text. The one-use token
     // never exists so the bot must see zero HTTP calls.
     $provider = Mockery::mock(AbstractProvider::class)->makePartial();
     $provider->shouldReceive('redirectUrl')->andReturnSelf();
@@ -155,18 +156,51 @@ it('maps a Discord-down token exchange to expired without reaching the bot', fun
     Socialite::shouldReceive('driver')->with('discord')->andReturn($provider);
 
     $this->get('/join/callback?code=good&state=x')
-        ->assertRedirect(route('join'))
-        ->assertSessionHas('join_result', 'expired');
+        ->assertServiceUnavailable()
+        ->assertSee(__('join.recovery_discord_down'), escape: false)
+        ->assertSeeHtml('data-testid="oauth-recovery-retry"')
+        ->assertSeeHtml('href="https://discord.gg/testinvite"')
+        ->assertDontSee('discord.com:443 timeout')
+        ->assertSessionMissing('join_result');
 
     $this->assertGuest();
     expect(User::query()->count())->toBe(0);
     Http::assertNothingSent();
 });
 
-it('never touches the bot or the user table on an OAuth deny', function () {
-    $this->get('/join/callback?error=access_denied&state=x')
-        ->assertRedirect(route('join'))
-        ->assertSessionHas('join_result', 'denied');
+it('renders the recovery page without touching the bot or the user table on an OAuth deny', function () {
+    // TOG-5606: the deny path renders oauth.recovery in place (200) — what
+    // happened plus one button to retry — not a redirect whose banner is easy
+    // to miss after a round trip to Discord and back. No Socialite stub: the
+    // callback returns before any token exchange is attempted.
+    $response = $this->get('/join/callback?error=access_denied&error_description=The+user+denied+access&state=x');
+
+    $response->assertOk()
+        ->assertSee(__('join.recovery_denied'), escape: false)
+        ->assertSeeHtml('data-testid="oauth-recovery"')
+        ->assertSeeHtml('role="alert"')
+        ->assertSeeHtml('data-testid="oauth-recovery-retry"')
+        ->assertSee(route('join.redirect'), escape: false)
+        ->assertDontSee('The user denied access', escape: false)
+        ->assertSessionMissing('join_result');
+
+    $this->assertGuest();
+    expect(User::query()->count())->toBe(0);
+    Http::assertNothingSent();
+});
+
+it('renders the recovery page with the generic message for any other OAuth error', function () {
+    // `error=server_error` and friends: Discord refused the approval for its
+    // own reasons. Same page, same retry button, different sentence — and
+    // Discord's own error_description is never echoed back.
+    $response = $this->get('/join/callback?error=server_error&error_description=Something+broke+over+there&state=x');
+
+    $response->assertOk()
+        ->assertSee(__('join.recovery_error'), escape: false)
+        ->assertSeeHtml('data-testid="oauth-recovery"')
+        ->assertSeeHtml('data-testid="oauth-recovery-retry"')
+        ->assertDontSee('Something broke over there', escape: false)
+        ->assertSessionMissing('join_result');
 
     $this->assertGuest();
     expect(User::query()->count())->toBe(0);
