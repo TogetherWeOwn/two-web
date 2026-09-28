@@ -68,6 +68,12 @@ it('serves the upcoming collection as one VCALENDAR with a VEVENT per event', fu
         // TOG-7941: every VEVENT carries a SEQUENCE so already-synced
         // calendar clients apply host edits instead of keeping stale data.
         ->and($lines)->toContain('SEQUENCE:'.$event->updated_at->getTimestamp())
+        // TOG-7942: the collection names itself (Apple Calendar labels an
+        // unnamed subscription with the raw URL) and every VEVENT links back
+        // to the shareable page the feed exists to drive traffic to.
+        ->and($lines)->toContain('X-WR-CALNAME:'.config('app.name').' Events')
+        ->and($lines)->toContain('X-WR-CALDESC:Upcoming events from '.config('app.name'))
+        ->and($lines)->toContain('URL:'.route('events.page', $event))
         ->and(substr_count($body, 'BEGIN:VEVENT'))->toBe(1);
 });
 
