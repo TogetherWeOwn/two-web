@@ -53,8 +53,10 @@
                     @endif
 
                     {{-- Live count: re-reads the aggregate when RsvpButton
-                         broadcasts after a write (TOG-7966). --}}
-                    @livewire('going-count', ['event' => $event], key('going-count-'.$event->event_key))
+                         broadcasts after a write (TOG-7966). The spots-left
+                         signal rides the same live component so it never
+                         goes stale relative to the count beside it. --}}
+                    @livewire('going-count', ['event' => $event, 'showSpotsLeft' => true], key('going-count-'.$event->event_key))
                 </div>
             </div>
 
