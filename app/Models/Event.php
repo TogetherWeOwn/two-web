@@ -148,6 +148,26 @@ class Event extends Model
         return $this->status->isMirroredInDiscord();
     }
 
+    /**
+     * Whether the event is over for display purposes.
+     *
+     * The clock, not just the status: `events:reconcile` flips finished rows to
+     * Past every ten minutes, so a recently finished event is still Published on
+     * the clock's terms. A share page (or RSVP control) that reads status alone
+     * offers a live button for an event that has already happened.
+     */
+    public function hasEnded(): bool
+    {
+        if ($this->status === EventStatus::Past) {
+            return true;
+        }
+
+        // `ends_at` is non-nullable on the model, and every other reader
+        // (`endsAtLocal()`, the ICS export, the reconcile query) treats it
+        // that way — no null guard here either.
+        return $this->ends_at->isPast();
+    }
+
     /** @return BelongsTo<User, $this> */
     public function creator(): BelongsTo
     {
