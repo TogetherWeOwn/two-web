@@ -61,8 +61,7 @@ Then start everything with one command:
 composer dev                  # web server, queue worker, log tail, Vite
 ```
 
-Open <http://localhost:8000>. You should see a placeholder page saying the scaffold
-is running. <http://localhost:8000/up> is the health check.
+Open <http://localhost:8000>. You should see the TWO landing page — the Lobby Ledger hero with a Join Discord button, live member counts, rank progression, and the next upcoming events. <http://localhost:8000/up> is the health check.
 
 ### Check it actually works
 
