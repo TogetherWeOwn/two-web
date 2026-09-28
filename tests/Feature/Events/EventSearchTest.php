@@ -2,6 +2,7 @@
 
 use App\Enums\EventStatus;
 use App\Models\Event;
+use App\Support\Events\DiscordEventsSource;
 
 // HTTP contract for server-side event search on `GET /events?q=` (shipped in
 // #364). The Livewire behavior suite in EventsCalendarTest already pins the
@@ -10,6 +11,19 @@ use App\Models\Event;
 // contract: a shareable `?q=` URL narrows the rendered page, an empty query is
 // the full list, and a no-match query gets the search empty state — never the
 // "nothing is planned" ones.
+
+beforeEach(function () {
+    // The calendar's render reads the Discord source on every hit (TOG-5318);
+    // stub it clean (no events, no failure) so this contract tests the search
+    // against local rows rather than the bot database's reachability. A failed
+    // read must render the error empty state (see EventsCalendarTest), never
+    // the search one — without this, an unreachable bot database flips every
+    // test here into that state.
+    $source = Mockery::mock(DiscordEventsSource::class);
+    $source->shouldReceive('upcoming')->andReturn([]);
+    $source->shouldReceive('lastReadFailed')->andReturn(false);
+    app()->instance(DiscordEventsSource::class, $source);
+});
 
 /** A published upcoming event with fixed copy, so faker text cannot flake the assertions. */
 function searchableEvent(array $overrides = []): Event
@@ -52,5 +66,5 @@ it('shows the search empty state when nothing matches', function () {
         ->assertDontSee('Friday night Helldivers')
         // Neither no-search empty state applies to a query with no matches.
         ->assertDontSeeHtml('data-testid="events-empty-never"')
-        ->assertDontSeeHtml('data-testid="events-empty-no-upcoming"');
+        ->assertDontSeeHtml('data-testid="events-empty-gap"');
 });

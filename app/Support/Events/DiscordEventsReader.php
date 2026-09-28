@@ -26,8 +26,14 @@ use Throwable;
  * Follows the CountsReader contract: one cached `select` against a versioned
  * view, and never a throw. An unreachable bot database degrades to no rows,
  * not to a broken page.
+ *
+ * The class itself is not readonly: the services are readonly individually,
+ * but `$failed` below is mutable per-read state — the branch the error empty
+ * state hangs on. A readonly class cannot hold that flag (readonly properties
+ * can neither default nor be reassigned), and this file fatals at load if it
+ * tries.
  */
-final readonly class DiscordEventsReader implements DiscordEventsSource
+final class DiscordEventsReader implements DiscordEventsSource
 {
     /**
      * The bot's scheduled-events collector runs every ten minutes, so a
@@ -46,9 +52,11 @@ final readonly class DiscordEventsReader implements DiscordEventsSource
     private const ASSUMED_DURATION_HOURS = 1;
 
     public function __construct(
-        private DatabaseManager $db,
-        private CacheRepository $cache,
+        private readonly DatabaseManager $db,
+        private readonly CacheRepository $cache,
     ) {}
+
+    private bool $failed = false;
 
     /**
      * @return list<Event> Transient models (`exists === false`): safe to render,
@@ -57,7 +65,7 @@ final readonly class DiscordEventsReader implements DiscordEventsSource
     public function upcoming(): array
     {
         try {
-            return $this->cache->remember(self::UPCOMING_KEY, self::CACHE_SECONDS, function (): array {
+            $events = $this->cache->remember(self::UPCOMING_KEY, self::CACHE_SECONDS, function (): array {
                 $rows = $this->db->connection('bot')
                     ->select('select event_id, name, starts_at, channel_id, description from web_v1.upcoming_events order by starts_at');
 
@@ -66,6 +74,10 @@ final readonly class DiscordEventsReader implements DiscordEventsSource
                     $rows,
                 )));
             });
+
+            $this->failed = false;
+
+            return $events;
         } catch (Throwable $e) {
             // Never the exception message: a PDO failure can carry the DSN.
             // The class name says which kind of failure it was.
@@ -73,8 +85,18 @@ final readonly class DiscordEventsReader implements DiscordEventsSource
                 'exception' => $e::class,
             ]);
 
+            // Recorded, not rethrown: the component asks through
+            // `lastReadFailed()` whether this `[]` is "no events" or "no
+            // answer", which is the branch the error empty state hangs on.
+            $this->failed = true;
+
             return [];
         }
+    }
+
+    public function lastReadFailed(): bool
+    {
+        return $this->failed;
     }
 
     private function toEvent(object $row): ?Event
