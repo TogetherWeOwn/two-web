@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url';
 
 const REPO_ROOT = resolve(fileURLToPath(new URL('..', import.meta.url)));
 const DEFAULT_MANIFEST = resolve(REPO_ROOT, 'ci/critical-journeys.json');
-const REQUIRED_CHECKS = ['static', 'pest', 'dusk', 'budgets', 'tests', 'gitleaks'];
+const REQUIRED_CHECKS = ['static', 'pest', 'dusk', 'budgets', 'deps-audit', 'tests', 'gitleaks'];
 const SUCCESSFUL_CONCLUSIONS = new Set(['success', 'neutral', 'skipped']);
 
 function usage() {

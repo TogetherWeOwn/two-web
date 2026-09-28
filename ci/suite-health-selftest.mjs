@@ -47,7 +47,7 @@ expect('PR 259 runtime is measured as 4m 50s', baseline.status === 0 && baseline
 expect('all six critical journeys are reported complete', baseline.stdout.includes('Complete critical journeys: **6/6**') && !baseline.stdout.includes('**INCOMPLETE:**'), baseline.stdout);
 const baselineJsonResult = run(['--input', EXAMPLE, '--format', 'json']);
 const baselineJson = JSON.parse(baselineJsonResult.stdout);
-expect('all six required checks are used', baselineJsonResult.status === 0 && JSON.stringify(baselineJson.requiredChecks) === JSON.stringify(['static', 'pest', 'dusk', 'budgets', 'tests', 'gitleaks']), baselineJsonResult.stderr || baselineJsonResult.stdout);
+expect('all seven required checks are used', baselineJsonResult.status === 0 && JSON.stringify(baselineJson.requiredChecks) === JSON.stringify(['static', 'pest', 'dusk', 'budgets', 'deps-audit', 'tests', 'gitleaks']), baselineJsonResult.stderr || baselineJsonResult.stdout);
 
 const flaky = JSON.parse(await readFile(EXAMPLE, 'utf8'));
 flaky.pulls[0].checkRuns.splice(2, 0, {

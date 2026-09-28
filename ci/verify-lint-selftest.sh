@@ -165,14 +165,14 @@ expect_fail no-lint-step 'runs `verify-pipeline.sh --lint`' \
 # red. Require the aggregate alone — the shape a smaller protection rule naturally
 # takes — and a pull request that disarms the gate merges clean.
 expect_fail lint-job-not-required 'are not required checks' \
-  bash -c 'sed -i "s/^REQUIRED_CHECKS=(.*)$/REQUIRED_CHECKS=(tests pest dusk budgets gitleaks)/" ci/verify-pipeline.sh'
+  bash -c 'sed -i "s/^REQUIRED_CHECKS=(.*)$/REQUIRED_CHECKS=(tests pest dusk budgets deps-audit gitleaks)/" ci/verify-pipeline.sh'
 
 printf '\n\033[1m==> The required check never arrives (main unmergeable, forever)\033[0m\n'
 
 # Requiring the workflow *name*. `CI` is the workflow; protection matches the
 # check-run name. This one was actually applied to `main` on TWO-36.
 expect_fail phantom-ci 'required check `ci` is not reported' \
-  sed -i 's/^REQUIRED_CHECKS=(.*)$/REQUIRED_CHECKS=(ci tests static pest dusk budgets gitleaks)/' ci/verify-pipeline.sh
+  sed -i 's/^REQUIRED_CHECKS=(.*)$/REQUIRED_CHECKS=(ci tests static pest dusk budgets deps-audit gitleaks)/' ci/verify-pipeline.sh
 
 # Requiring a job from a workflow that never runs on a pull request. `deploy.yml`
 # is `workflow_run`-triggered, so `staging` looks like a real job id and reports
@@ -456,6 +456,39 @@ expect_fail bundle-enforcement-removed 'no longer runs `check-bundle-budget.mjs`
 # that proves the checker still fails. Same argument as check 9's lint pin.
 expect_fail bundle-selftest-removed 'runs `check-bundle-budget.mjs --selftest`' \
   bash -c "sed -i '/check-bundle-budget.mjs --selftest/d' .github/workflows/ci.yml"
+
+printf '\n\033[1m==> The dependency audit stops auditing (TOG-8405)\033[0m\n'
+
+# The enforcement step dropped from `deps-audit` while the script stays in
+# place. Caps with no comparison: advisories arrive without a commit to this
+# repo, the checker never runs, every job stays green. Addressed to the
+# `deps-audit` block by name — a file-wide grep would also match the
+# `--selftest` step in `static`, which proves the predicate fails but audits
+# nothing (no live feeds there).
+expect_fail audit-enforcement-removed 'no longer runs `deps-audit.sh --run`' \
+  bash -c "awk '
+    /^  deps-audit:[[:space:]]*\$/      { inside = 1; print; next }
+    inside && /^  [a-zA-Z0-9_-]+:[[:space:]]*\$/ { inside = 0 }
+    inside && /deps-audit\.sh --run/    { next }
+                                        { print }
+  ' .github/workflows/ci.yml > ci.yml.mutated && mv ci.yml.mutated .github/workflows/ci.yml"
+
+# The predicate's self-test dropped from `static`. The live audit only ever
+# executes in `deps-audit` against the live feeds, so a neutered predicate and
+# clean lockfiles look identical from every job — this step is the only thing
+# that proves the predicate still fails. Same argument as check 9's.
+expect_fail audit-selftest-removed 'runs `deps-audit.sh --selftest`' \
+  bash -c "sed -i '/deps-audit.sh --selftest/d' .github/workflows/ci.yml"
+
+# The whole job deleted. Advisories do not wait for a commit: a lockfile that
+# is clean today can be advisory-red tomorrow with no diff at all, which is
+# why a deleted job is a deleted gate rather than a shrunk one.
+expect_fail audit-job-deleted 'job `deps-audit` was not found' \
+  bash -c "awk '
+    /^  deps-audit:[[:space:]]*\$/      { inside = 1; next }
+    inside && /^  [a-zA-Z0-9_-]+:[[:space:]]*\$/ { inside = 0; print; next }
+    !inside                             { print }
+  ' .github/workflows/ci.yml > ci.yml.mutated && mv ci.yml.mutated .github/workflows/ci.yml"
 
 printf '\n\033[1m==> Tripwires (warn, do not block)\033[0m\n'
 
