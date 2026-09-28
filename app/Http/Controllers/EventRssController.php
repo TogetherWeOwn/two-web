@@ -5,6 +5,7 @@ namespace App\Http\Controllers;
 use App\Enums\EventStatus;
 use App\Models\Event;
 use App\Support\EventRss;
+use Illuminate\Http\Request;
 use Illuminate\Http\Response;
 use Illuminate\Support\Facades\Gate;
 
@@ -27,7 +28,7 @@ use Illuminate\Support\Facades\Gate;
  */
 final class EventRssController
 {
-    public function __invoke(): Response
+    public function __invoke(Request $request): Response
     {
         Gate::authorize('viewAny', Event::class);
 
@@ -37,9 +38,21 @@ final class EventRssController
             ->orderBy('starts_at')
             ->get();
 
-        return response(EventRss::for($events), 200, [
+        // The feed's content changes only when an event in scope does, so the
+        // newest `updated_at` is the content clock — and the `lastBuildDate`
+        // the body carries. Stamping `now()` here instead would make every body
+        // unique and the validator below useless; see `EventRss::for()`.
+        $built = $events->max('updated_at');
+
+        $response = response(EventRss::for($events, $built), 200, [
             'Content-Type' => 'application/rss+xml; charset=utf-8',
             'Cache-Control' => 'public, max-age=300',
         ]);
+
+        $content = $response->getContent();
+        $response->setEtag(hash('sha256', $content === false ? '' : $content));
+        $response->isNotModified($request);
+
+        return $response;
     }
 }
