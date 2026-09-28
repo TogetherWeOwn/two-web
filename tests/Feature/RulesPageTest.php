@@ -17,6 +17,17 @@ it('serves the house rules page', function () {
         ->assertSee(route('join'), escape: false);
 });
 
+it('shows a maintainer-editable last-updated stamp', function () {
+    config(['community.rules_last_updated' => '2026-09-01']);
+
+    $this->get('/rules')
+        ->assertOk()
+        ->assertSee('data-testid="rules-last-updated"', escape: false)
+        ->assertSee('Last updated', escape: false)
+        ->assertSee('1 September 2026', escape: false)
+        ->assertSee('datetime="2026-09-01"', escape: false);
+});
+
 it('advertises the house rules in the sitemap', function () {
     $this->get('/sitemap_index.xml')
         ->assertOk()

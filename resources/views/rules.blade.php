@@ -3,6 +3,7 @@
         <div class="mx-auto max-w-3xl px-4 py-16 md:px-6 md:py-20 lg:px-8">
             <h1 id="rules-heading" class="u-display text-3xl text-ink md:text-5xl">House rules</h1>
             <p class="mt-3 max-w-prose text-lg text-ink-muted">Five rules that keep the lobby a place people come back to. Short on purpose — if anything is unclear, ask in Discord before you assume.</p>
+            <p data-testid="rules-last-updated" class="mt-2 text-sm text-ink-muted">Last updated <time datetime="{{ config('community.rules_last_updated') }}">{{ \Carbon\Carbon::parse(config('community.rules_last_updated'))->format('j F Y') }}</time></p>
 
             <ol data-testid="rules-list" class="mt-8 space-y-4">
                 <li class="rounded-lg border border-line bg-surface p-4">
