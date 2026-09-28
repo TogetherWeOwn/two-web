@@ -814,7 +814,8 @@ print("trivialAllowlist=%s" % ",".join(trivial))
         "resources/css/app.css|76800|15360" \
         "resources/css/filament/admin/theme.css|375000|38000" \
         "resources/css/hallmark.css|15360|4096" \
-        "resources/js/app.js|5120|2048"; do
+        "resources/js/app.js|5120|2048" \
+        "resources/js/event-copy-link.js|4096|2048"; do
         if grep -qxF -- "$bundle_entry" <<< "$bundle_effective"; then
           pass "bundle budget \`$(cut -d'|' -f1 <<< "$bundle_entry")\` caps raw and gzip at $(cut -d'|' -f2 <<< "$bundle_entry")/$(cut -d'|' -f3 <<< "$bundle_entry") bytes"
         else

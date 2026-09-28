@@ -9,6 +9,10 @@ export default defineConfig({
                 'resources/css/app.css',
                 'resources/css/hallmark.css',
                 'resources/js/app.js',
+                // TOG-7262: copy-link on the event page. Its own entry so the
+                // global bundle stays import-free (see AssetCompressionTest) and
+                // only event pages download it.
+                'resources/js/event-copy-link.js',
                 'resources/css/filament/admin/theme.css',
             ],
             refresh: true,
