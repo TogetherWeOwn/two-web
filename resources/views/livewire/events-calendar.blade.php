@@ -299,11 +299,13 @@
             </button>
         </div>
 
-        {{-- TOG-6932: a tabindex="0" scroll region is a tab stop on every visit,
-             keyboard or not. `role="region"` keeps the label; the region only
-             joins the tab order when it can actually scroll (narrow viewport),
-             which is the WCAG 2.1.1-correct behaviour — no keyboard trap on
-             wide screens, reachable overflow on narrow ones. --}}
+        {{-- TOG-6932: `role="region"` exposes the aria-label to assistive tech
+             (a plain div's label would never be announced). The region keeps
+             tabindex="0", so it is a tab stop on every viewport — including
+             wide screens where it cannot scroll. That unconditional stop is
+             the known WCAG 2.1.1 trade-off: scrollable content must be
+             keyboard-reachable, and a CSS-only conditional stop is not
+             available here. --}}
         <div class="mt-4 overflow-x-auto"
              role="region"
              tabindex="0"

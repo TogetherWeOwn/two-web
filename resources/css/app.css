@@ -97,17 +97,22 @@
 /* The skip link. `sr-only focus:not-sr-only` reveals it on keyboard focus,
    but revealed as bare text on the page ground it is a 1.4:1 smear on ledger
    paper; nobody can read the control they just found. This makes the revealed
-   state an opaque pill: canvas fill, near-white text (16.7:1 on the fill), and
-   the fill itself at 16.6:1 on ledger paper / 17.4:1 on taste paper, so the
-   pill reads as one control on every public page. The ledger-ink outline
-   (15.2:1 on the pill) marks it focused; `z-index` keeps it above the hero. */
-a[href='#main']:focus-visible {
+   state an opaque pill on the light schemes only: canvas fill, near-white
+   text (16.7:1 on the fill), and the fill itself at 16.6:1 on ledger paper /
+   17.4:1 on taste paper, so the pill reads as one control. The outline sits
+   in the 2px offset gap on the paper (15.2:1 ledger, 14.5:1 taste). Scoped to
+   the light schemes on purpose: on a dark page the canvas fill would equal
+   the ground and the ledger outline would fall to ~1.1:1, replacing the
+   vendored 17.5:1 ring — dark pages keep the vendored ring untouched.
+   `position: relative` makes the `z-index` take effect above the hero. */
+:where(.bg-ledger-paper, .bg-taste-paper) a[href='#main']:focus-visible {
     background-color: var(--color-canvas);
     color: var(--color-ink);
     outline: 2px solid var(--color-ledger-ink);
     outline-offset: 2px;
     border-radius: var(--radius-sm);
     padding: 0.5rem 1rem;
+    position: relative;
     z-index: 50;
 }
 

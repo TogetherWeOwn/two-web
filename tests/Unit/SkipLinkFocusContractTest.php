@@ -44,7 +44,12 @@ it('overrides the focus ring on the light schemes in app.css, not two.css', func
         ->and($css)->toContain('outline-color: var(--color-ledger-ink)')
         ->and($css)->toContain('outline-color: var(--color-taste-ink)')
         ->and($css)->toContain("a[href='#main']:focus-visible")
-        ->and($css)->toContain('background-color: var(--color-canvas)');
+        ->and($css)->toContain('background-color: var(--color-canvas)')
+        // The pill must stay scoped to the light schemes: unscoped, its
+        // canvas fill equals the dark page ground and its ledger outline
+        // falls to ~1.1:1 on canvas, replacing the vendored 17.5:1 ring.
+        ->and($css)->toContain(":where(.bg-ledger-paper, .bg-taste-paper) a[href='#main']:focus-visible")
+        ->and($css)->toContain('position: relative');
 });
 
 it('leaves the vendored dark focus ring untouched', function () {
