@@ -38,6 +38,13 @@
                     "completedAt": "2026-09-07T05:32:34Z"
                 },
                 {
+                    "name": "deps-audit",
+                    "status": "completed",
+                    "conclusion": "success",
+                    "startedAt": "2026-09-07T05:28:27Z",
+                    "completedAt": "2026-09-07T05:28:59Z"
+                },
+                {
                     "name": "tests",
                     "status": "completed",
                     "conclusion": "success",
