@@ -8,6 +8,7 @@ use App\Models\AgentEventIdempotencyKey;
 use App\Models\Event;
 use App\Services\Bot\InternalActionClient;
 use Illuminate\Support\Carbon;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Str;
 
@@ -714,11 +715,17 @@ it('answers 429 JSON past the outer shield while the normal burst stays under it
 });
 
 it('spends no shared bucket across credentials on the outer shield', function () {
-    config()->set('agent-events.route_per_minute', 2);
+    // Faked like the burst test: the create setup dispatches the write-back
+    // job, and a synchronous driver would take it to the bot.
+    Http::fake([AGENT_BOT_ENDPOINT => Http::response(agentBotUpsert())]);
 
     // A second grant needs a second credential: the verifier is unique, so
     // each credential hashes to its own verifier row.
     $otherCredential = 'agent-test-credential-second-grant-entropy';
+    $first = ['Authorization' => 'Bearer '.AGENT_CREDENTIAL];
+    $second = ['Authorization' => 'Bearer '.$otherCredential];
+
+    agentGrant();
     AgentEventGrant::query()->create([
         'agent_id' => 'c1f22b2f-d85f-41e1-9c16-9ca24ac06a11',
         'company_id' => 'ef993a7e-5ea7-445f-ba88-27a6a2690c3a',
@@ -726,28 +733,45 @@ it('spends no shared bucket across credentials on the outer shield', function ()
         'verifier_hash' => AgentEventGrant::verifierFor($otherCredential),
         'max_events' => 1,
     ]);
-    config()->set('agent-events.enabled', true);
 
-    $first = ['Authorization' => 'Bearer '.AGENT_CREDENTIAL];
-    agentGrant();
+    // A bare read with no event_key and zero owned events is a 404 by
+    // pre-existing service behaviour (ownedEvent() -> event_not_found), so
+    // each credential creates its one owned event first, at the default
+    // shield, before the budget is tightened for the measured phase.
+    $firstKey = $this->postJson(route('api.agent-events'), agentOp('create', ['fields' => agentFields()]), $first)
+        ->assertCreated()
+        ->json('event_key');
+    $secondKey = $this->postJson(route('api.agent-events'), agentOp('create', ['fields' => agentFields()]), $second)
+        ->assertCreated()
+        ->json('event_key');
+
+    // The setup creates spent the shield buckets at the default budget; clear
+    // them so the measured phase starts from zero rather than inheriting the
+    // setup hits.
+    Cache::flush();
+    config()->set('agent-events.route_per_minute', 2);
 
     // The first credential spends its shield of 2; the third hit 429s.
-    $this->postJson(route('api.agent-events'), agentOp('read'), $first)->assertOk();
-    $this->postJson(route('api.agent-events'), agentOp('read'), $first)->assertOk();
-    assertThrottleEnvelope($this->postJson(route('api.agent-events'), agentOp('read'), $first));
+    $this->postJson(route('api.agent-events'), agentOp('read', ['event_key' => $firstKey]), $first)->assertOk();
+    $this->postJson(route('api.agent-events'), agentOp('read', ['event_key' => $firstKey]), $first)->assertOk();
+    assertThrottleEnvelope($this->postJson(route('api.agent-events'), agentOp('read', ['event_key' => $firstKey]), $first));
 
     // The second credential hashes to its own bucket: still answered while
     // the first is throttled — one crowded egress cannot spend another
     // grant's allowance.
-    $this->postJson(route('api.agent-events'), agentOp('read'), ['Authorization' => 'Bearer '.$otherCredential])
+    $this->postJson(route('api.agent-events'), agentOp('read', ['event_key' => $secondKey]), $second)
         ->assertOk();
 });
 
 it('refuses an unauthenticated flood at the shield before the database runs', function () {
+    config()->set('agent-events.enabled', true);
     config()->set('agent-events.route_per_minute', 2);
 
     // No grant, no credential rows touched: the shield counts anonymous hits
-    // per IP and refuses before the grant lookup and audit write.
+    // per IP and refuses before the grant lookup. The first two hits pass
+    // the shield and are denied 401 by the service (each writing an
+    // `unauthenticated` audit row); only the shield-refused third hit writes
+    // nothing.
     $this->postJson(route('api.agent-events'), agentOp('create', ['fields' => agentFields()]))
         ->assertUnauthorized();
     $this->postJson(route('api.agent-events'), agentOp('create', ['fields' => agentFields()]))
@@ -756,5 +780,5 @@ it('refuses an unauthenticated flood at the shield before the database runs', fu
     assertThrottleEnvelope($this->postJson(route('api.agent-events'), agentOp('create', ['fields' => agentFields()])));
 
     expect(AgentEventGrant::query()->count())->toBe(0)
-        ->and(AgentEventAudit::query()->count())->toBe(0);
+        ->and(AgentEventAudit::query()->where('reason_code', 'unauthenticated')->count())->toBe(2);
 });
