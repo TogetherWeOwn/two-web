@@ -137,6 +137,20 @@ funnel widget counts the table it sees — the retention window, not all time.
 | `JOIN_ATTEMPT_RETENTION_DAYS` | Optional (default 90) | `90` | `90` | Narrows or widens the funnel window the admin widget shows; same window as the access log on purpose. |
 | `AGENT_EVENTS_IDEMPOTENCY_RETENTION_DAYS` | Optional (default 90) | `90` | `90` | Well past any retry horizon (job backoffs top out at hours). A retry arriving after its row was pruned re-executes; the quota and optimistic-concurrency guards make that duplicate-safe. |
 
+## 8c. Event search-log retention
+
+`event_search_logs` grows by one row per rendered `/events` search and is
+pruned daily by `model:prune` on its `prunable()` scope
+(`routes/console.php`), which can only ever match rows older than the
+configured window. The dashboard's missed-searches widget shows the
+retention window, not all time. What guests searched for must not become a
+permanent index — normalized queries only, no user id, no session, no IP,
+no raw input.
+
+| Key | Required? | Local | Staging / Production | What breaks if wrong |
+| --- | --- | --- | --- | --- |
+| `EVENT_SEARCH_LOG_RETENTION_DAYS` | Optional (default 90) | `90` | `90` | Narrows or widens the missed-searches window the admin widget shows; same window as the access log on purpose. |
+
 ## 9. Member-data access log
 
 Reads of member data through the admin panel are logged (who, when, which

@@ -1,6 +1,7 @@
 <?php
 
 use App\Models\AgentEventIdempotencyKey;
+use App\Models\EventSearchLog;
 use App\Models\JoinAttempt;
 use App\Models\MemberDataAccessLog;
 use Illuminate\Foundation\Inspiring;
@@ -33,6 +34,14 @@ Schedule::command('model:prune', ['--model' => [MemberDataAccessLog::class]])->d
 // tests/Feature/Console/PruneStaleRetentionTest.php asserts the schedule
 // exists and that both prunable() scopes keep rows inside the window.
 Schedule::command('model:prune', ['--model' => [JoinAttempt::class, AgentEventIdempotencyKey::class]])->daily();
+
+// Retention on the event search log (TOG-8400). Same shape as the entries
+// above: `model:prune` runs the mass delete on EventSearchLog::prunable(),
+// which can only ever match rows older than the configured window. A missed
+// search older than the window is stale signal, not history worth keeping —
+// and what guests looked for is the one table here that must not become a
+// permanent index.
+Schedule::command('model:prune', ['--model' => [EventSearchLog::class]])->daily();
 
 /*
  * Every ten minutes, because that is the gap between an event going stale and a

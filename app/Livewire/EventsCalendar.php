@@ -6,6 +6,7 @@ use App\Enums\EventStatus;
 use App\Enums\RsvpStatus;
 use App\Models\Event;
 use App\Support\Events\DiscordEventsSource;
+use App\Support\Events\EventSearchLogger;
 use Carbon\CarbonImmutable;
 use Carbon\Exceptions\InvalidFormatException;
 use DateTimeZone;
@@ -143,6 +144,22 @@ class EventsCalendar extends Component
         // While searching, matching past events show without opening the drawer:
         // a match hidden behind a closed drawer reads as "no results".
         $showPast = $this->showingPast || $searching;
+
+        // Record what was searched and what the guest saw (TOG-8400). One
+        // row per render: debounced typing settles through several states
+        // and each one is a result set the guest actually saw. The count is
+        // the visible results — local plus Discord rows, past matches only
+        // once revealed (the past list is capped at 20, so a huge tail reads
+        // as 20 — exact where it matters, at zero). The logger normalizes
+        // (case, whitespace, length) and never stores who searched: no user
+        // id, no session, no IP, no raw input. Fail-open by design — a down
+        // table is an unrecorded search, never a broken page.
+        if ($searching) {
+            app(EventSearchLogger::class)->record(
+                $this->search,
+                $upcoming->count() + ($showPast ? $past->count() : 0),
+            );
+        }
 
         return view('livewire.events-calendar', [
             'upcoming' => $upcoming,
