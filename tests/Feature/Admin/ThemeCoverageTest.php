@@ -26,7 +26,7 @@
  * changes a token would otherwise leave our copy silently behind.
  */
 
-use App\Filament\Pages\BotSettings;
+use App\Filament\StagingPages\BotSettings;
 use App\Filament\Pages\Schemas\BotSettingsForm;
 use App\Filament\Resources\Events\EventResource;
 use App\Filament\Resources\Events\Pages\CreateEvent;

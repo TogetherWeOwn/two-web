@@ -1,6 +1,6 @@
 <?php
 
-use App\Filament\Pages\BotSettings;
+use App\Filament\StagingPages\BotSettings;
 use App\Models\User;
 use App\Services\Bot\BotSettingKey;
 use Illuminate\Http\Client\Request;

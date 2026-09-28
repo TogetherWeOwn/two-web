@@ -1,6 +1,6 @@
 <?php
 
-namespace App\Filament\Pages;
+namespace App\Filament\StagingPages;
 
 use App\Filament\Pages\Schemas\BotSettingsForm;
 use App\Jobs\CallInternalAction;

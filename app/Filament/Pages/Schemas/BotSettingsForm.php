@@ -2,7 +2,7 @@
 
 namespace App\Filament\Pages\Schemas;
 
-use App\Filament\Pages\BotSettings;
+use App\Filament\StagingPages\BotSettings;
 use App\Services\Bot\BotSettingKey;
 use Filament\Forms\Components\Field;
 use Filament\Forms\Components\Select;

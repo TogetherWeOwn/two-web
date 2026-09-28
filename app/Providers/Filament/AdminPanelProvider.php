@@ -2,6 +2,7 @@
 
 namespace App\Providers\Filament;
 
+use App\Filament\StagingPages\BotSettings;
 use App\Filament\Widgets\JoinFunnelStats;
 use App\Http\Middleware\AddContentSecurityPolicy;
 use App\Http\Middleware\RecordMemberDataAccess;
@@ -94,9 +95,16 @@ class AdminPanelProvider extends PanelProvider
             ->darkMode(isForced: true)
             ->discoverResources(in: app_path('Filament/Resources'), for: 'App\Filament\Resources')
             ->discoverPages(in: app_path('Filament/Pages'), for: 'App\Filament\Pages')
-            ->pages([
+            // BotSettings lives outside the discovered Pages directory and is
+            // registered explicitly, gated out of production (TOG-3472): the
+            // ADR slice ships to staging only until the wider TOG-3093 admin
+            // dashboard rollout covers it. app()->environment() is called at
+            // panel-registration time (per request), so this reflects the
+            // booted environment on every boot, not a cached decision.
+            ->pages(array_filter([
                 Dashboard::class,
-            ])
+                app()->environment('production') ? null : BotSettings::class,
+            ]))
             ->widgets([
                 AccountWidget::class,
                 JoinFunnelStats::class,
