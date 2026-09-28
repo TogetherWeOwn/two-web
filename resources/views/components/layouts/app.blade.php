@@ -54,6 +54,15 @@
     {{-- Archivo is self-hosted and the headline uses its width axis. Without
          this the hero reflows on first paint and the join button moves. --}}
     <link rel="preload" href="/fonts/archivo-latin.woff2" as="font" type="font/woff2" crossorigin>
+    @if ($deferLivewire ?? false)
+        {{-- Livewire's loading/offline hiding rules, inline and immediate. The
+             deferred loader below emits @livewireScriptConfig, which flips
+             FrontendAssets::hasRenderedScripts and makes auto-injection skip
+             the styles too — so without this the page ships zero <style> tags
+             and every wire:loading spinner renders visibly until the runtime
+             boots on window.load (TOG-7335). CSS parses now; only the JS waits. --}}
+        @livewireStyles
+    @endif
     @vite([...$styleBundles, 'resources/js/app.js'])
 </head>
 <body class="{{ $bodyScheme }}h-full">
