@@ -22,7 +22,7 @@ exactly against this table:
 |---|---|---|
 | "You are in. Finish Discord’s rules screening before you can post." | Join worked (`added`). | Accept the rules on Discord's membership screen — until then they're pending and can't post (FAQ Q5). |
 | "You are already in the server." | They're already a member (`already_member`). | Same as above: check the rules screening / pending state. |
-| "You cancelled the Discord approval. You can still use the invite." | They pressed Cancel on Discord's approval screen (`denied`). Nothing is broken. | Go back to `/join` and approve, or use the invite at `/discord`. |
+| "You cancelled the Discord approval, so we did not add you to the server. Nothing changed — try again whenever you like." | They pressed Cancel on Discord's approval screen (`denied`). Nothing is broken — this shows on a recovery page with a retry button, not a `/join` banner. | Use the retry button on the page, or the invite at `/discord`. |
 | "That Discord approval expired. Try again or use the invite." | The approval took too long, or the callback was stale/replayed (`expired`). Nothing is broken. | Try `/join` once more, or use `/discord`. |
 | "One-click join is unavailable right now. The Discord invite still works." | One-click is down: the bot is unreachable, Discord errored, or it isn't configured (`unavailable`). | Use the invite at `/discord` — it works even when everything else is down. |
 | (at sign-in) "You need to be a member of the Together We Own Discord server to sign in. Join the server, then come back." | They're not in the server (`not_a_member`). | Join first via `/join` or `/discord`, then sign in. |
