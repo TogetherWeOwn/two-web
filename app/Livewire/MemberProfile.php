@@ -176,12 +176,16 @@ class MemberProfile extends Component
         // the listener picks its target from the morphed DOM.
         $this->dispatch('profile-state-changed')->self();
 
-        // TOG-8715: the spam trap fires before validation and before any
-        // write. Either signal — a filled decoy or a save faster than a human
-        // manages after opening the form — ends in the exact success state a
+        // TOG-8715: validation fires before the spam trap (TOG-9361). An
+        // invalid save — fast or slow, decoy filled or not — must surface
+        // field errors, never a false "Profile saved." Either trap signal on
+        // a VALID save — a filled decoy or a save faster than a human manages
+        // after opening the form — then ends in the exact success state a
         // real save produces: no error, no retained form, "Profile saved."
         // A distinct response would be an oracle the trap must not give, and
         // nothing attacker-shaped is logged.
+        $validated = $this->validate(static::validationRules());
+
         if (SpamTrap::honeypotFilled($this->website) || SpamTrap::tooFast($this->formOpenedAt)) {
             $this->editing = false;
             $this->saved = true;
@@ -189,8 +193,6 @@ class MemberProfile extends Component
 
             return;
         }
-
-        $validated = $this->validate(static::validationRules());
 
         $games = [];
         foreach (preg_split('/\R/', $validated['gamesText'] ?? '') ?: [] as $game) {
