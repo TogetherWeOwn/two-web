@@ -73,6 +73,39 @@ it('serves a published event as text/calendar with the right DTSTART, DTEND and 
         ->and(icsLine($lines, 'LOCATION:'))->toBe('LOCATION:Voice: General');
 });
 
+it('names the calendar and links the event back to its shareable page', function () {
+    // TOG-7942: without X-WR-CALNAME Apple Calendar labels the subscription
+    // with the raw URL, and without URL the entry has no tap-through to the
+    // page the feed exists to drive traffic to.
+    $event = Event::factory()->create(['status' => EventStatus::Published]);
+
+    $body = $this->get(route('events.ics', $event))->assertOk()->getContent();
+    $lines = icsLines($body);
+
+    expect(icsLine($lines, 'X-WR-CALNAME:'))->toBe('X-WR-CALNAME:'.config('app.name').' Events')
+        ->and(icsLine($lines, 'X-WR-CALDESC:'))->toBe('X-WR-CALDESC:Upcoming events from '.config('app.name'))
+        ->and(icsLine($lines, 'URL:'))->toBe('URL:'.route('events.page', $event));
+});
+
+it('emits a URL that survives the strict fold/unfold round trip as a valid URL', function () {
+    $event = Event::factory()->create(['status' => EventStatus::Published]);
+
+    $body = $this->get(route('events.ics', $event))->assertOk()->getContent();
+
+    // No bare LFs: every line break is CRLF, so a strict parser's unfolding
+    // (join continuation lines starting with a space) reconstructs the URL.
+    // `preg_match`, not `toContain("\n")`: every CRLF contains an LF, so only
+    // an LF *not* preceded by CR is a violation.
+    expect(preg_match('/(?<!\r)\n/', $body))->toBe(0, 'bare LF would corrupt a strict parse')
+        ->and(substr_count($body, "\r\n"))->toBeGreaterThan(0);
+
+    $url = (string) str_replace('URL:', '', icsLine(icsLines($body), 'URL:'));
+
+    expect($url)->toBe(route('events.page', $event))
+        ->and(parse_url($url, PHP_URL_SCHEME))->not->toBeNull()
+        ->and(parse_url($url, PHP_URL_HOST))->not->toBeNull();
+});
+
 it('keeps the UID stable across downloads so calendars update instead of duplicating', function () {
     $event = Event::factory()->create(['status' => EventStatus::Published]);
 
@@ -80,6 +113,37 @@ it('keeps the UID stable across downloads so calendars update instead of duplica
     $second = icsLine(icsLines($this->get(route('events.ics', $event))->assertOk()->getContent()), 'UID:');
 
     expect($first)->not->toBeNull()->and($first)->toBe($second);
+});
+
+it('carries a SEQUENCE derived from updated_at so synced calendars apply edits', function () {
+    $event = Event::factory()->create(['status' => EventStatus::Published]);
+
+    $lines = icsLines($this->get(route('events.ics', $event))->assertOk()->getContent());
+    $sequence = icsLine($lines, 'SEQUENCE:');
+
+    expect($sequence)->toBe('SEQUENCE:'.$event->updated_at->getTimestamp());
+});
+
+it('bumps SEQUENCE on edit with the same UID and intact DTSTART/DTEND/STATUS', function () {
+    $event = Event::factory()->create(['status' => EventStatus::Published]);
+
+    $before = icsLines($this->get(route('events.ics', $event))->assertOk()->getContent());
+    $beforeUid = icsLine($before, 'UID:');
+    $beforeSequence = (int) str_replace('SEQUENCE:', '', icsLine($before, 'SEQUENCE:'));
+
+    // Second resolution: `updated_at` timestamps share a second within a fast
+    // test, so travel past the second boundary — production re-polls are minutes
+    // apart and never hit this.
+    $this->travel(2)->seconds();
+    $event->update(['title' => 'Friday night Helldivers (rescheduled)']);
+
+    $after = icsLines($this->get(route('events.ics', $event->refresh()))->assertOk()->getContent());
+
+    expect(icsLine($after, 'UID:'))->toBe($beforeUid)
+        ->and((int) str_replace('SEQUENCE:', '', icsLine($after, 'SEQUENCE:')))->toBeGreaterThan($beforeSequence)
+        ->and(icsLine($after, 'DTSTART:'))->not->toBeNull()
+        ->and(icsLine($after, 'DTEND:'))->not->toBeNull()
+        ->and(icsLine($after, 'STATUS:'))->toBe('STATUS:CONFIRMED');
 });
 
 it('maps a cancelled event to STATUS:CANCELLED', function () {
@@ -114,6 +178,17 @@ it('escapes commas, semicolons and newlines in text fields', function () {
 
     expect(icsLine($lines, 'SUMMARY:'))->toBe('SUMMARY:Raid\; night\, part 1')
         ->and(icsLine($lines, 'DESCRIPTION:'))->toBe('DESCRIPTION:Line one\nLine two');
+});
+
+it('includes a VALARM reminding 30 minutes before the event', function () {
+    $event = Event::factory()->create(['status' => EventStatus::Published]);
+
+    $lines = icsLines($this->get(route('events.ics', $event))->assertOk()->getContent());
+
+    expect($lines)->toContain('BEGIN:VALARM')
+        ->and(icsLine($lines, 'TRIGGER:'))->toBe('TRIGGER:-PT30M')
+        ->and(icsLine($lines, 'ACTION:'))->toBe('ACTION:DISPLAY')
+        ->and($lines)->toContain('END:VALARM');
 });
 
 it('builds the download from the same model without an HTTP round trip', function () {

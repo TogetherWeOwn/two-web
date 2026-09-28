@@ -313,7 +313,11 @@ it('clears a previous failure once the retry works', function () {
         ->assertSee("You're in", false);
 });
 
-it('shares the HTTP RSVP allowance and returns Retry-After from a limited Livewire action', function () {
+it('announces the throttle wait when the shared write budget is spent', function () {
+    // TOG-7976: a throttled Livewire click used to rethrow the
+    // ThrottleRequestsException, so the member got Livewire's silent failure
+    // modal instead of words. The budget is still shared with the JSON routes
+    // (the HTTP 429 envelope below is unchanged); only the control now speaks.
     $this->freezeTime();
 
     for ($attempt = 0; $attempt < RsvpRateLimit::MAX_ATTEMPTS; $attempt++) {
@@ -324,18 +328,105 @@ it('shares the HTTP RSVP allowance and returns Retry-After from a limited Livewi
             ->assertSuccessful();
     }
 
-    Livewire::actingAs($this->member)
+    // The JSON route still refuses with the shared 429 envelope (TOG-6788).
+    assertThrottleEnvelope(
+        $this->actingAs($this->member)
+            ->putJson(route('events.rsvp.update', $this->event), [
+                'status' => RsvpStatus::Going->value,
+            ]),
+        RsvpRateLimit::DECAY_SECONDS,
+    );
+
+    // The member is going by now, so this is the withdraw path: the wait is
+    // announced politely beside a control that stays usable.
+    $html = Livewire::actingAs($this->member)
         ->test(RsvpButton::class, ['event' => $this->event])
         ->call('withdraw')
-        ->assertStatus(429)
-        ->assertHeader('Retry-After', RsvpRateLimit::DECAY_SECONDS);
+        ->assertStatus(200)
+        ->assertSeeHtml('data-testid="rsvp-rate-limited"')
+        ->assertSee('Slow down — try again in 60 seconds. Nothing changed, just wait a moment.', false)
+        // COMPONENTS.md §1.1: the control returns to default and stays usable.
+        ->assertSeeHtml('data-testid="rsvp-withdraw"')
+        ->html();
 
+    expect($html)->toContain('role="status"')->not->toContain('role="alert"');
+
+    // Nothing was withdrawn by the throttled click.
+    expect(Rsvp::query()->where('user_id', $this->member->id)->exists())->toBeTrue();
+
+    // Past the decay the same click works and the wait is gone.
     $this->travel(RsvpRateLimit::DECAY_SECONDS + 1)->seconds();
 
     Livewire::actingAs($this->member)
         ->test(RsvpButton::class, ['event' => $this->event])
         ->call('withdraw')
-        ->assertSee("I'm in", false);
+        ->assertSee("I'm in", false)
+        ->assertDontSeeHtml('data-testid="rsvp-rate-limited"');
+});
+
+it('announces the throttle wait on the join path without taking the button', function () {
+    // Same announced node for rsvp(): the copy is neutral ("Nothing changed")
+    // so one node covers both verbs.
+    for ($attempt = 0; $attempt < RsvpRateLimit::MAX_ATTEMPTS; $attempt++) {
+        RsvpRateLimit::hit($this->member);
+    }
+
+    $html = Livewire::actingAs($this->member)
+        ->test(RsvpButton::class, ['event' => $this->event])
+        ->call('rsvp', RsvpStatus::Going->value)
+        ->assertStatus(200)
+        ->assertSeeHtml('data-testid="rsvp-rate-limited"')
+        ->assertSee('Slow down — try again in', false)
+        ->assertSee('Nothing changed, just wait a moment.', false)
+        ->assertSeeHtml('data-testid="rsvp-going"')
+        ->assertDontSee("You're in", false)
+        ->html();
+
+    expect($html)->toContain('role="status"')->not->toContain('role="alert"');
+    expect(Rsvp::query()->where('user_id', $this->member->id)->exists())->toBeFalse();
+});
+
+it('names one second and falls back when the wait has no number', function () {
+    // {N} is the ceiling of Retry-After, min 1; an unusable header selects the
+    // "in a moment" fallback instead of a number (TOG-7928 `copy` doc).
+    Livewire::actingAs($this->member)
+        ->test(RsvpButton::class, ['event' => $this->event])
+        ->set('rateLimited', true)
+        ->set('retryAfterSeconds', 1)
+        ->assertSee('Slow down — try again in 1 second. Nothing changed, just wait a moment.', false)
+        ->set('retryAfterSeconds', null)
+        ->assertSee('Slow down — try again in a moment. Nothing changed, just wait a bit.', false);
+});
+
+it('announces the closed and full states politely, not as alerts', function () {
+    // TOG-7332: a cancellation landing while the member watches, or losing
+    // the last-seat race after clicking, swaps these states in without a
+    // reload — they must announce via role="status", never role="alert".
+    $this->event->update(['status' => EventStatus::Cancelled]);
+
+    $closed = Livewire::actingAs($this->member)
+        ->test(RsvpButton::class, ['event' => $this->event->fresh()])
+        ->html();
+
+    expect($closed)->toContain('role="status"')
+        ->toContain('data-testid="rsvp-closed"')
+        ->not->toContain('role="alert"');
+
+    $full = Event::factory()->create([
+        'starts_at' => now()->addDays(3),
+        'ends_at' => now()->addDays(3)->addHours(2),
+        'status' => EventStatus::Published,
+        'capacity' => 1,
+    ]);
+    Rsvp::factory()->create(['event_id' => $full->id, 'status' => RsvpStatus::Going]);
+
+    $html = Livewire::actingAs($this->member)
+        ->test(RsvpButton::class, ['event' => $full])
+        ->html();
+
+    expect($html)->toContain('role="status"')
+        ->toContain('data-testid="event-full"')
+        ->not->toContain('role="alert"');
 });
 
 /* ---------------------------------------------------------------------------
@@ -357,6 +448,53 @@ it('does not offer an RSVP on an event that has already happened', function () {
     Livewire::actingAs($this->member)
         ->test(RsvpButton::class, ['event' => $this->event->fresh()])
         ->assertDontSeeHtml('data-testid="rsvp-going"');
+});
+
+/* ---------------------------------------------------------------------------
+   Expired session (TOG-8135). The page was rendered signed in and the session
+   died underneath it (SESSION_LIFETIME). The click arrives with nobody behind
+   it — no user instance — so the component names the expiry and points at the
+   way back in instead of returning silently. Distinct from $failed on purpose:
+   retrying cannot succeed without logging in first.
+   --------------------------------------------------------------------------- */
+
+it('names the expired session with a way back in when the RSVP click arrives signed out', function () {
+    Livewire::test(RsvpButton::class, ['event' => $this->event])
+        ->call('rsvp', RsvpStatus::Going->value)
+        ->assertSee('Your session expired.', false)
+        ->assertSeeHtml('data-testid="rsvp-session-expired"')
+        ->assertSee('Log in with Discord')
+        // Not a retryable failure: nothing here may invite a retry that cannot help.
+        ->assertDontSee("That RSVP didn't save.", false)
+        ->assertDontSeeHtml('data-testid="rsvp-failed"');
+
+    expect(Rsvp::query()->where('user_id', $this->member->id)->exists())->toBeFalse();
+});
+
+it('names the expired session when the withdraw click arrives signed out', function () {
+    Rsvp::factory()->create([
+        'event_id' => $this->event->id,
+        'user_id' => $this->member->id,
+        'status' => RsvpStatus::Going,
+    ]);
+
+    Livewire::test(RsvpButton::class, ['event' => $this->event])
+        ->call('withdraw')
+        ->assertSee('Your session expired.', false)
+        ->assertSeeHtml('data-testid="rsvp-session-expired"')
+        ->assertDontSeeHtml('data-testid="rsvp-failed"');
+
+    // The answer is untouched: nothing was withdrawn.
+    expect(Rsvp::query()->where('user_id', $this->member->id)->exists())->toBeTrue();
+});
+
+it('announces the expired session as an alert, because it interrupted what they were doing', function () {
+    $html = Livewire::test(RsvpButton::class, ['event' => $this->event])
+        ->call('rsvp', RsvpStatus::Going->value)
+        ->html();
+
+    expect($html)->toContain('role="alert"')
+        ->toContain('data-testid="rsvp-session-expired"');
 });
 
 /* ---------------------------------------------------------------------------
@@ -383,6 +521,37 @@ it('disables the control while the answer is in flight so it cannot be double-se
         ->html();
 
     expect($html)->toContain('wire:loading.attr="disabled"');
+});
+
+it('leaves exactly one RSVP row when the button is fired twice', function () {
+    // The double-click: `wire:loading.attr="disabled"` stops the second request
+    // in the browser, and `updateOrCreate` behind the unique(event_id, user_id)
+    // index makes a second request that does arrive idempotent. Either way the
+    // member ends up with one answer, not two rows.
+    Livewire::actingAs($this->member)
+        ->test(RsvpButton::class, ['event' => $this->event])
+        ->call('rsvp', RsvpStatus::Going->value)
+        ->call('rsvp', RsvpStatus::Going->value)
+        ->assertSee("You're in", false);
+
+    expect(Rsvp::query()->where('user_id', $this->member->id)->count())->toBe(1);
+});
+
+it('gives the withdraw control the same in-flight treatment as the RSVP', function () {
+    Rsvp::factory()->create([
+        'event_id' => $this->event->id,
+        'user_id' => $this->member->id,
+        'status' => RsvpStatus::Going,
+    ]);
+
+    $html = Livewire::actingAs($this->member)
+        ->test(RsvpButton::class, ['event' => $this->event])
+        ->html();
+
+    expect($html)
+        ->toContain('wire:target="withdraw"')
+        ->toContain('Removing…')
+        ->toContain('aria-busy');
 });
 
 /* ---------------------------------------------------------------------------

@@ -5,11 +5,13 @@ namespace App\Livewire;
 use App\Enums\EventStatus;
 use App\Enums\RsvpStatus;
 use App\Models\Event;
+use App\Support\Events\DiscordEventsSource;
 use Carbon\CarbonImmutable;
 use Carbon\Exceptions\InvalidFormatException;
 use DateTimeZone;
 use Illuminate\Database\Eloquent\Builder;
-use Illuminate\Database\Eloquent\Collection;
+use Illuminate\Database\Eloquent\Collection as EloquentCollection;
+use Illuminate\Support\Collection as SupportCollection;
 use Illuminate\Support\Facades\Gate;
 use Illuminate\View\View;
 use Livewire\Attributes\Layout;
@@ -57,15 +59,6 @@ class EventsCalendar extends Component
 
     private const VIEWS = ['list', 'calendar'];
 
-    public function mount(): void
-    {
-        // Open on the month the next event is actually in. Defaulting to today
-        // shows an empty grid whenever the next game night is three weeks out,
-        // which reads as "nothing is planned" while an event sits one click away.
-        $this->month = ($this->upcoming()->first()?->startsAtLocal() ?? CarbonImmutable::now())
-            ->format('Y-m');
-    }
-
     public function setView(string $view): void
     {
         // An unknown name leaves the view alone rather than rendering nothing. This
@@ -78,6 +71,20 @@ class EventsCalendar extends Component
     public function showPast(): void
     {
         $this->showingPast = true;
+    }
+
+    /**
+     * The error empty state's Retry (TOG-5318): re-fires the read rather than
+     * re-rendering the failure. The outcome is decided fresh on the next
+     * render — a recovered bot database shows events, a still-dark one shows
+     * the error again — so there is nothing here to set beyond letting the
+     * component render again.
+     */
+    public function retryLoad(): void
+    {
+        // Intentionally empty: the Livewire round trip re-runs `render()`,
+        // which re-reads both sources. A method with a body would imply the
+        // retry needs local state; it does not.
     }
 
     /**
@@ -107,8 +114,29 @@ class EventsCalendar extends Component
 
     public function render(): View
     {
-        $upcoming = $this->upcoming();
+        // One resolve per render: the source is bound transient, so each
+        // `app()` call is a fresh reader with a fresh failure flag. The
+        // rows and the flag MUST come from the same instance — asking a
+        // second resolve whether the first one's read failed is always "no",
+        // which would silently turn every error state into the
+        // never-scheduled one.
+        $discord = app(DiscordEventsSource::class);
+        $discordRows = collect($discord->upcoming())
+            // The view already filters to scheduled/active within 90 days, but
+            // the boundary is the bot's clock, not ours — re-check the end
+            // against now so a just-started event cannot linger here forever
+            // if the collector goes dark.
+            ->filter(fn (Event $event): bool => $event->ends_at >= now());
+        $discordFailed = $discord->lastReadFailed();
+
+        $upcoming = $this->upcoming($discordRows);
         $past = $this->past();
+
+        // Open on the next event's month using the same read as the list,
+        // including Discord-only calendars. Later renders preserve navigation.
+        if ($this->month === '') {
+            $this->month = ($upcoming->first()?->startsAtLocal() ?? CarbonImmutable::now())->format('Y-m');
+        }
         // A blank search is no search: spaces alone must not narrow the page to
         // nothing, and must not swap the empty states for the search one.
         $searching = trim($this->search) !== '';
@@ -121,19 +149,16 @@ class EventsCalendar extends Component
             'past' => $past,
             'weeks' => $this->weeks($upcoming->concat($past)),
             'monthLabel' => $this->monthStart()->format('F Y'),
-            // Which of the two empty states applies. They are different messages:
-            // one is "we are new", the other is "there was a last one". Neither
-            // applies while searching — a query with no matches gets its own
-            // message below, not "nothing is planned".
-            'emptyState' => $searching
-                ? null
-                : ($upcoming->isEmpty() ? ($past->isEmpty() ? 'never' : 'no-upcoming') : null),
+            // Failed reads take precedence over an empty result, including search.
+            'emptyState' => $upcoming->isEmpty() && $discordFailed
+                ? 'error'
+                : ($searching ? null : ($upcoming->isEmpty() ? ($past->isEmpty() ? 'never' : 'gap') : null)),
+            'lastPastEvent' => $past->first(),
             // Whether the member currently sees anything. The past list only
             // counts once asked for — an unopened drawer is not results.
             'hasVisibleResults' => $upcoming->isNotEmpty() || ($showPast && $past->isNotEmpty()),
             'showPast' => $showPast,
             'searching' => $searching,
-            'lastEventAgo' => $past->first()?->endsAtLocal()->diffForHumans(),
             // Share tags (TOG-5624). `layoutData` merges into the `#[Layout]`
             // params above — the attribute params win on conflict, but these keys
             // are new, so there is no conflict. `route()` builds from APP_URL,
@@ -150,18 +175,29 @@ class EventsCalendar extends Component
      * `withCount` rather than a count per card: twelve cards must not be twelve
      * queries, and the going count is on every one of them.
      *
-     * @return Collection<int, Event>
+     * Plus the guild's Discord-native events (TOG-5168): the page read only
+     * its own table while the recurring Sunday Squad lived in the bot's
+     * database, so production showed the never-scheduled empty state with a
+     * live event sitting in Discord. The Discord rows are display-only
+     * transients merged here, in start order with the local rows — never
+     * persisted, never published, never handed to the write-back.
+     *
+     * @param  SupportCollection<int, Event>  $discordRows  Already fetched from the
+     *                                                      render's single source resolve.
+     * @return SupportCollection<int, Event>
      */
-    private function upcoming(): Collection
+    private function upcoming(SupportCollection $discordRows): SupportCollection
     {
-        return $this->visible()
+        $local = $this->visible()
             ->where('ends_at', '>=', now())
             ->orderBy('starts_at')
             ->get();
+
+        return $local->concat($discordRows)->sortBy(fn (Event $event): int => $event->starts_at->getTimestamp())->values();
     }
 
-    /** @return Collection<int, Event> Most recent first — "the last one was…". */
-    private function past(): Collection
+    /** @return EloquentCollection<int, Event> Most recent first — "the last one was…". */
+    private function past(): EloquentCollection
     {
         return $this->visible()
             ->where('ends_at', '<', now())
@@ -209,10 +245,10 @@ class EventsCalendar extends Component
      * flagged. A grid that starts mid-row is harder to read than one that shows
      * the 29th of last month greyed out.
      *
-     * @param  Collection<int, Event>  $events
+     * @param  SupportCollection<int, Event>  $events
      * @return list<list<array{date: CarbonImmutable, inMonth: bool, isToday: bool, events: list<Event>}>>
      */
-    private function weeks(Collection $events): array
+    private function weeks(SupportCollection $events): array
     {
         $start = $this->monthStart();
 
@@ -275,9 +311,9 @@ class EventsCalendar extends Component
      * grid has always used. An unknown identifier there falls back the same
      * way rather than fataling on a row written before validation existed.
      *
-     * @param  Collection<int, Event>  $events
+     * @param  SupportCollection<int, Event>  $events
      */
-    private function calendarZone(Collection $events): string
+    private function calendarZone(SupportCollection $events): string
     {
         $counts = [];
 

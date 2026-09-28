@@ -1,4 +1,6 @@
-# Deploys staging. Green here means something was deployed and answered.
+# Deploys staging automatically after CI goes green, and production on human
+# demand behind a required reviewer. Green here means something was deployed
+# and answered.
 #
 # THIS FILE USED TO PASS WHEN IT DEPLOYED NOTHING. Do not put that back.
 #
@@ -24,31 +26,37 @@
 # time `main` goes green, and that is the correct reading of "staging has no
 # target". The refusal names the card and the two settings that clear it, so an
 # expected red explains itself instead of becoming the noise the old header
-# feared. The logic lives in ci/deploy-target.sh so that it can be executed and
+# feared. The logic lives in ci/deploy-target.sh (staging) and
+# ci/deploy-target-production.sh (production) so that it can be executed and
 # mutation-tested (ci/deploy-target-selftest.sh) rather than merely read — a guard
 # nobody has watched fail is indistinguishable from one that cannot fail, and this
 # repo has now been bitten by exactly that once.
 #
-# THIS WORKFLOW DEPLOYS STAGING ONLY. THAT IS DELIBERATE — DO NOT ADD A PRODUCTION
-# JOB HERE WITHOUT READING THIS.
+# PRODUCTION IS BACK, AND THE GATE IT STANDS BEHIND IS REAL (TOG-6912).
 #
-# There was a `production` job. It was gated on `environment: production`, which on
-# GitHub's docs is where required reviewers live. `TogetherWeOwn/two-web` is private on
-# GitHub Free, and on that plan environments cannot be configured at all: "any
-# configured protection rules or environment secrets will be ignored". So the gate
-# was not merely unconfigured, it was unenforceable — and the moment somebody created
-# a production deploy hook, anyone with write access could have shipped to
-# production from the Actions tab with no approval and no record. Four teams have
-# write access. A gate that fails silently is worse than no gate, because the file
-# says the gate is there. Removing the fuse beats guarding it. (TWO-91, TOG-118.)
+# There used to be no `production` job here, deliberately. It was gated on
+# `environment: production`, which on GitHub's docs is where required reviewers
+# live — but `TogetherWeOwn/two-web` was private on GitHub Free, and on that plan
+# environments cannot be configured at all: "any configured protection rules or
+# environment secrets will be ignored". So the gate was not merely unconfigured,
+# it was unenforceable — and the moment somebody created a production deploy hook,
+# anyone with write access could have shipped to production from the Actions tab
+# with no approval and no record. A gate that fails silently is worse than no
+# gate, because the file says the gate is there. Removing the fuse beat guarding
+# it. (TWO-91, TOG-118.)
 #
-# Production therefore ships **by hand from the hosting provider's dashboard**, after
-# the release checklist in docs/ci.md. Whoever holds that login is the approval, and
-# that is real access control rather than a simulation of one.
-#
-# Bring the job back only when the repo is on a plan that can actually enforce
-# environment protection rules (GitHub Team or better, or a public repo). `git revert`
-# of the TWO-91 commit restores it; do not hand-rebuild it.
+# That premise is superseded. The org is on paid GitHub Enterprise Cloud (owner
+# decision 2026-08-27, TOG-382 → TOG-564), and the `production` environment
+# carries required reviewers plus a branch policy, alongside a
+# ruleset-protected `main` — verified live on TOG-6912 via host-token readback
+# (TOG-7649, 2026-09-28: required reviewer Rick7C2, prevent_self_review=true,
+# protected branches on, no custom branch policies; 148 deployment records;
+# `production` + `staging` environments exist). So the job is restored, with
+# the gate it
+# always claimed: `workflow_dispatch` with `production` chosen, AND the
+# environment's required reviewer, AND `main` only. It stays gated until the Ship
+# target card ([TOG-6902]) says TWO Web may go live — the first production launch
+# needs owner approval.
 name: Deploy
 
 on:
@@ -60,9 +68,16 @@ on:
     types: [completed]
     branches: [main]
 
-  # Manual re-deploy of staging. There is no environment input any more: a choice
-  # list with `production` on it is how the ignored gate gets rebuilt by accident.
+  # Manual deploys. Staging re-runs from here; production ONLY happens from here —
+  # never automatically — and then only with the environment's required reviewer.
   workflow_dispatch:
+    inputs:
+      environment:
+        description: Where to deploy
+        required: true
+        default: staging
+        type: choice
+        options: [staging, production]
 
 permissions:
   contents: read
@@ -71,37 +86,43 @@ jobs:
   staging:
     name: staging
     if: >-
-      github.event_name == 'workflow_dispatch' ||
+      github.event_name == 'workflow_dispatch' && inputs.environment == 'staging' ||
       github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success'
     runs-on: [self-hosted, two-selfhosted]
     timeout-minutes: 15
-    # Decorative on GitHub Free + private: environments are ignored, so this grants no
-    # protection and claims none. It is here so the deployment shows up in the UI the
-    # day the plan changes. Do not read it as a gate.
+    # Enforced on the org's Enterprise Cloud plan (required reviewers plus branch
+    # policy live on `production`; `main` ruleset-protected — verified TOG-6912
+    # via host-token readback TOG-7649).
+    # This environment also produces the Deployment records (with statuses) the
+    # Shipping KPI reads — verified: 148 records, `production` + `staging`
+    # environments present (TOG-7649 host-token readback).
     environment:
       name: staging
+    # Serialise deploys so overlapping merges cannot race; never cancel one
+    # already rolling out.
+    concurrency:
+      group: deploy-staging
+      cancel-in-progress: false
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
       # Every job attests where it ran. See ci/attest-runner.sh (TOG-2847).
       - name: Attest the runner
         run: ./ci/attest-runner.sh
 
-      # Fails the job when there is no target. Also carries the production-hook
-      # tripwire, which is a warning and not a failure. This step is the entire
-      # subject of TOG-913: it must never gain a "skip and pass" branch.
+      # Fails the job when there is no target. This step is the entire subject of
+      # TOG-913: it must never gain a "skip and pass" branch.
       - name: Resolve the deploy target
         id: target
         env:
           COOLIFY_STAGING_DEPLOY_HOOK: ${{ secrets.COOLIFY_STAGING_DEPLOY_HOOK }}
-          COOLIFY_PRODUCTION_DEPLOY_HOOK: ${{ secrets.COOLIFY_PRODUCTION_DEPLOY_HOOK }}
           STAGING_URL: ${{ vars.STAGING_URL }}
         run: ./ci/deploy-target.sh
 
-      # No `if:` on this step or the next. The old file gated both on the guard's
-      # output, which is what let a missing target sail through as a pass; now the
-      # step above fails the job outright and these simply never start. If you find
-      # yourself adding a condition here, you are rebuilding TOG-913.
+      # No `if:` on this step or the next two. The old file gated both on the
+      # guard's output, which is what let a missing target sail through as a pass;
+      # now the step above fails the job outright and these simply never start. If
+      # you find yourself adding a condition here, you are rebuilding TOG-913.
       - name: Trigger the Coolify deploy
         env:
           HOOK: ${{ steps.target.outputs.hook }}
@@ -134,3 +155,90 @@ jobs:
           done
           echo "::error title=Staging never answered::Deploy was queued but ${STAGING}/up did not answer within 10 minutes. The site is down; roll back from the Coolify dashboard."
           exit 1
+
+      # Post-deploy smoke check (TOG-7285): asserts /up, /discord, / and
+      # /events.json on the live staging URL via bin/smoke-staging.sh. No `if:`
+      # here either — a deploy that is never smoke-checked must fail loudly,
+      # not pass quietly. The script exits non-zero on any check failure, which
+      # fails this job. CF Access service-token secrets are passed through when
+      # set so the probe reaches the app; without them the script reports the
+      # Access challenge as a FAIL rather than misreading it.
+      - name: Smoke-check staging
+        env:
+          STAGING: ${{ steps.target.outputs.url }}
+          CF_ACCESS_CLIENT_ID: ${{ secrets.CF_ACCESS_CLIENT_ID }}
+          CF_ACCESS_CLIENT_SECRET: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}
+        run: ./bin/smoke-staging.sh "$STAGING"
+
+  production:
+    name: production
+    # Dispatch-only, reviewer-gated, `main`-only. The `environment:` below is where
+    # the required reviewer lives, and on the org's Enterprise Cloud plan that
+    # gate enforces (TWO-91's removal reason no longer holds — see the header).
+    if: >-
+      github.event_name == 'workflow_dispatch' && inputs.environment == 'production' &&
+      github.ref == 'refs/heads/main'
+    runs-on: [self-hosted, two-selfhosted]
+    timeout-minutes: 15
+    environment:
+      name: production
+      url: ${{ vars.PRODUCTION_URL }}
+    concurrency:
+      group: deploy-production
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      # Every job attests where it ran. See ci/attest-runner.sh (TOG-2847).
+      - name: Attest the runner
+        run: ./ci/attest-runner.sh
+
+      # Same contract as staging (TOG-913): no target is a failure, never a skip.
+      # Reaching this step already means a human chose `production` and the
+      # environment's required reviewer approved; this checks the target, not the
+      # approval. It stays gated until the Ship target card ([TOG-6902]) says TWO
+      # Web may go live.
+      - name: Resolve the deploy target
+        id: target
+        env:
+          COOLIFY_PRODUCTION_DEPLOY_HOOK: ${{ secrets.COOLIFY_PRODUCTION_DEPLOY_HOOK }}
+          PRODUCTION_URL: ${{ vars.PRODUCTION_URL }}
+        run: ./ci/deploy-target-production.sh
+
+      # No `if:` on this step or the next two — see the staging note above.
+      - name: Trigger the Coolify deploy
+        env:
+          HOOK: ${{ steps.target.outputs.hook }}
+        run: |
+          # --fail so an HTTP error is an exit code, not a cheerful log line.
+          # The URL carries the token, so it is never echoed.
+          curl --fail --silent --show-error --location \
+            --retry 3 --retry-delay 5 --retry-all-errors \
+            --max-time 60 \
+            --request POST "$HOOK" > /dev/null
+          echo "Coolify accepted the production deploy."
+
+      # Coolify returns as soon as it queues the deploy, so a 200 is not "it is
+      # live". Poll the health check until the new release is actually answering.
+      - name: Wait for production to answer
+        env:
+          PRODUCTION: ${{ steps.target.outputs.url }}
+        run: |
+          for i in $(seq 1 60); do
+            if curl -fsS --max-time 10 "${PRODUCTION}/up" > /dev/null; then
+              echo "production healthy after ${i} attempt(s)"
+              exit 0
+            fi
+            sleep 10
+          done
+          echo "::error title=Production never answered::Deploy was queued but ${PRODUCTION}/up did not answer within 10 minutes. The site is down; roll back from the Coolify dashboard."
+          exit 1
+
+      # Post-deploy smoke — the same four checks as staging (TOG-6772 built the
+      # script for staging, but it is generic over its BASE_URL argument and the
+      # checks apply to production identically). The apex is public, so no Access
+      # headers; an Access challenge here would fail, which is correct.
+      - name: Smoke-test production
+        env:
+          PRODUCTION: ${{ steps.target.outputs.url }}
+        run: ./bin/smoke-staging.sh "$PRODUCTION"

@@ -573,6 +573,27 @@ lint() {
         fail "the relaxed \`/admin\` LCP budget reads \`${admin_lcp}\`, not \`error|3000|median\`. That budget exists because Filament's stylesheet is render-blocking; it is not a general allowance to be widened. TOG-1008 tree-shook the theme to 342KB and brought the ceiling down from 3200 with it, and with the stylesheet stubbed out entirely the panel still medians 2047ms, so no further CSS work reaches the public 2000ms budget. If the panel genuinely got slower, find what regressed; do not raise this number."
         rc=1
       fi
+
+      # How LHCI launches Chrome, read the same way — through node, not grep.
+      # TOG-7021: the budgets job died on `Invalid URL: undefined`, the
+      # DevTools endpoint of a browser that never started, because LHCI shelled
+      # out to an unpinned Chrome with none of the sandbox workarounds every
+      # other launcher here passes. Both flags match ci/browser/launch.mjs and
+      # ci/a11y.mjs; dropping either is how the next startup crash arrives.
+      local chrome_flags
+      chrome_flags=$(node -e '
+        const path = require("path");
+        const config = require(path.resolve(process.argv[1]));
+        console.log((config.ci || {}).collect?.settings?.chromeFlags ?? "absent");
+      ' "$budget_file" 2>&1) || chrome_flags="unreadable: ${chrome_flags}"
+      for chrome_flag in --no-sandbox --disable-dev-shm-usage; do
+        if has_line "$chrome_flags" "$chrome_flag"; then
+          pass "LHCI launches Chrome with \`${chrome_flag}\`"
+        else
+          fail "ci/lighthouserc.cjs launches Chrome without \`${chrome_flag}\` (chromeFlags reads \`${chrome_flags}\`). On the persistent self-hosted hosts that is a browser that dies at startup and a job that fails as \`Invalid URL: undefined\` with zero assertion results (TOG-7021). The flags match ci/browser/launch.mjs and ci/a11y.mjs; if one genuinely has to go, say which and why in the commit, and update this check with it."
+          rc=1
+        fi
+      done
     fi
   fi
 
@@ -743,6 +764,108 @@ print("trivialAllowlist=%s" % ",".join(trivial))
         fail "allowlist entr(ies) ${trivial} in ${gitleaks_file} match the empty string, so they match every finding — that is an off switch for the whole scan, \`discord-bot-token\` included, with the job still reporting green. Measured on gitleaks 8.30.1: a repository with four findings reports none. The entries in that file are narrow on purpose and say so; if a real fixture needs allowlisting, name it — see the bar written above \`[allowlist]\`."
         rc=1
       fi
+    fi
+  fi
+
+  # 12. The Vite bundle budget is still a budget (TOG-5629).
+  #
+  #    ci/bundle-budget.json caps every built entrypoint in raw and gzip bytes,
+  #    and the `budgets` job fails when ci/check-bundle-budget.mjs finds one
+  #    over its ceiling. Both halves have a quiet way out: relax a number in
+  #    the JSON until the breach goes green, or drop the enforcement step from
+  #    the job while leaving the file in place. Either edit leaves every job
+  #    green while the bundle grows without bound — the TOG-53 axios accident
+  #    (48 KB in the 1-byte app.js) and the TOG-3233 unconditional hallmark
+  #    include (10.9 KB on every public page) would both have merged clean.
+  #
+  #    Parsed, not matched: the ceilings are read out of the JSON with node's
+  #    own JSON.parse — the same values the checker compares against — so a
+  #    second `budgets` key appended lower in the file reads as the effective
+  #    one, exactly as the checker sees it. Same lesson as check 10's four
+  #    spellings of a duplicate key.
+  local bundle_budget_file="./ci/bundle-budget.json"
+  if [ ! -f "$bundle_budget_file" ]; then
+    fail "${bundle_budget_file} not found — the \`budgets\` job has no bundle thresholds to enforce"
+    rc=1
+  elif ! command -v node >/dev/null 2>&1; then
+    # Red, not skipped — same rule as check 10. A budget check that cannot run
+    # is a budget that is not enforced, and it should look like one.
+    fail "node is not on PATH, so ${bundle_budget_file} cannot be read as the checker reads it"
+    rc=1
+  else
+    # One `entry|raw|gzip` line per ceiling. Compared exactly: raising a number
+    # to make a breach go green is a deliberate edit here, in the commit that
+    # says what grew and why — the same standard as the Lighthouse budgets.
+    local bundle_effective bundle_loaded=1
+    bundle_effective=$(node -e '
+      const fs = require("fs");
+      const budget = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+      for (const [entry, ceiling] of Object.entries(budget.budgets || {})) {
+        console.log([entry, String(ceiling.maxRawBytes), String(ceiling.maxGzipBytes)].join("|"));
+      }
+    ' "$bundle_budget_file" 2>&1) || bundle_loaded=0
+
+    if [ "$bundle_loaded" -eq 0 ]; then
+      fail "${bundle_budget_file} could not be parsed as JSON, so the checker cannot load it either and the \`budgets\` job has no bundle thresholds to enforce: ${bundle_effective}"
+      rc=1
+    else
+      local bundle_entry bundle_expected
+      for bundle_entry in \
+        "resources/css/app.css|76800|15360" \
+        "resources/css/filament/admin/theme.css|375000|38000" \
+        "resources/css/hallmark.css|15360|4096" \
+        "resources/js/app.js|5120|2048" \
+        "resources/js/event-copy-link.js|4096|2048"; do
+        if grep -qxF -- "$bundle_entry" <<< "$bundle_effective"; then
+          pass "bundle budget \`$(cut -d'|' -f1 <<< "$bundle_entry")\` caps raw and gzip at $(cut -d'|' -f2 <<< "$bundle_entry")/$(cut -d'|' -f3 <<< "$bundle_entry") bytes"
+        else
+          # `|| true`: an absent entry makes grep exit 1, and under
+          # `set -o pipefail` that status would kill the whole lint instead of
+          # reporting the absence. Empty reads as `absent` below, which is the
+          # point — a deleted ceiling must fail loudly, not silently.
+          bundle_expected="$(grep -F -- "$(cut -d'|' -f1 <<< "$bundle_entry")|" <<< "$bundle_effective" | head -1 || true)"
+          fail "bundle budget for \`$(cut -d'|' -f1 <<< "$bundle_entry")\` reads \`${bundle_expected:-absent}\`, not \`$(cut -d'|' -f2 <<< "$bundle_entry")|$(cut -d'|' -f3 <<< "$bundle_entry")\` (entry|raw|gzip). A ceiling quietly raised — or an entry deleted — lets the bundle grow while every job stays green. If the bundle genuinely grew, raise the ceiling in ${bundle_budget_file} in the commit that says what grew and why, and update this pin with it."
+          rc=1
+        fi
+      done
+    fi
+
+    # The enforcement step itself, addressed to the `budgets` job by name rather
+    # than grepped across the file — the same reason check 8's self-test case
+    # addresses `dusk` by name. A `Bundle budget` step added to `static` would
+    # satisfy a file-wide grep while measuring nothing (no manifest there), and
+    # a new job above `budgets` that builds would quietly move the assumption
+    # the Pest half rests on.
+    local budgets_block
+    budgets_block="$(job_block "$WORKFLOW" "budgets")" || budgets_block=''
+
+    if [ -z "$budgets_block" ]; then
+      fail "job \`budgets\` was not found in ${WORKFLOW}. Check 12 expects it to exist and to enforce the bundle budget, because the checker needs the real manifest only a job that builds for real produces. If the job was renamed, rename it here too."
+      rc=1
+    elif has_line "$budgets_block" 'check-bundle-budget.mjs'; then
+      pass "\`budgets\` enforces the bundle budget — the checker still runs where the manifest is real"
+    else
+      fail "job \`budgets\` no longer runs \`check-bundle-budget.mjs\`. ${bundle_budget_file} still caps every entrypoint, but nothing compares the built bundle against it — a budget with no enforcement, silently."
+      rc=1
+    fi
+
+    # The checker's own self-test must still run in `static`: the byte
+    # comparison needs a manifest so it lives in `budgets`, and a checker that
+    # quietly stopped failing is indistinguishable from a fitting bundle unless
+    # something offline proves it still fails. Same argument as check 9's.
+    local budget_selftest_jobs budget_selftest_job budget_selftest_blk
+    budget_selftest_jobs=$(while read -r budget_selftest_job; do
+      [ -n "$budget_selftest_job" ] || continue
+      budget_selftest_blk=$(job_block "$WORKFLOW" "$budget_selftest_job")
+      if has_line "$budget_selftest_blk" 'check-bundle-budget.mjs --selftest'; then
+        job_reported_name "$WORKFLOW" "$budget_selftest_job"
+      fi
+    done <<< "$(job_ids "$WORKFLOW")")
+    if [ -z "$budget_selftest_jobs" ]; then
+      fail "no job in ${WORKFLOW} runs \`check-bundle-budget.mjs --selftest\`. Nothing then catches a checker that has quietly stopped failing: the byte comparison only ever executes in \`budgets\`, against a real manifest, so a neutered checker and a fitting bundle look identical from every job in the pipeline."
+      rc=1
+    else
+      pass "\`$(echo "$budget_selftest_jobs" | tr '\n' ' ' | sed 's/ $//')\` runs the bundle checker's self-test — a checker that stops failing cannot go quiet"
     fi
   fi
 

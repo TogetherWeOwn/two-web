@@ -105,11 +105,20 @@ it('uses the normal profile and admin authorization paths after sign-in', functi
 it('returns 404 outside staging even if the route was cached or manually registered', function (string $environment) {
     app()->instance('env', $environment);
 
-    $this->withHeader(StagingQaLoginController::HEADER, QA_TOKEN)->get('/auth/qa/'.QA_MEMBER)->assertNotFound();
+    $known = $this->withHeader(StagingQaLoginController::HEADER, QA_TOKEN)->get('/auth/qa/'.QA_MEMBER);
+    $unknown = $this->withHeader(StagingQaLoginController::HEADER, QA_TOKEN)->get('/auth/qa/'.QA_UNKNOWN);
+
+    $known->assertNotFound();
+    $unknown->assertNotFound();
+
+    // The environment gate runs before the token check and the fixture lookup,
+    // so a correct token outside staging is byte-identical to an unknown
+    // identity: neither the secret nor the fixture list leaks through the 404.
+    expect($known->getContent())->toBe($unknown->getContent());
 
     $this->assertGuest();
     expect(User::query()->count())->toBe(0);
-})->with(['production', 'local']);
+})->with(['production', 'local', 'testing']);
 
 it('never exposes the token through logs, exceptions, redirects, or rendered responses', function () {
     Log::spy();

@@ -33,6 +33,10 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta name="color-scheme" content="{{ $lightScheme ? 'light' : 'dark' }}">
+    <meta name="theme-color" content="#0b0714">
+    <link rel="manifest" href="/site.webmanifest">
+    <link rel="icon" href="/icons/icon-192.png" type="image/png" sizes="192x192">
+    <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png" sizes="180x180">
     @if ($robots ?? false)
         <meta name="robots" content="{{ $robots }}">
     @endif
@@ -47,14 +51,38 @@
             'shareDescription' => $shareDescription ?? null,
         ])
     @endif
+    {{-- Feed autodiscovery (TOG-7939). Every page advertises the events feed so
+         readers find it without a pasted URL; the feed itself carries the
+         matching atom:link rel="self". Unconditional: the URL is stable and
+         public, and a conditional risks pages that silently opt out. --}}
+    <link rel="alternate" type="application/rss+xml" title="{{ config('app.name') }} Events" href="{{ route('events.rss') }}">
     {{-- Archivo is self-hosted and the headline uses its width axis. Without
          this the hero reflows on first paint and the join button moves. --}}
     <link rel="preload" href="/fonts/archivo-latin.woff2" as="font" type="font/woff2" crossorigin>
+    @if ($deferLivewire ?? false)
+        {{-- Livewire's loading/offline hiding rules, inline and immediate. The
+             deferred loader below emits @livewireScriptConfig, which flips
+             FrontendAssets::hasRenderedScripts and makes auto-injection skip
+             the styles too — so without this the page ships zero <style> tags
+             and every wire:loading spinner renders visibly until the runtime
+             boots on window.load (TOG-7335). CSS parses now; only the JS waits. --}}
+        @livewireStyles
+    @endif
     @vite([...$styleBundles, 'resources/js/app.js'])
 </head>
 <body class="{{ $bodyScheme }}h-full">
+    {{-- TOG-6932: the old `sr-only focus:not-sr-only` revealed the link as bare
+         text on the page ground — a 1.4:1 smear on ledger paper. The pill the
+         revealed state needs (opaque fill, padding, focus outline) lives in
+         resources/css/app.css as `a[href='#main']:focus-visible`, so the class
+         list here stays structural: hidden until focused, then handed to CSS. --}}
     <a href="#main" class="sr-only focus:not-sr-only">Skip to content</a>
-    <main id="main">
+    {{-- `tabindex="-1"`: the skip-link target must take programmatic focus in
+         Chrome/Safari, where a plain anchor jump scrolls but leaves focus on
+         `body` — a keyboard user who skips then tabs starts over at the top.
+         `-1` keeps it out of the tab order while making it a focus target;
+         the :focus-visible ring still marks it when the skip link lands. --}}
+    <main id="main" tabindex="-1">
         {{ $slot }}
     </main>
 

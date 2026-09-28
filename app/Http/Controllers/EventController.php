@@ -55,7 +55,18 @@ class EventController
             ->orderBy('id')
             ->paginate($perPage, page: $page);
 
-        return EventResource::collection($events)->response();
+        $response = EventResource::collection($events)->response();
+
+        // A strong validator over the exact bytes going out: the body already
+        // bakes in the viewer's role (drafts for moderators only), the page
+        // params and every `going_count`, so the hash covers all three without
+        // an extra query. A repeat poll with `If-None-Match` answers 304 with
+        // no body instead of the full listing.
+        $content = $response->getContent();
+        $response->setEtag(hash('sha256', $content === false ? '' : $content));
+        $response->isNotModified($request);
+
+        return $response;
     }
 
     public function show(Request $request, Event $event): JsonResponse

@@ -13,7 +13,13 @@ application configuration or deployment permissions.
 - Set `APP_URL` to the canonical HTTPS URL for the deployment, for example
   `https://community.example.com`. Do not hardcode a deployment hostname in app
   code. `tests/Unit/NoHardcodedHostnamesTest.php` enforces the project's hostname
-  boundary.
+  boundary. Outside local/testing, Laravel trusts only that exact hostname (not
+  arbitrary subdomains), rejecting untrusted effective `Host`/`X-Forwarded-Host`
+  values with HTTP 400 before URL generation. Health probes must use that host;
+  alternate-domain redirects belong at the edge, not in the application.
+  `tests/Feature/TrustedHostsTest.php` exercises production/staging behavior,
+  canonical links, OAuth callbacks and the uncacheable `/discord` redirect.
+  Authentication is Discord-only: no password-reset route or reset email exists.
 - Register the deployment's `/auth/discord/callback` URL on its Discord OAuth
   application **before** moving traffic. Add the callback first; do not remove a
   working callback during preparation. Keep application IDs and secrets in the

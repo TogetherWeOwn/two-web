@@ -29,6 +29,9 @@ use Spatie\Activitylog\Traits\LogsActivity;
  * @property EventStatus $status
  * @property string|null $discord_event_id
  * @property int|null $created_by
+ * @property string|null $agent_grant_id
+ * @property string|null $proof_marker
+ * @property int $agent_version
  */
 class Event extends Model
 {
@@ -72,6 +75,9 @@ class Event extends Model
         'status',
         'discord_event_id',
         'created_by',
+        'agent_grant_id',
+        'proof_marker',
+        'agent_version',
     ];
 
     /** @return array<string, string> */
@@ -84,6 +90,7 @@ class Event extends Model
             'ends_at' => 'immutable_datetime',
             'capacity' => 'integer',
             'status' => EventStatus::class,
+            'agent_version' => 'integer',
         ];
     }
 
@@ -131,6 +138,43 @@ class Event extends Model
     }
 
     /**
+     * Members in line for a seat. Not seats — a waitlisted row holds nothing,
+     * which is why no `going_count` aggregate needed changing for the waitlist.
+     */
+    public function waitlistCount(): int
+    {
+        return $this->rsvps()->where('status', RsvpStatus::Waitlisted)->count();
+    }
+
+    /**
+     * One-based place in line, earliest answer first. The `id` tiebreak is for
+     * answers written in the same second, which is exactly when a full event
+     * collects them. Null when the member is not on the waitlist.
+     */
+    public function waitlistPositionFor(User $user): ?int
+    {
+        $mine = $this->rsvps()
+            ->where('status', RsvpStatus::Waitlisted)
+            ->where('user_id', $user->getKey())
+            ->first(['id', 'created_at']);
+
+        if ($mine === null) {
+            return null;
+        }
+
+        return $this->rsvps()
+            ->where('status', RsvpStatus::Waitlisted)
+            ->where(function ($query) use ($mine): void {
+                $query->where('created_at', '<', $mine->created_at)
+                    ->orWhere(function ($query) use ($mine): void {
+                        $query->where('created_at', $mine->created_at)
+                            ->where('id', '<=', $mine->id);
+                    });
+            })
+            ->count();
+    }
+
+    /**
      * Whether Discord has been shown this event, and so whether a write-back means
      * anything. The rule lives on the enum so adding a state has one place to answer
      * for itself — this was `!== Draft` until Past existed, which would have kept
@@ -141,10 +185,47 @@ class Event extends Model
         return $this->status->isMirroredInDiscord();
     }
 
+    /**
+     * Whether the event is over for display purposes.
+     *
+     * The clock, not just the status: `events:reconcile` flips finished rows to
+     * Past every ten minutes, so a recently finished event is still Published on
+     * the clock's terms. A share page (or RSVP control) that reads status alone
+     * offers a live button for an event that has already happened.
+     */
+    public function hasEnded(): bool
+    {
+        if ($this->status === EventStatus::Past) {
+            return true;
+        }
+
+        // `ends_at` is non-nullable on the model, and every other reader
+        // (`endsAtLocal()`, the ICS export, the reconcile query) treats it
+        // that way — no null guard here either.
+        return $this->ends_at->isPast();
+    }
+
     /** @return BelongsTo<User, $this> */
     public function creator(): BelongsTo
     {
         return $this->belongsTo(User::class, 'created_by');
+    }
+
+    /**
+     * The machine grant that owns this event, if any. Null means a human-owned
+     * event: the agent ingress may neither read nor change it, and the human
+     * paths never set or clear this column.
+     *
+     * @return BelongsTo<AgentEventGrant, $this>
+     */
+    public function agentGrant(): BelongsTo
+    {
+        return $this->belongsTo(AgentEventGrant::class, 'agent_grant_id');
+    }
+
+    public function isAgentOwned(): bool
+    {
+        return $this->agent_grant_id !== null;
     }
 
     /** @return HasMany<Rsvp, $this> */

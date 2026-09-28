@@ -93,6 +93,16 @@ module.exports = {
         // reads like a network problem and is actually a config typo.
         extraHeaders,
 
+        // How Chrome itself launches, not what it measures. LHCI shells out to
+        // Chrome with none of the sandbox workarounds every other launcher in
+        // this repo passes (ci/browser/launch.mjs, ci/a11y.mjs), so on the
+        // persistent self-hosted runners a Chrome that cannot sandbox, or that
+        // outgrows the host's /dev/shm, dies at startup — and LHCI reports the
+        // cryptic `Invalid URL: undefined`, the DevTools endpoint of a browser
+        // that never started (TOG-7021). chromeFlags is the documented LHCI
+        // surface for this (collect.settings.chromeFlags), and --lint pins it.
+        chromeFlags: '--no-sandbox --disable-dev-shm-usage',
+
         formFactor: 'mobile',
         screenEmulation: {
           mobile: true,

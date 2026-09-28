@@ -14,19 +14,22 @@
             </p>
         </div>
 
-        {{-- A radio group, not two buttons: it is one choice with two options, and
-             that is what a screen reader should hear. The archive link sits
-             beside it, not inside it — history is a destination, not a third
-             view, and a link that acted as a radio option would lie about
-             what it does. --}}
+        {{-- A group of toggle buttons, not a radiogroup: one choice with two
+             options, each staying in the Tab order with Space/Enter to switch.
+             TOG-6958: the markup previously claimed role="radiogroup"/"radio",
+             which promises ArrowLeft/ArrowRight handling and roving tabindex
+             the buttons never implemented — a screen reader told "radio group"
+             expects arrows to work. A group with aria-pressed makes no such
+             promise and needs no JS to keep. The archive link sits beside it,
+             not inside it — history is a destination, not a third view, and a
+             link that acted as a toggle option would lie about what it does. --}}
         <div class="flex items-center gap-3 self-start">
             <div class="flex items-center gap-1 rounded-md border border-line bg-surface p-1"
-                 role="radiogroup" aria-label="How to show the events">
+                 role="group" aria-label="How to show the events">
                 @foreach (['list' => 'List', 'calendar' => 'Calendar'] as $key => $label)
                     <button type="button"
                             wire:click="setView('{{ $key }}')"
-                            role="radio"
-                            aria-checked="{{ $view === $key ? 'true' : 'false' }}"
+                            aria-pressed="{{ $view === $key ? 'true' : 'false' }}"
                             data-testid="events-view-{{ $key }}"
                             @class([
                                 'min-h-11 px-4 rounded-md text-sm font-medium transition-colors duration-fast ease-out-quick',
@@ -44,8 +47,31 @@
                       transition-colors duration-fast ease-out-quick">
                 Past events
             </a>
+            {{-- One-click calendar subscribe: the `webcal://` form of the
+                 collection feed (`GET /events.ics`). A member's calendar app
+                 opens on the click and polls the feed, so the calendar stays
+                 current without re-downloading. Public like the page — a
+                 calendar client has no session. --}}
+            <a href="{{ \App\Support\EventSubscribe::webcalUrl() }}"
+               data-testid="events-subscribe"
+               class="inline-flex items-center min-h-11 px-4 rounded-md text-sm font-medium
+                      text-ink-muted hover:text-ink hover:bg-raised
+                      transition-colors duration-fast ease-out-quick">
+                Subscribe
+            </a>
         </div>
     </header>
+
+    {{-- TOG-7332: the list <-> calendar swap re-renders the content below
+         without reloading. The radio group already names the checked option;
+         this names the content change, politely. --}}
+    <p class="sr-only" role="status" data-testid="events-view-status">
+        @if ($view === 'list')
+            Showing events as a list.
+        @else
+            Showing events as a calendar.
+        @endif
+    </p>
 
     {{-- Search. Server-side: the query narrows the same rows the list and the
          grid render, and `?q=` stays in the URL so a search is a link a member
@@ -77,7 +103,7 @@
     {{-- What a search found, in words. `{{ }}` escapes the query on the way
          out, so echoing it back here cannot become markup no matter what the
          URL carried. `aria-live` because the line changes without reloading. --}}
-    @if ($searching)
+    @if ($searching && $emptyState !== 'error')
         <p class="mt-4 text-sm text-ink-muted" aria-live="polite" data-testid="events-search-status">
             @if ($hasVisibleResults)
                 Results for &ldquo;{{ trim($search) }}&rdquo;
@@ -109,8 +135,9 @@
     @endif
 
     {{-- ------------------------------------------------------------------
-         Empty states. Two of them, and they say different things. Neither
-         reads as a broken page: that is the requirement this card names.
+         Empty states. Three of them, and they say different things. The
+         never-scheduled and the gap states are invitations; the error state
+         is the only one that reads as broken, because it is.
          ------------------------------------------------------------------ --}}
     @if ($emptyState === 'never')
         <div class="u-hatch mt-8 rounded-lg border border-line p-8 text-center"
@@ -121,9 +148,7 @@
                 before they land on this page.
             </p>
             <div class="mt-5">
-                {{-- Route through /join (one-click OAuth + invite fallback), not the raw
-                     /discord invite — matches every other visitor-facing join CTA. --}}
-                <a href="{{ route('join') }}"
+                <a href="{{ route('discord') }}"
                    data-testid="discord-join"
                    class="inline-flex items-center justify-center gap-2 min-h-11 px-6 rounded-md
                           bg-brand text-on-brand font-semibold
@@ -134,26 +159,67 @@
             </div>
         </div>
 
-    @elseif ($emptyState === 'no-upcoming')
+    @elseif ($emptyState === 'gap')
+        {{-- No upcoming events, but there were some: name the last one and show
+             the recent history inline, so the page reads as "between game
+             nights" rather than abandoned. --}}
         <div class="u-hatch mt-8 rounded-lg border border-line p-8 text-center"
-             data-testid="events-empty-no-upcoming">
-            <h2 class="text-lg font-semibold text-ink">Nothing scheduled right now.</h2>
+             data-testid="events-empty-gap">
+            <h2 class="text-lg font-semibold text-ink">No upcoming events — check back soon.</h2>
             <p class="mx-auto mt-1.5 max-w-prose text-sm text-ink-muted">
-                The last one was {{ $lastEventAgo }}. They usually go up about a week ahead.
+                Last time: {{ $lastPastEvent->title }} &middot; {{ $lastPastEvent->startsAtLocal()->format('D j M, H:i') }}.
             </p>
-            @unless ($showingPast)
-                <div class="mt-5">
-                    <button type="button"
-                            wire:click="showPast"
-                            data-testid="events-show-past"
-                            class="inline-flex items-center justify-center gap-2 min-h-11 px-5 rounded-md
-                                   bg-transparent text-ink border border-line-strong
-                                   hover:bg-raised hover:border-ink-muted active:bg-surface
-                                   transition-colors duration-fast ease-out-quick">
-                        See past events
-                    </button>
-                </div>
-            @endunless
+            <h3 class="mt-6 text-sm font-semibold text-ink">Past events</h3>
+            <ul class="mx-auto mt-2 flex max-w-prose flex-col gap-1.5 text-left" role="list"
+                data-testid="events-empty-gap-list">
+                @foreach ($past->take(5) as $event)
+                    <li data-testid="events-empty-gap-item"
+                        class="flex items-baseline justify-between gap-4 rounded-md border border-line bg-surface px-4 py-2">
+                        <span class="truncate text-sm text-ink">{{ $event->title }}</span>
+                        <span class="u-numeric shrink-0 text-xs text-ink-muted">{{ $event->startsAtLocal()->format('D j M, H:i') }}</span>
+                    </li>
+                @endforeach
+            </ul>
+            <div class="mt-5">
+                <a href="{{ route('discord') }}"
+                   data-testid="discord-join"
+                   class="inline-flex items-center justify-center gap-2 min-h-11 px-5 rounded-md
+                          bg-transparent text-ink border border-line-strong
+                          hover:bg-raised hover:border-ink-muted active:bg-surface
+                          transition-colors duration-fast ease-out-quick">
+                    Join the Discord
+                </a>
+            </div>
+        </div>
+
+    @elseif ($emptyState === 'error')
+        {{-- The read failed: say so, offer the retry, and point at the Discord
+             that always has the latest. This must never read as "no events". --}}
+        <div class="u-hatch mt-8 rounded-lg border border-line p-8 text-center"
+             data-testid="events-empty-error" role="alert">
+            <h2 class="text-lg font-semibold text-ink">We couldn't load the calendar.</h2>
+            <p class="mx-auto mt-1.5 max-w-prose text-sm text-ink-muted">
+                The Discord always has the latest — come ask there.
+            </p>
+            <div class="mt-5 flex items-center justify-center gap-3">
+                <button type="button"
+                        wire:click="retryLoad"
+                        data-testid="events-retry"
+                        class="inline-flex items-center justify-center gap-2 min-h-11 px-6 rounded-md
+                               bg-brand text-on-brand font-semibold
+                               hover:bg-brand-hover active:bg-brand-active
+                               transition-colors duration-fast ease-out-quick">
+                    Retry
+                </button>
+                <a href="{{ route('discord') }}"
+                   data-testid="discord-join"
+                   class="inline-flex items-center justify-center gap-2 min-h-11 px-5 rounded-md
+                          bg-transparent text-ink border border-line-strong
+                          hover:bg-raised hover:border-ink-muted active:bg-surface
+                          transition-colors duration-fast ease-out-quick">
+                    Join the Discord
+                </a>
+            </div>
         </div>
     @endif
 
@@ -185,6 +251,13 @@
                 @endforeach
             </ul>
         @endif
+
+        {{-- TOG-7332: the "See past events" drawer reveals the list below
+             without reloading. role="status" announces the reveal politely;
+             empty until asked so initial load stays silent. $showingPast, not
+             $showPast: a search also reveals past matches, and that change is
+             already named by the search status above. --}}
+        <p class="sr-only" role="status" data-testid="events-past-status">@if ($showingPast && $past->isNotEmpty())Showing past events.@endif</p>
 
     {{-- ------------------------------------------------------------------
          Calendar view. A real table, because a month grid is tabular data and
@@ -226,7 +299,15 @@
             </button>
         </div>
 
+        {{-- TOG-6932: `role="region"` exposes the aria-label to assistive tech
+             (a plain div's label would never be announced). The region keeps
+             tabindex="0", so it is a tab stop on every viewport — including
+             wide screens where it cannot scroll. That unconditional stop is
+             the known WCAG 2.1.1 trade-off: scrollable content must be
+             keyboard-reachable, and a CSS-only conditional stop is not
+             available here. --}}
         <div class="mt-4 overflow-x-auto"
+             role="region"
              tabindex="0"
              aria-label="Events calendar; scroll horizontally to see all days"
              data-testid="events-calendar-scroll">

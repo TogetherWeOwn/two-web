@@ -27,6 +27,17 @@
 #   production-warn    a production hook exists    -> warns, does not fail
 #   args               called with an argument     -> exit 2
 #
+# Production mirrors staging through ci/deploy-target-production.sh (TOG-6912) —
+# same fail-closed contract, the Ship target card (TOG-6902) named instead of
+# the deploy-layer card:
+#
+#   prod-nothing-set   no secret, no variable        -> exit 1
+#   prod-hook-only     secret without PRODUCTION_URL -> exit 1
+#   prod-url-only      variable without the secret   -> exit 1
+#   prod-ready         both set                      -> exit 0
+#   prod-ready-trailing PRODUCTION_URL with a "/"    -> exit 0, slash stripped
+#   prod-args          called with an argument       -> exit 2
+#
 # And the two assertions that are really about TOG-913 rather than about this
 # script — that the workflow cannot quietly go back to skipping:
 #
@@ -191,10 +202,123 @@ else
   rc=1
 fi
 
+printf '\n\033[1m==> The production job has its own fail-closed guard (TOG-6912)\033[0m\n'
+
+# ci/deploy-target-production.sh is the staging guard's twin for production: same
+# exit contract, same no-skip rule. What it refuses on names TOG-6902 (the Ship
+# target gate) rather than the deploy-layer card, and its ready case exports
+# `url=` from PRODUCTION_URL rather than STAGING_URL.
+PROD_GUARD="${REPO_ROOT}/ci/deploy-target-production.sh"
+FAKE_PROD_HOOK="https://coolify.example.invalid/api/v1/deploy?uuid=prod&token=NOT-A-REAL-TOKEN"
+
+# Runs the production guard in a clean environment, same shape as run_guard.
+PROD_OUT=""; PROD_STATUS=0; PROD_GH_OUTPUT_FILE=""; PROD_GH_SUMMARY_FILE=""
+run_prod_guard() {
+  local slug="$1"; shift
+  PROD_GH_OUTPUT_FILE="${WORK}/prod-${slug}.output"
+  PROD_GH_SUMMARY_FILE="${WORK}/prod-${slug}.summary"
+  : > "$PROD_GH_OUTPUT_FILE"
+  : > "$PROD_GH_SUMMARY_FILE"
+  PROD_OUT="$(env -i PATH="$PATH" \
+        GITHUB_OUTPUT="$PROD_GH_OUTPUT_FILE" \
+        GITHUB_STEP_SUMMARY="$PROD_GH_SUMMARY_FILE" \
+        "$@" bash "$PROD_GUARD" 2>&1)"
+  PROD_STATUS=$?
+}
+
+# expect_prod_refusal <slug> <expected substring> [ENV=VAL ...]
+expect_prod_refusal() {
+  local slug="$1" expected="$2"; shift 2
+  n=$((n + 1))
+  run_prod_guard "$slug" "$@"
+
+  if [ "$PROD_STATUS" -eq 0 ]; then
+    fail "prod-${slug}: the production guard PASSED with no usable deploy target. This is the TOG-913 defect."
+    printf '%s\n' "$PROD_OUT" | sed 's/^/        /'
+    rc=1
+    return
+  fi
+  if [ "$PROD_STATUS" -ne 1 ]; then
+    fail "prod-${slug}: expected exit 1, got ${PROD_STATUS}"
+    printf '%s\n' "$PROD_OUT" | sed 's/^/        /'
+    rc=1
+    return
+  fi
+  if ! grep -qF -- "$expected" <<< "$PROD_OUT"; then
+    fail "prod-${slug}: refused, but not for the stated reason. Wanted: ${expected}"
+    printf '%s\n' "$PROD_OUT" | sed 's/^/        /'
+    rc=1
+    return
+  fi
+  # A refusal that does not say what to do next is how an expected red becomes
+  # noise. The production refusal names its two inputs and the Ship target gate.
+  if ! grep -qF 'TOG-6902' <<< "$PROD_OUT"; then
+    fail "prod-${slug}: the refusal never names TOG-6902, so nobody reading it learns the production gate it sits behind"
+    rc=1
+    return
+  fi
+  if ! grep -q 'production was NOT deployed' "$PROD_GH_SUMMARY_FILE"; then
+    fail "prod-${slug}: nothing was written to the step summary; the run would be red with no explanation in the UI"
+    rc=1
+    return
+  fi
+  pass "prod-${slug}"
+}
+
+expect_prod_refusal nothing-set 'COOLIFY_PRODUCTION_DEPLOY_HOOK (secret) and PRODUCTION_URL (variable) is not set'
+
+expect_prod_refusal hook-only 'PRODUCTION_URL (variable) is not set' \
+  "COOLIFY_PRODUCTION_DEPLOY_HOOK=${FAKE_PROD_HOOK}"
+
+expect_prod_refusal url-only 'COOLIFY_PRODUCTION_DEPLOY_HOOK (secret) is not set' \
+  "PRODUCTION_URL=https://togetherweown.com"
+
+n=$((n + 1))
+run_prod_guard ready \
+  "COOLIFY_PRODUCTION_DEPLOY_HOOK=${FAKE_PROD_HOOK}" \
+  "PRODUCTION_URL=https://togetherweown.com"
+if [ "$PROD_STATUS" -ne 0 ]; then
+  fail "prod-ready: expected the guard to resolve a target, got exit ${PROD_STATUS}"
+  printf '%s\n' "$PROD_OUT" | sed 's/^/        /'
+  rc=1
+elif ! grep -q '^hook=' "$PROD_GH_OUTPUT_FILE"; then
+  fail "prod-ready: resolved, but never exported \`hook\` — the deploy step would POST to an empty URL"
+  rc=1
+elif ! grep -q '^url=' "$PROD_GH_OUTPUT_FILE"; then
+  fail "prod-ready: resolved, but never exported \`url\` — the health poll would curl nothing and pass"
+  rc=1
+elif grep -qF 'NOT-A-REAL-TOKEN' <<< "$PROD_OUT"; then
+  fail "prod-ready: the guard echoed the deploy hook, which carries the token, into its own output"
+  rc=1
+else
+  pass prod-ready
+fi
+
+n=$((n + 1))
+run_prod_guard ready-trailing \
+  "COOLIFY_PRODUCTION_DEPLOY_HOOK=${FAKE_PROD_HOOK}" \
+  "PRODUCTION_URL=https://togetherweown.com/"
+if [ "$PROD_STATUS" -eq 0 ] && grep -qx 'url=https://togetherweown.com' "$PROD_GH_OUTPUT_FILE"; then
+  pass prod-ready-trailing
+else
+  fail "prod-ready-trailing: a trailing slash survived, so the health poll would request '…com//up'"
+  grep '^url=' "$PROD_GH_OUTPUT_FILE" | sed 's/^/        /'
+  rc=1
+fi
+
+n=$((n + 1))
+PROD_OUT="$(env -i PATH="$PATH" bash "$PROD_GUARD" --force 2>&1)"; PROD_STATUS=$?
+if [ "$PROD_STATUS" -eq 2 ]; then
+  pass prod-args-refused
+else
+  fail "prod-args-refused: expected exit 2 for an unexpected argument, got ${PROD_STATUS}"
+  rc=1
+fi
+
 printf '\n\033[1m==> The production tripwire warns and does not fail\033[0m\n'
 
-# Nothing reads a production hook: production ships by hand (TWO-91, TOG-118). Its
-# appearance means somebody is rebuilding that path, which is worth saying and not
+# The staging guard never reads the production hook — the reviewer-gated
+# production job owns it (TOG-6912). Its appearance here is worth saying and not
 # worth failing a staging deploy over.
 n=$((n + 1))
 run_guard production-warn \
@@ -238,6 +362,16 @@ if grep -qE '^[[:space:]]*run:[[:space:]]*\./ci/deploy-target\.sh[[:space:]]*$' 
   pass workflow-calls-guard
 else
   fail "workflow-calls-guard: no step in .github/workflows/deploy.yml runs ./ci/deploy-target.sh, so nothing checks that a deploy had a target"
+  rc=1
+fi
+
+# The production job's guard needs the same anchor: deleting its step leaves
+# every prod- case above passing against a job that deploys on a missing target.
+n=$((n + 1))
+if grep -qE '^[[:space:]]*run:[[:space:]]*\./ci/deploy-target-production\.sh[[:space:]]*$' "$WORKFLOW"; then
+  pass workflow-calls-prod-guard
+else
+  fail "workflow-calls-prod-guard: no step in .github/workflows/deploy.yml runs ./ci/deploy-target-production.sh, so nothing checks the production deploy had a target"
   rc=1
 fi
 

@@ -33,7 +33,7 @@ jobs:
     runs-on: [self-hosted, two-selfhosted]
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
 
       # Where did this job actually run? `runs-on:` asks; only the job can
       # answer. Fails on a GitHub-hosted runner (which bills) and publishes its
@@ -47,7 +47,7 @@ jobs:
       # preinstalled, but every other job here pins the version and this should not
       # be the exception — an unpinned interpreter is exactly the kind of thing that
       # works until somebody upgrades the host. No install step follows it; seconds.
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: ${{ env.NODE_VERSION }}
 
@@ -170,6 +170,32 @@ jobs:
       - name: PHP runtime config self-test
         run: ./ci/php-runtime-config-selftest.sh
 
+      # `.env.example` is the source of truth for the file layout; `docs/env.md`
+      # is the reference for what each key means. Before TOG-7282 nothing
+      # watched the gap between them, so a var landed in one file and stayed
+      # missing from the other until a fresh checkout or deploy broke on it.
+      # Fails in both directions: an undocumented example key, or a documented
+      # key that lives in neither the example nor the deliberate-absence
+      # allowlist. Under a second, no network.
+      - name: Env docs match .env.example
+        run: ./ci/check-env-docs.sh
+
+      # The check on the check. A drift script that always passes and one that
+      # works look identical from here, so this throws drift at it in both
+      # directions — plus the parser-failure shapes — and asserts it goes red
+      # for the stated reason. Same half second, still no network.
+      - name: Env docs check self-test
+        run: ./ci/check-env-docs-selftest.sh
+
+      # The Vite bundle budget checker (TOG-5629). Its own `--selftest` runs
+      # here, in `static`, for the same reason the line below exists: the byte
+      # comparison needs a real manifest so it runs in `budgets`, and a checker
+      # that quietly stopped checking is indistinguishable from a fitting
+      # bundle unless something offline proves it still fails. No build, no
+      # network — synthetic manifests in a temp dir, milliseconds.
+      - name: Bundle budget self-test
+        run: node ci/check-bundle-budget.mjs --selftest
+
       # The `budgets` verdict, which had no test until it shipped a defect. lhci
       # runs there under `continue-on-error: true`, so its exit code is discarded
       # and `ci/lh-annotate.mjs` is what actually turns the job red — the whole
@@ -236,7 +262,19 @@ jobs:
       - name: Mail auth self-test
         run: ./ci/mail-auth-check-selftest.sh
 
-      - uses: shivammathur/setup-php@v2
+      # The local backup script and its restore proof (TOG-5643). The real
+      # proof needs docker + Postgres and runs by hand per docs/runbook.md;
+      # what runs here is the offline half: a stubbed `docker` drives the real
+      # script through its local-only refusal, the empty-dump check, a
+      # round-trip with matching and mismatching counts, a corrupt dump, and
+      # the password-never-in-argv audit. A guard that quietly stopped
+      # guarding is otherwise indistinguishable from one that works, up until
+      # someone dumps production onto a laptop or trusts a backup that never
+      # restored. No network, no docker, no database.
+      - name: Postgres backup self-test
+        run: ./ci/pg-backup-selftest.sh
+
+      - uses: shivammathur/setup-php@f3e473d116dcccaddc5834248c87452386958240 # v2
         with:
           php-version: ${{ env.PHP_VERSION }}
           extensions: pdo_pgsql, intl, bcmath
@@ -272,7 +310,7 @@ jobs:
           "$php_bin" "$RUNNER_TEMP/composer-pinned" --version
 
       - name: Cache Composer packages
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: vendor
           key: composer-${{ env.PHP_VERSION }}-${{ hashFiles('composer.lock') }}
@@ -321,14 +359,14 @@ jobs:
           --health-retries 20
 
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
 
       # See the note in `static`. Every job attests; a job that does not could be
       # moved onto a billable runner with nothing going red (TOG-2847).
       - name: Attest the runner
         run: ./ci/attest-runner.sh
 
-      - uses: shivammathur/setup-php@v2
+      - uses: shivammathur/setup-php@f3e473d116dcccaddc5834248c87452386958240 # v2
         with:
           php-version: ${{ env.PHP_VERSION }}
           extensions: pdo_pgsql, intl, bcmath
@@ -364,7 +402,7 @@ jobs:
           "$php_bin" "$RUNNER_TEMP/composer-pinned" --version
 
       - name: Cache Composer packages
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: vendor
           key: composer-${{ env.PHP_VERSION }}-${{ hashFiles('composer.lock') }}
@@ -413,6 +451,18 @@ jobs:
     runs-on: [self-hosted, two-selfhosted]
     timeout-minutes: 20
 
+    # The persistent self-hosted hosts run Chrome as an unprivileged user,
+    # so the renderer dies at session creation without the sandbox
+    # workarounds the budgets harness already pins on the same hosts
+    # (ci/lighthouserc.cjs, ci/browser/launch.mjs, ci/a11y.mjs; TOG-7021).
+    # DuskTestCase reads extra flags from DUSK_CHROME_ARGS (TOG-6769 seam);
+    # leaving it unset is the 4/19 session-start failure on PR #368
+    # (TOG-7699). Neither flag is excluded: the non-root Chrome builds on
+    # these hosts accept --no-sandbox, proved by the budgets puppeteer
+    # self-test passing with it in the same failing run.
+    env:
+      DUSK_CHROME_ARGS: '--no-sandbox --disable-dev-shm-usage'
+
     services:
       postgres:
         image: postgres:17-alpine
@@ -431,14 +481,14 @@ jobs:
           --health-retries 20
 
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
 
       # See the note in `static`. Every job attests; a job that does not could be
       # moved onto a billable runner with nothing going red (TOG-2847).
       - name: Attest the runner
         run: ./ci/attest-runner.sh
 
-      - uses: shivammathur/setup-php@v2
+      - uses: shivammathur/setup-php@f3e473d116dcccaddc5834248c87452386958240 # v2
         with:
           php-version: ${{ env.PHP_VERSION }}
           extensions: pdo_pgsql, intl, bcmath
@@ -461,13 +511,13 @@ jobs:
           [ "$("$php_bin" -r 'echo PHP_MAJOR_VERSION, ".", PHP_MINOR_VERSION;')" = "$PHP_VERSION" ] || { echo "::error::pinned PHP is $("$php_bin" -v | head -1), not PHP ${PHP_VERSION} — refusing to run on the wrong interpreter (TOG-5877)"; exit 1; }
           "$php_bin" "$RUNNER_TEMP/composer-pinned" --version
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: npm
 
       - name: Cache Composer packages
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: vendor
           key: composer-${{ env.PHP_VERSION }}-${{ hashFiles('composer.lock') }}
@@ -594,7 +644,7 @@ jobs:
       # re-run it instead of reading it.
       - name: Upload failure evidence
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: dusk-failures
           path: |
@@ -664,7 +714,7 @@ jobs:
           --health-retries 20
 
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
 
       # See the note in `static`. Every job attests; a job that does not could be
       # moved onto a billable runner with nothing going red (TOG-2847).
@@ -679,7 +729,7 @@ jobs:
       # tax on every gated page's TTFB that no user or production host ever pays
       # (TOG-3310). validate_timestamps=0 is safe because nothing touches the
       # checked-out PHP files between here and the server shutting down.
-      - uses: shivammathur/setup-php@v2
+      - uses: shivammathur/setup-php@f3e473d116dcccaddc5834248c87452386958240 # v2
         with:
           php-version: ${{ env.PHP_VERSION }}
           extensions: pdo_pgsql, intl, bcmath, opcache
@@ -724,13 +774,13 @@ jobs:
           printf 'opcache.enable=1\nopcache.enable_cli=1\nopcache.validate_timestamps=0\n' > "$dir/zz-opcache-budgets.ini"
           echo "PHP_INI_SCAN_DIR=:$dir" >> "$GITHUB_ENV"
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: npm
 
       - name: Cache Composer packages
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: vendor
           key: composer-${{ env.PHP_VERSION }}-${{ hashFiles('composer.lock') }}
@@ -743,6 +793,14 @@ jobs:
 
       - run: npm ci --include=dev
       - run: npm run build
+
+      # The Vite bundle budget (TOG-5629): every emitted entrypoint against its
+      # raw + gzip ceiling in ci/bundle-budget.json. Fails the job, not a
+      # warning — an over-budget bundle is bytes on Slow 4G competing with the
+      # font LCP is waiting on (TOG-53). Runs here, right after the build, so a
+      # breach fails before the twenty minutes of Lighthouse that follow.
+      - name: Bundle budget
+        run: node ci/check-bundle-budget.mjs
 
       # Five runner processes share one host network namespace. Derive stable
       # per-runner ports so parallel Dusk/budgets jobs never bind the same socket.
@@ -873,10 +931,35 @@ jobs:
       # below re-raises it and fails the job. It exists so the breached numbers get
       # turned into annotations before the job stops, which is the difference
       # between a red build that names the audit and one that says only "exit 1".
+      # TOG-7021: LHCI shelled out to whatever Chrome the persistent host
+      # happened to have — unpinned binary, no sandbox workarounds — and when
+      # that Chrome died at startup the job failed with `Invalid URL:
+      # undefined`, the DevTools endpoint of a browser that never started, and
+      # zero assertion results. No retry: the flake policy forbids it. The fix
+      # is declared up front instead — the same pinned Chromium every other
+      # browser step in this job already measures with, plus launch flags that
+      # match ci/browser/launch.mjs and ci/a11y.mjs — and the run log is kept
+      # so the next crash is diagnosable from the artifact, not the log tail.
       - name: Lighthouse — performance budget
         id: lighthouse
         continue-on-error: true
-        run: npx lhci autorun --config=./ci/lighthouserc.cjs
+        run: |
+          set +e
+          # chrome-launcher reads CHROME_PATH before any install detection, so
+          # this is the Chromium downloaded with the pinned puppeteer above —
+          # not whatever google-chrome-stable apt last put on this host.
+          export CHROME_PATH="$(node -e "import('puppeteer').then(p => console.log(p.default.executablePath()))")"
+          echo "measuring with $CHROME_PATH"
+          # Tee the run into .lighthouseci so it ships inside the
+          # budget-reports artifact below. A startup crash leaves no assertion
+          # results; without this its error lives only in the step log.
+          # Explicit exit code: steps.lighthouse.outcome below depends on it,
+          # and a pipe through tee would report tee's status instead.
+          mkdir -p .lighthouseci
+          npx lhci autorun --config=./ci/lighthouserc.cjs > .lighthouseci/lhci.log 2>&1
+          rc=$?
+          cat .lighthouseci/lhci.log
+          exit $rc
 
       # Reads what lhci already wrote and re-emits it as ::error::, then exits
       # non-zero if anything breached. Same verdict, readable without the job log.
@@ -943,7 +1026,7 @@ jobs:
       # both paths are generated reports, and the flag only applies to them.
       - name: Upload budget reports
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: budget-reports
           path: |
@@ -977,7 +1060,7 @@ jobs:
       # This job had no checkout: it only reads `needs` results. It needs one now
       # so it can attest its own runner — the aggregate bills like any other job,
       # and being cheap is not the same as being free (TOG-2847).
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
 
       - name: Attest the runner
         run: ./ci/attest-runner.sh
