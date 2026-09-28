@@ -61,6 +61,16 @@ it('records a waitlisted answer when the member joins the line', function () {
         ->toBe(RsvpStatus::Waitlisted);
 });
 
+it('broadcasts the going-count update when the line is joined', function () {
+    // TOG-8708: the badge speaks the viewer state, not the count — joining the
+    // line moves no count, so the dispatch carrying `waitlisted` is what the
+    // sr-only prefix is observed from.
+    Livewire::actingAs($this->member)
+        ->test(RsvpButton::class, ['event' => $this->full])
+        ->call('rsvp', RsvpStatus::Waitlisted->value)
+        ->assertDispatched('going-count-updated', eventKey: $this->full->event_key, viewerState: 'waitlisted');
+});
+
 it('accepts a waitlisted answer on a full event at the service level', function () {
     // The capacity check only gates answers that newly take a seat. If this
     // ever throws, the line has been fenced off by accident.
