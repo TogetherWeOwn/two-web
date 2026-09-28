@@ -103,6 +103,27 @@
                           transition-colors duration-fast ease-out-quick">
                     Add to Google Calendar
                 </a>
+                {{--
+                    Copy-link (TOG-7262). The canonical event URL for guests and
+                    members alike — this page is public and the copied link is
+                    the shareable one, same rule as the share tags. `data-copy-link`
+                    is the contract with resources/js/event-copy-link.js, which
+                    listens at document level so a Livewire RSVP re-render cannot
+                    drop it. Same pattern as the member profile (TOG-6926), kept
+                    event-scoped so either page can change without touching the other.
+                --}}
+                <button type="button"
+                        data-copy-link="{{ route('events.page', $event) }}"
+                        data-testid="event-copy-link"
+                        class="inline-flex items-center justify-center gap-2 min-h-11 px-5 rounded-md
+                               bg-transparent text-ink border border-line-strong
+                               hover:bg-raised hover:border-ink-muted active:bg-surface
+                               transition-colors duration-fast ease-out-quick">
+                    <svg class="size-4 shrink-0" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" aria-hidden="true">
+                        <path d="M6.5 9.5a3 3 0 0 0 4.2 0l2-2a3 3 0 0 0-4.2-4.2l-1 1M9.5 6.5a3 3 0 0 0-4.2 0l-2 2a3 3 0 0 0 4.2 4.2l1-1"/>
+                    </svg>
+                    Copy link
+                </button>
             </div>
 
             {{-- Who's going: member display names for signed-in viewers only.
@@ -238,4 +259,24 @@
             </section>
         @endif
     </div>
+    {{--
+        Copy-link toast (TOG-7262). Lives in the page, outside any Livewire
+        component: an RSVP re-render morphs the article and would wipe a toast
+        inside it mid-announcement. Hidden until resources/js/event-copy-link.js
+        fills and reveals it; `role="status"` announces the confirmation
+        without stealing focus.
+    --}}
+    <div class="pointer-events-none fixed inset-x-0 bottom-6 z-50 flex justify-center px-4">
+        <p class="hidden max-w-md rounded-lg border border-line bg-online-quiet p-4 text-sm text-ink shadow-overlay"
+           role="status"
+           data-testid="event-copy-toast"></p>
+    </div>
+    {{--
+        Page script (TOG-7262). A second @vite is fine — the plugin emits tags
+        wherever the directive sits — and `type="module"` defers by default, so
+        this never blocks first paint. Kept off the layout on purpose: the global
+        bundle is pinned import-free (see AssetCompressionTest) and only event
+        pages should download this.
+    --}}
+    @vite('resources/js/event-copy-link.js')
 </x-layouts.app>
