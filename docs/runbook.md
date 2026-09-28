@@ -111,9 +111,11 @@ Notes on the steps:
 - **nginx**: `reload`, not `restart`, and only when its config changed. A
   reload keeps serving; a restart drops connections. Validate first:
   `sudo nginx -t`.
-- **`/up`** is Laravel's built-in health route (`health: '/up'` in
-  `bootstrap/app.php`). It answers 200 with no auth. If it does not answer,
-  you have not deployed — see rollback.
+- **`/up`** is the explicit health probe (TOG-8711: routes/health.php,
+  `App\Http\Controllers\HealthCheckController`). It answers 200 with no auth
+  and carries the database signal as JSON — `db` plus `pending_migrations` —
+  so a release whose migrate failed answers 503 instead of reading as
+  healthy. If it does not answer, you have not deployed — see rollback.
 
 ---
 
