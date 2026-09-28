@@ -17,7 +17,8 @@ use Illuminate\Support\Facades\DB;
  * everywhere we ship) — tracked as the sibling bug card off TOG-6779, not
  * pinned here. `/about` used to fail the same way and now survives via
  * routes/funnel.php (TOG-6853, pinned in tests/Feature/AboutPageTest.php);
- * only the session-free `/discord` and `/about` survive an app-DB outage.
+ * only the session-free `/discord`, `/about` and `/faq` (TOG-8396, pinned in
+ * tests/Feature/FaqPageTest.php) survive an app-DB outage.
  * This file must stay green.
  */
 
@@ -57,6 +58,7 @@ it('serves the static leaves when the bot database refuses the connection', func
     breakBotConnectionForLeaves();
 
     $this->get('/about')->assertOk()->assertSee('About Together We Own');
+    $this->get('/faq')->assertOk()->assertSee('Frequently asked questions');
     $this->get('/rules')->assertOk()->assertSee('House rules');
 });
 

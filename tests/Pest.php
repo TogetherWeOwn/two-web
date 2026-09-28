@@ -5,6 +5,11 @@ use Illuminate\Foundation\Testing\RefreshDatabase;
 use Tests\DuskTestCase;
 use Tests\TestCase;
 
+// Shared cross-file assertions (TOG-6788: the one 429 assertion every
+// throttled route uses). Required here rather than autoloaded so the helpers
+// exist whichever test file runs first.
+require_once __DIR__.'/Support/ThrottleEnvelope.php';
+
 pest()->extend(TestCase::class)
     ->use(RefreshDatabase::class)
     ->in('Feature');
@@ -18,8 +23,17 @@ pest()->extend(TestCase::class)->in('Unit');
 // transaction; and a job dispatched `afterCommit` only runs when a commit actually
 // happens. Its own directory rather than a per-file trait override, so the
 // difference is visible from the file tree and nothing else inherits it by accident.
+//
+// Truncation runs after each test as well as before it. The trait only truncates
+// in setUp, so the last test to run leaves its committed rows behind — and the
+// next RefreshDatabase test in the same process inherits them, because a rollback
+// only undoes that test's own transaction. That is 7 red calendar tests whenever
+// Integration runs before Feature in one process (TOG-5620).
 pest()->extend(TestCase::class)
     ->use(DatabaseTruncation::class)
+    ->afterEach(function (): void {
+        $this->truncateDatabaseTables();
+    })
     ->in('Integration');
 
 // Dusk runs through phpunit.dusk.xml against a real browser and a real server, so

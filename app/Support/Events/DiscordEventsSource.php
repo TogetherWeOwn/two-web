@@ -17,4 +17,13 @@ interface DiscordEventsSource
      * @return list<Event> Transient models: safe to render, never to save.
      */
     public function upcoming(): array;
+
+    /**
+     * Whether the most recent `upcoming()` read failed (TOG-5318).
+     *
+     * The empty-vs-failure branch the error empty state hangs on: `[]` from
+     * `upcoming()` means "no events" only when this is false. A failed read
+     * must render the error state, never the never-scheduled one.
+     */
+    public function lastReadFailed(): bool;
 }
