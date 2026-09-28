@@ -8,6 +8,7 @@ use App\Rules\IanaTimeZone;
 use App\Rules\NoControlCharacters;
 use App\Support\Profiles\MemberStats;
 use App\Support\Profiles\Milestone;
+use App\Support\SpamTrap;
 use Illuminate\Auth\Access\AuthorizationException;
 use Illuminate\Support\Facades\Gate;
 use Illuminate\View\View;
@@ -41,6 +42,24 @@ class MemberProfile extends Component
 
     public string $timezone = '';
 
+    /**
+     * The honeypot decoy (TOG-8715). Bound to a visually hidden input no real
+     * form labels or hints at: humans never fill it, form-filling bots fill
+     * every input. Deliberately unlocked — a Locked field cannot be tampered
+     * with, which would make the trap untestable through the same protocol a
+     * bot uses.
+     */
+    public string $website = '';
+
+    /**
+     * Unix timestamp of when the edit form was opened (TOG-8715). Locked, so
+     * only the server sets it — a client-supplied backdate cannot bypass the
+     * minimum-fill-time floor. Refreshed on every edit() because a stale
+     * mount stamp would exempt a bot that idles on the closed page.
+     */
+    #[Locked]
+    public int $formOpenedAt = 0;
+
     /** @var null|callable(User, array{bio: ?string, games: list<string>, timezone: ?string}): Profile */
     public static $profileWriter = null;
 
@@ -70,6 +89,10 @@ class MemberProfile extends Component
             'bio' => ['nullable', 'string', 'max:1000', new NoControlCharacters],
             'gamesText' => ['nullable', 'string', 'max:1700', new NoControlCharacters],
             'timezone' => ['nullable', 'string', new IanaTimeZone],
+            // The decoy must stay outside validation: rejecting a filled
+            // honeypot with a form error would be the oracle TOG-8715 forbids.
+            // It is read raw in save() and never persisted.
+            'website' => ['nullable', 'string'],
         ];
     }
 
@@ -81,6 +104,8 @@ class MemberProfile extends Component
         $this->saved = false;
         $this->saveFailed = false;
         $this->editing = true;
+        $this->website = '';
+        $this->formOpenedAt = now()->getTimestamp();
         $this->fillForm();
         // TOG-6957: opening the form unmounts the focused trigger, dropping
         // keyboard focus to <body>. The self-dispatch fires after Livewire
@@ -113,6 +138,20 @@ class MemberProfile extends Component
         // On success the same event refocuses the saved confirmation instead;
         // the listener picks its target from the morphed DOM.
         $this->dispatch('profile-state-changed')->self();
+
+        // TOG-8715: the spam trap fires before validation and before any
+        // write. Either signal — a filled decoy or a save faster than a human
+        // manages after opening the form — ends in the exact success state a
+        // real save produces: no error, no retained form, "Profile saved."
+        // A distinct response would be an oracle the trap must not give, and
+        // nothing attacker-shaped is logged.
+        if (SpamTrap::honeypotFilled($this->website) || SpamTrap::tooFast($this->formOpenedAt)) {
+            $this->editing = false;
+            $this->saved = true;
+            $this->fillForm();
+
+            return;
+        }
 
         $validated = $this->validate(static::validationRules());
 

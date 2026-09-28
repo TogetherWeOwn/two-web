@@ -16,9 +16,12 @@
 //     this, so an empty one here is an orphan in the panel).
 //
 // If one of these fails, add the label — do not weaken the assertion. The
-// only exemption is Hidden fields: they render type="hidden", axe excludes
-// them, and the test pins that the exemption covers exactly the UTC instant
-// carriers and nothing else.
+// exemptions are Hidden fields (they render type="hidden", axe excludes them,
+// and the test pins that the exemption covers exactly the UTC instant
+// carriers and nothing else) and the TOG-8715 honeypot decoy: an unlabeled,
+// hidden, untabbable input is the whole point of a honeypot, and labelling it
+// would announce the trap to the screen readers it must stay silent for. The
+// exemption below pins it to exactly that one control by id and by hiding.
 
 use App\Filament\Resources\Events\EventResource;
 use App\Filament\Resources\Events\Pages\CreateEvent;
@@ -63,7 +66,29 @@ it('associates every profile-edit control with a label', function () {
 
     $orphans = array_values(array_diff(array_unique($ids), $labelled));
 
-    expect($orphans)->toBe([], 'Controls with no matching <label for>:'."\n".implode("\n", $orphans));
+    // TOG-8715: the honeypot decoy is the one control allowed no <label> —
+    // labelling a trap would announce it to assistive tech. The exemption is
+    // pinned, not open-ended: exactly the `website` id, and only while the tag
+    // itself stays hidden from sight, tab order and autocomplete.
+    $decoys = array_values(array_filter($orphans, static function (string $id) use ($tags): bool {
+        if ($id !== 'website') {
+            return false;
+        }
+
+        foreach ($tags[0] as $tag) {
+            if (preg_match('/\bid="website"/i', $tag)
+                && preg_match('/\bwire:model="website"/i', $tag)
+                && preg_match('/\btabindex="-1"/i', $tag)
+                && preg_match('/\bautocomplete="off"/i', $tag)) {
+                return true;
+            }
+        }
+
+        return false;
+    }));
+
+    expect($decoys)->toHaveCount(1, 'The honeypot exemption must cover exactly the one hidden website decoy.')
+        ->and(array_values(array_diff($orphans, $decoys)))->toBe([], 'Controls with no matching <label for>:'."\n".implode("\n", $orphans));
 });
 
 it('labels every visible admin event field', function () {
