@@ -26,6 +26,8 @@
  * changes a token would otherwise leave our copy silently behind.
  */
 
+use App\Filament\Resources\DataRequests\DataRequestResource;
+use App\Filament\Resources\DataRequests\Pages\ListDataRequests;
 use App\Filament\Resources\Events\EventResource;
 use App\Filament\Resources\Events\Pages\CreateEvent;
 use App\Filament\Resources\Events\Pages\ListEvents;
@@ -74,13 +76,18 @@ function declaredComponentClasses(): array
     $resources = [
         [EventResource::class, ListEvents::class, CreateEvent::class],
         [FeaturedContentResource::class, ListFeaturedContents::class, CreateFeaturedContent::class],
+        // TOG-8705: list-only queue — no create page, and the resource's form
+        // is an empty schema (decisions are record actions, never edits).
+        [DataRequestResource::class, ListDataRequests::class, null],
     ];
 
     $classes = [];
 
     foreach ($resources as [$resource, $listPage, $createPage]) {
         $table = $resource::table(Table::make(Livewire::new($listPage)));
-        $form = $resource::form(new Schema(Livewire::new($createPage)));
+        $form = $createPage !== null
+            ? $resource::form(new Schema(Livewire::new($createPage)))
+            : $resource::form(new Schema(Livewire::new($listPage)));
 
         // array_values on each: Filament keys these by field name, and a filter
         // is routinely named after the column it filters — merging them keyed

@@ -1,6 +1,7 @@
 <?php
 
 use App\Models\AgentEventIdempotencyKey;
+use App\Models\DataRequest;
 use App\Models\JoinAttempt;
 use App\Models\MemberDataAccessLog;
 use Illuminate\Foundation\Inspiring;
@@ -33,6 +34,12 @@ Schedule::command('model:prune', ['--model' => [MemberDataAccessLog::class]])->d
 // tests/Feature/Console/PruneStaleRetentionTest.php asserts the schedule
 // exists and that both prunable() scopes keep rows inside the window.
 Schedule::command('model:prune', ['--model' => [JoinAttempt::class, AgentEventIdempotencyKey::class]])->daily();
+
+// Retention on closed data requests (TOG-8705). `model:prune` runs the mass
+// delete on DataRequest::prunable(), which can only ever match closed rows
+// older than the configured window — never a pending ask, which is live
+// work, not history. Same shape as the two entries above.
+Schedule::command('model:prune', ['--model' => [DataRequest::class]])->daily();
 
 /*
  * Every ten minutes, because that is the gap between an event going stale and a
