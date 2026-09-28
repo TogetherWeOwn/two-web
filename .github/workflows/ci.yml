@@ -430,6 +430,18 @@ jobs:
     runs-on: [self-hosted, two-selfhosted]
     timeout-minutes: 20
 
+    # The persistent self-hosted hosts run Chrome as an unprivileged user,
+    # so the renderer dies at session creation without the sandbox
+    # workarounds the budgets harness already pins on the same hosts
+    # (ci/lighthouserc.cjs, ci/browser/launch.mjs, ci/a11y.mjs; TOG-7021).
+    # DuskTestCase reads extra flags from DUSK_CHROME_ARGS (TOG-6769 seam);
+    # leaving it unset is the 4/19 session-start failure on PR #368
+    # (TOG-7699). Neither flag is excluded: the non-root Chrome builds on
+    # these hosts accept --no-sandbox, proved by the budgets puppeteer
+    # self-test passing with it in the same failing run.
+    env:
+      DUSK_CHROME_ARGS: '--no-sandbox --disable-dev-shm-usage'
+
     services:
       postgres:
         image: postgres:17-alpine
