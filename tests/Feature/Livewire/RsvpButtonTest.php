@@ -548,6 +548,9 @@ it('gives the withdraw control the same in-flight treatment as the RSVP', functi
         ->test(RsvpButton::class, ['event' => $this->event])
         ->html();
 
+    // Main landed the withdraw loading contract first (Removing… wait
+    // copy); this slice's duplicate spinner and its separate copy are gone,
+    // and this test now pins the contract that survived.
     expect($html)
         ->toContain('wire:target="withdraw"')
         ->toContain('Removing…')

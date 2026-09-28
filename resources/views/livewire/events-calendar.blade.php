@@ -29,6 +29,8 @@
                 @foreach (['list' => 'List', 'calendar' => 'Calendar'] as $key => $label)
                     <button type="button"
                             wire:click="setView('{{ $key }}')"
+                            wire:loading.attr="disabled"
+                            wire:target="setView"
                             aria-pressed="{{ $view === $key ? 'true' : 'false' }}"
                             data-testid="events-view-{{ $key }}"
                             @class([
@@ -90,6 +92,8 @@
         @if ($searching)
             <button type="button"
                     wire:click="clearSearch"
+                    wire:loading.attr="disabled"
+                    wire:target="clearSearch"
                     data-testid="events-search-clear"
                     class="inline-flex shrink-0 items-center justify-center min-h-11 px-4 rounded-md
                            bg-transparent text-ink border border-line-strong
@@ -122,6 +126,8 @@
                 <div class="mt-5">
                     <button type="button"
                             wire:click="clearSearch"
+                            wire:loading.attr="disabled"
+                            wire:target="clearSearch"
                             data-testid="events-search-clear-empty"
                             class="inline-flex items-center justify-center gap-2 min-h-11 px-5 rounded-md
                                    bg-transparent text-ink border border-line-strong
@@ -138,6 +144,49 @@
          Empty states. Three of them, and they say different things. The
          never-scheduled and the gap states are invitations; the error state
          is the only one that reads as broken, because it is.
+         ------------------------------------------------------------------ --}}
+
+    {{-- ------------------------------------------------------------------
+         Loading state (TOG-5416). Member-started re-renders — view toggle,
+         month steps, the past drawer, clearing a search — show this skeleton
+         while the round trip is in flight. Hidden up front: Livewire only
+         toggles loading elements during a request and never at init
+         (TOG-6351), so without the inline hide every page load flashes the
+         skeleton beside the list. `wire:loading.flex` restores the flex
+         layout when shown; the bare directive would force inline-block and
+         collapse the cards. `retryLoad` is the error-state retry below —
+         targeted here so the error markup gets the same wait state.
+         Typing in the search box is deliberately NOT targeted: a skeleton
+         flash on every debounced keystroke is worse than the wait, and the
+         aria-live search status above already names that change.
+         ------------------------------------------------------------------ --}}
+    <div wire:loading.flex
+         wire:target="setView, previousMonth, nextMonth, showPast, clearSearch, retryLoad"
+         role="status"
+         data-testid="events-loading"
+         style="display: none"
+         class="mt-8 flex flex-col gap-4">
+        {{-- Announced; the blocks below are aria-hidden decoration. --}}
+        <p class="sr-only">Loading events…</p>
+        <div aria-hidden="true" class="flex flex-col gap-4">
+            @for ($i = 0; $i < 3; $i++)
+                <div class="rounded-lg bg-surface border border-line p-5">
+                    <div class="h-5 w-2/3 rounded-sm bg-raised animate-pulse"></div>
+                    <div class="mt-3 h-4 w-1/3 rounded-sm bg-raised animate-pulse"></div>
+                    <div class="mt-3 h-4 w-full rounded-sm bg-raised animate-pulse"></div>
+                </div>
+            @endfor
+        </div>
+    </div>
+
+    {{-- The live content hides while the skeleton above shows — same targets,
+         so the two can never co-render. `.block` restores the block layout
+         when the request ends; the bare directive would leave
+         `display: inline-block` on this wrapper and shrink-wrap the page.
+         Tokens only; no new markup beyond this wrapper. --}}
+    <div wire:loading.remove.block
+         wire:target="setView, previousMonth, nextMonth, showPast, clearSearch, retryLoad"
+         data-testid="events-content">
          ------------------------------------------------------------------ --}}
     @if ($emptyState === 'never')
         <div class="u-hatch mt-8 rounded-lg border border-line p-8 text-center"
@@ -202,8 +251,14 @@
                 The Discord always has the latest — come ask there.
             </p>
             <div class="mt-5 flex items-center justify-center gap-3">
+                {{-- Disabled mid-request like every other member-started
+                     control on this page (TOG-5416): the skeleton shows while
+                     the re-read is in flight, and a second click would only
+                     stack another read. --}}
                 <button type="button"
                         wire:click="retryLoad"
+                        wire:loading.attr="disabled"
+                        wire:target="retryLoad"
                         data-testid="events-retry"
                         class="inline-flex items-center justify-center gap-2 min-h-11 px-6 rounded-md
                                bg-brand text-on-brand font-semibold
@@ -271,6 +326,8 @@
         <div class="mt-8 flex items-center justify-between gap-4">
             <button type="button"
                     wire:click="previousMonth"
+                    wire:loading.attr="disabled"
+                    wire:target="previousMonth"
                     aria-label="Previous month"
                     class="u-tap inline-flex items-center justify-center min-h-11 px-3 rounded-md
                            text-ink-muted hover:text-ink hover:bg-raised
@@ -289,6 +346,8 @@
 
             <button type="button"
                     wire:click="nextMonth"
+                    wire:loading.attr="disabled"
+                    wire:target="nextMonth"
                     aria-label="Next month"
                     class="u-tap inline-flex items-center justify-center min-h-11 px-3 rounded-md
                            text-ink-muted hover:text-ink hover:bg-raised
@@ -360,4 +419,5 @@
             </table>
         </div>
     @endif
+    </div>{{-- /events-content --}}
 </div>

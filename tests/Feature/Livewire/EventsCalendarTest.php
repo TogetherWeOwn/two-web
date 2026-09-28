@@ -609,6 +609,84 @@ it('clears the search and brings the full list back', function () {
 });
 
 /* ---------------------------------------------------------------------------
+   Loading state (TOG-5416). Member-started re-renders — view toggle, month
+   steps, the past drawer, clearing a search — show a skeleton; debounced
+   typing does not. Livewire toggles `wire:loading` elements only during a
+   request and never at init, so the markup is asserted as markup: present
+   but hidden up front, targeted at the actions, and typed as a polite
+   status rather than an alert.
+   --------------------------------------------------------------------------- */
+
+it('renders the loading skeleton hidden, announced politely', function () {
+    $html = Livewire::test(EventsCalendar::class)->html();
+
+    expect($html)
+        ->toContain('data-testid="events-loading"')
+        ->toContain('role="status"')
+        ->toContain('Loading events')
+        ->not->toContain('role="alert"');
+});
+
+it('targets the member-started actions, not debounced typing', function () {
+    $html = Livewire::test(EventsCalendar::class)->html();
+
+    // One skeleton block, and its targets: the view toggle, the month
+    // steps, the past drawer, clearing a search, and TOG-5318's retry.
+    expect(substr_count($html, 'data-testid="events-loading"'))->toBe(1);
+
+    expect($html)
+        ->toContain('wire:target="setView, previousMonth, nextMonth, showPast, clearSearch, retryLoad"')
+        // Typing sets `search`, which is not a target: a skeleton flash on
+        // every debounced keystroke is worse than the wait.
+        ->not->toContain('wire:target="search"');
+});
+
+it('hides the skeleton and shows the content up front, never both', function () {
+    $html = Livewire::test(EventsCalendar::class)->html();
+
+    // Hidden up front by inline style (TOG-6351): Livewire never hides at
+    // init, so without this every page load flashes the skeleton.
+    expect($html)->toContain('data-testid="events-loading"')
+        ->toContain('style="display: none"')
+        // The live content carries the same targets on `wire:loading.remove`,
+        // so the two can never co-render.
+        ->toContain('data-testid="events-content"')
+        ->toContain('wire:loading.remove.block');
+});
+
+it('disables the action controls while their answer is in flight', function () {
+    $html = Livewire::test(EventsCalendar::class)->html();
+
+    expect($html)
+        ->toContain('wire:loading.attr="disabled"')
+        ->toContain('wire:target="setView"')
+        ->toContain('wire:target="previousMonth"')
+        ->toContain('wire:target="nextMonth"')
+        ->toContain('wire:target="showPast"')
+        ->toContain('wire:target="clearSearch"');
+});
+
+it('still renders the page after each loading-targeted action', function () {
+    upcomingEvent();
+
+    Livewire::test(EventsCalendar::class)
+        ->call('setView', 'calendar')
+        ->assertOk()
+        ->assertSeeHtml('data-testid="events-loading"')
+        ->assertSeeHtml('data-testid="events-content"')
+        ->call('nextMonth')
+        ->assertOk()
+        ->call('previousMonth')
+        ->assertOk()
+        ->call('setView', 'list')
+        ->assertOk()
+        ->call('showPast')
+        ->assertOk()
+        ->call('clearSearch')
+        ->assertOk();
+});
+
+/* ---------------------------------------------------------------------------
    Live-region announcements (TOG-7332). The list <-> calendar swap, the month
    steps and the past drawer all re-render without reloading, so each change
    has to be named for screen readers — politely (role="status"), never as an
