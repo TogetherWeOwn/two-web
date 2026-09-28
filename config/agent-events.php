@@ -38,4 +38,16 @@ return [
     'reads_per_minute' => (int) env('AGENT_EVENTS_READS_PER_MINUTE', 30),
     'service_mutating_per_minute' => (int) env('AGENT_EVENTS_SERVICE_MUTATING_PER_MINUTE', 60),
     'service_reads_per_minute' => (int) env('AGENT_EVENTS_SERVICE_READS_PER_MINUTE', 300),
+
+    /*
+     | How long a caller-scoped idempotency replay row is kept.
+     |
+     | Ninety days is well past any retry horizon (job backoffs top out at
+     | hours) and short enough that one row per agent operation does not grow
+     | the table forever. A retry arriving after its row was pruned
+     | re-executes; the quota guard and optimistic-concurrency version
+     | underneath make that duplicate-safe. Pruning runs daily —
+     | routes/console.php.
+     */
+    'idempotency_retention_days' => (int) env('AGENT_EVENTS_IDEMPOTENCY_RETENTION_DAYS', 90),
 ];

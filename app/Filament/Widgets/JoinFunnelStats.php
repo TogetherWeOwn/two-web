@@ -11,8 +11,9 @@ use Illuminate\Support\Facades\Cache;
 /**
  * Join funnel outcomes on the admin dashboard (TOG-5617).
  *
- * All-time counts per JoinOutcome so funnel breakage — a Discord outage, the
- * bot down, a consent-Cancel wave — is visible without reading logs.
+ * Counts per JoinOutcome over the retention window (90 days by default, see
+ * config/join.php) so funnel breakage — a Discord outage, the bot down, a
+ * consent-Cancel wave — is visible without reading logs.
  * Moderator-only through the existing panel gate: the widget never renders
  * for anyone who cannot open /admin, and the counts contain no member data
  * (outcomes only), so there is nothing here to narrow per viewer.
