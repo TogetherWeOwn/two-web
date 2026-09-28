@@ -23,6 +23,50 @@ a minute so you are not waiting on Dusk to be told about an unused import.
 
 Locally, `composer check` runs the first two.
 
+### Everything runs on our own runners
+
+Every job in every workflow is `runs-on: [self-hosted, two-selfhosted]` — the
+org's own runners, on audited hosts only (TOG-2847): `coolify-vps-<n>` on the
+Coolify VPS, `ci-rbx1-<n>` in the LXD CI VM on the rbx1 host, and `ci-w2494-<n>`
+on worker host vps-2494bf63. `ci/attest-runner.sh` holds that prefix list; a job
+on any other runner fails its first step. There are no GitHub-hosted jobs in this repository and no
+`ubuntu-latest` fallback: Actions spend is not available to us, so a job that lands
+on a hosted runner does not cost a little extra, it fails before its first step.
+
+Three consequences you will actually run into:
+
+**The runners are persistent.** Same host, same checkout path, same ports, run after
+run. A process a job leaks outlives the job and breaks *the next* run on that
+runner — so anything you start, stop, with `if: always()`. `budgets` learned this
+the expensive way: it leaked `artisan serve`, and the next run's readiness probe was
+answered by the stale process, which was still holding the previous run's `APP_KEY`.
+The job then failed at the `/admin` session mint, several steps and one very
+misleading error message away from the actual cause. `ci/reclaim-ports.sh` now
+clears the block first and the job tears down after itself; do both for anything new
+that binds a port.
+
+**They share one network namespace.** Five runners, one host, so fixed host ports
+collide between parallel jobs. `ci/runner-ports.sh` derives a stable ten-port block
+per runner — use it rather than hardcoding a port. For service containers, map with
+no host port (`ports: ["5432"]`) and read `${{ job.services.postgres.ports[5432] }}`.
+
+**Every job attests where it ran.** `ci/attest-runner.sh` runs as the first step of
+all nine jobs and fails on a hosted runner — `runs-on:` is only a request, and a
+label typo silently reroutes rather than erroring. It also emits the runner name as
+a `::notice`, which lands in the check-run *annotations* API. That is deliberate: it
+makes the per-job runner readable with `checks=read`, without the `actions:read`
+scope this repo's token broker does not issue.
+
+```
+GET /repos/TogetherWeOwn/two-web/check-runs/{id}/annotations
+notice  runner  job=budgets runner_name=coolify-vps-2 environment=self-hosted
+```
+
+The runners are lean: php8.3, composer, node 22, go, the psql/mysql/redis clients,
+jq, shellcheck, git, curl, rootless docker. Anything else, install it in the job —
+`dusk` installs Chrome that way. `gha-runner` has passwordless sudo, so
+`sudo apt-get install -y <pkg>` works.
+
 ### Job names are a contract
 
 Branch protection matches a required check against the **job id**, not the workflow
@@ -230,6 +274,40 @@ Frontend Engineer. It is a CEO decision, made in writing on the issue, and then
 landed here as its own commit that says so. A threshold quietly relaxed inside a
 feature PR is the specific thing this file exists to prevent.
 
+### On the bundle budget
+
+Two earlier defects are why the built assets have ceilings of their own. An
+`axios` import nothing called cost 48 KB of the 49 KB bundle on every page
+(TOG-53), and `hallmark.css` listed unconditionally cost a second render-blocking
+stylesheet on pages that never render it (TOG-3233). Both merged while every
+check stayed green, because no check was measuring the bytes.
+
+`ci/bundle-budget.json` caps every vite `input:` entrypoint twice: raw bytes
+and gzip bytes, measured against `public/build/manifest.json` — the assets the
+pages really load. Raw catches dependency accidents; gzip is what the Slow 4G
+profile actually pays for. Raising a ceiling is a deliberate edit in its own
+commit that says what grew and why, plus the matching `--lint` pin — the same
+standard as the Lighthouse budgets above.
+
+Three layers, because each one covers a failure the others cannot see:
+
+| Layer | Where it runs | What it catches |
+|---|---|---|
+| `node ci/check-bundle-budget.mjs` | `budgets`, right after `npm run build` | the built bytes over a ceiling — fails the job |
+| `tests/Unit/ViteBundleBudgetTest.php` | `pest`, no build | an input with no budget, a stale ceiling, a non-positive number |
+| `--lint` check 12 in `ci/verify-pipeline.sh` | `static` | a ceiling quietly raised, an entry deleted, the enforcement step dropped |
+| `node ci/check-bundle-budget.mjs --selftest` | `static` | the checker itself going quiet — a neutered checker and a fitting bundle look identical otherwise |
+
+Baseline (vite 7.3.6, 2026-09-27): app.css 62,560 raw / 11,719 gzip against
+76,800 / 15,360; theme.css 342,710 / 33,013 against 375,000 / 38,000;
+hallmark.css 10,853 / 2,651 against 15,360 / 4,096; app.js 1 / 21 against
+5,120 / 2,048. theme.css is the tightest ceiling on purpose: it is Filament's
+vendor stylesheet (342 KB of hand-authored component CSS, see the header of
+`resources/css/filament/admin/theme.css`), so most of its bytes are not ours to
+shrink — but a vendor upgrade that grows it is not our regression to absorb
+silently either. ~9% raw / ~15% gzip headroom means an upgrade that meaningfully
+grows the panel goes red and gets a decision, while patch releases pass.
+
 ### Adding a page
 
 `ci/pages.cjs` is the one list both budget tools read. **A route that is not in that
@@ -299,8 +377,15 @@ decision, 2026-08-31 — TOG-780), which supersedes Forge (TOG-407 closed).
 
 - **CI green on `main` → staging deploys automatically.** That is box 5, done for
   you.
-- **This workflow deploys staging only.** Production is not in CI at all — see
-  below. `workflow_dispatch` re-runs staging and takes no environment argument.
+- **Staging deploys automatically; production is dispatch-only plus
+  reviewer-gated.** The `production` job runs only from `workflow_dispatch` with
+  `production` chosen, on `main`, behind the `production` environment's required
+  reviewer — enforceable on the org's Enterprise Cloud plan (verified TOG-6912
+  via host-token readback TOG-7649: required reviewer Rick7C2,
+  prevent_self_review, protected branches on; TWO-91 superseded). It stays
+  gated until [TOG-6902] says TWO Web may go live.
+  Every deploy in either job posts a post-deploy smoke (`bin/smoke-staging.sh`)
+  against its URL.
 - **GitHub Actions never SSHes into a server.** No deploy key lives in CI. A deploy
   is one authenticated POST to a deploy webhook; the panel pulls on the box,
   migrates, and swaps the release. That constraint is the Web Lead's and it is a
@@ -341,9 +426,10 @@ health-checked is the same false green in a smaller box.
 |---|---|---|
 | `COOLIFY_STAGING_DEPLOY_HOOK` | secret | Coolify staging deploy webhook URL, token included |
 | `STAGING_URL` | variable | e.g. `https://staging.togetherweown.com` |
-
-Do not add a production deploy hook as a repo secret. Nothing reads it, and the
-staging job logs a warning if one appears.
+| `CF_ACCESS_CLIENT_ID` | secret | Cloudflare Access service-token client ID, so the staging smoke probe passes the edge |
+| `CF_ACCESS_CLIENT_SECRET` | secret | Cloudflare Access service-token secret, same purpose |
+| `COOLIFY_PRODUCTION_DEPLOY_HOOK` | secret | Coolify production deploy webhook URL, token included. Only the reviewer-gated `production` job reads it (via `ci/deploy-target-production.sh`); the staging job warns and never touches it. Do not set until [TOG-6902] says TWO Web may go live. |
+| `PRODUCTION_URL` | variable | e.g. `https://togetherweown.com` (public apex; also the production environment's display URL). Same gate as the hook. |
 
 ### What goes in the staging box's own `.env`
 
@@ -370,7 +456,43 @@ admin panel to SySOp holders on every checkout that never decided to.
 The parsing is pinned by `tests/Feature/Auth/DiscordModeratorRoleIdsTest.php`; what
 a moderator and a member actually see is pinned by
 `tests/Browser/DiscordLoginTest.php`. Neither can tell you the variable is set on a
-real box — check that on the box.
+real box — so check it on the box, with:
+
+```
+php artisan discord:check-moderators --require-configured
+```
+
+Exit status 0 means the grant on that server is the one TOG-106 signed off. It
+reads `config()`, not `env()`, which is the only way to get a true answer on a
+host running `config:cache` — `env()` returns null there even when the `.env` is
+correct, and it also misses a stale cache still serving a value the `.env` no
+longer has.
+
+It fails on a blank list, on any of the five deleted ban/kick roles, on a role
+name typed where an ID belongs, and on a well-formed snowflake that simply is not
+SySOp. Without `--require-configured` a blank list passes, because blank is the
+revocation path and is correct in local dev. `--json` emits the findings for a
+pipeline.
+
+Two things it deliberately cannot check, and it says so on every run: the live
+moderator-vs-member login round trip needs real Discord consent, and the current
+SySOp holder count needs a bot token (TOG-13). Granting SySOp to a second person
+grants them this panel too.
+
+Put it in Forge's deploy script too, so it is not left to somebody remembering.
+The deploy script runs **on the box**, which is the one place the check means
+anything — GitHub Actions never SSHes in, so this cannot go in `deploy.yml`:
+
+```
+php artisan config:cache
+php artisan discord:check-moderators --require-configured || exit 1
+```
+
+After `config:cache`, deliberately: that is the state the application will serve
+from, and caching a `.env` that is missing the variable is itself one of the ways
+this goes wrong. The `|| exit 1` is the point — Forge marks the deploy failed and
+you find out at deploy time rather than the first time a moderator says the admin
+link is missing.
 
 **The moderator panel does not go past staging until TOG-355 lands** (admin-panel
 reads of member data must be logged first). That is a condition of the security
@@ -380,34 +502,121 @@ A 200 from Coolify means the deploy was *queued*, not that it is live, so the jo
 then polls `/up` until the new release answers. Ten minutes of silence is a failure,
 and the previous release is one rollback away in the Coolify dashboard.
 
-### Production deploys are manual, in the hosting dashboard
+### Queue workers drain on deploy (TOG-7288)
 
-Not in GitHub Actions, and not because nobody has got round to wiring it. `two-web`
-is **private on GitHub Free**, and on that plan environments cannot be configured at
-all — GitHub's own words: *"any configured protection rules or environment secrets
-will be ignored, and you will not be able to configure any environments."*
+Staging runs a second Coolify app, `two-web-staging-worker` (TOG-2625): a
+`queue:work --queue=default --sleep=1 --tries=6 --timeout=30` daemon that shares
+the web app's repository, environment, database and cache — no FQDN, no exposed
+port. A web deploy never touches it, so without a drain a worker keeps
+processing jobs on old code mid-deploy, and a deploy can strand running jobs.
 
-So the `environment: production` gate this file used to describe was not an
-unconfigured approval. It was an **ignored** one. There is no settings page to visit
-and no reviewer to add. The day somebody created the production hook, anyone with
-write access could have opened Actions, clicked Run workflow, and shipped — no
-approval, no prompt, no record. Four teams have write access. The release checklist
-below would have become advisory and QA's sign-off decorative, with nobody editing a
-line of code to make it happen.
+The lever is the post-deployment command on `two-web-staging` (set once, in the
+Coolify panel — [TOG-7486](/TOG/issues/TOG-7486)):
 
-A gate that fails silently is worse than no gate, because the file says the gate is
-there. So the job is gone rather than guarded (TWO-91). Production ships by hand from
-the hosting provider's dashboard, after the checklist below. Whoever holds that login
-is the approval — real access control we are paying for either way, instead of a
-simulation of one.
+```
+php artisan queue:restart
+```
 
-This is the same root cause as the two other holes on record: no branch protection,
-and CODEOWNERS not routing reviews. Three symptoms, one plan. GitHub Team would
-restore all three; that is a spend decision for the founder and it should be answered
-alongside the hosting decision on TWO-37, before production exists rather than after.
+This broadcasts an `illuminate:queue:restart` timestamp through the default
+cache. The worker daemon compares it after every job (`Worker::daemon` →
+`stopIfNecessary`) and exits 0, and Coolify restarts the container — on the
+worker app's *current* image, which is why the two-step release below
+redeploys the worker app rather than trusting this signal alone. A
+running job finishes — none is killed, none runs twice. Per-job `tries` still
+win over the worker's `--tries` flag (`markJobAsFailedIfAlreadyExceedsMaxAttempts`
+prefers the job's own `maxTries()`), so the restart changes *when* workers
+recycle, not how often a job is attempted.
 
-Restore the job with `git revert` of the TWO-91 commit **only** once the repo is on a
-plan that enforces environment protection rules. Do not hand-rebuild it.
+Post-deployment, not pre, and on the web app, not the worker: the signal must
+fire after the new release answers, so respawned workers boot new code rather
+than the release being replaced. This is a box-side setting, like the
+moderator `.env` above — GitHub Actions never SSHes in, so it cannot go in
+`deploy.yml`.
+
+The bound, stated plainly: the signal restarts processes — it does not ship code. It recycles the worker onto whatever release the worker app is running —
+if the worker app itself never redeploys, the worker runs new timestamps on old
+code forever. Today both apps share the repository so they move together; if
+that ever stops being true, the worker needs its own deploy or redeploy step,
+and this section needs rewriting, not rereading.
+
+A staging release is therefore two steps, in order — the web deploy never
+rebuilds the worker app, so `queue:restart` alone recycles the worker onto
+whatever release the worker app is already running:
+
+1. Deploy `two-web-staging` (automatic on green `main`, or Redeploy in the
+   dashboard). Wait for `GET <staging>/up` to answer 200 on the new release.
+2. Redeploy `two-web-staging-worker` (Redeploy in the dashboard, or its deploy
+   webhook) so the worker image matches the web release. The restart timestamp
+   from step 1 is already broadcast; the fresh worker boots new code and the
+   running job finishes first — none is killed, none runs twice.
+3. Verify: the worker app shows a fresh container, staging `/up` answers 200,
+   and `php artisan queue:check-depth --json` on the box drains toward 0.
+
+Rollback is the mirror: roll the web release back in the dashboard, redeploy
+the worker app so its image matches, then run `php artisan queue:restart` once
+in the web container so the worker rejoins the rolled-back release. Rolling
+back the web release without redeploying the worker leaves new-code workers
+on an old release — the same skew in the other direction.
+
+Pinned by `tests/Unit/QueueDrainOnDeployTest.php`, which asserts this section
+still names the command, the placement, and the bound.
+
+### Queue drill: prove a stuck queue and a dead job both surface (TOG-6948)
+
+Two probes, one drill, run **on the staging box** after each deploy until the
+worker story settles. Both read the box's own database, which is the one place
+the answer means anything — CI never sees staging's queue.
+
+1. **Stuck queue:** `php artisan queue:check-depth --json`. Pending climbing
+   past `--warn` (default 20) is RSVP lag a member can see; past `--critical`
+   (default 100) points at the worker being down rather than busy. The counting
+   is pinned by `tests/Feature/Console/CheckQueueDepthCommandTest.php`.
+2. **Dead job:** `php artisan queue:poison-probe --json`, then tail the log for
+   `Queue job failed.` — one critical line per failed job, with the class,
+   queue and exception message, logged by the `Queue::failing` listener in
+   `AppServiceProvider`. The probe dispatches a self-failing job, runs the
+   worker once against it, and reports the `failed_jobs` row it landed in.
+   Clean the probe row up afterwards with `php artisan queue:forget <uuid>`
+   (the uuid is in the probe output), or retry it with `php artisan queue:retry`.
+   The chain is pinned by `tests/Feature/Console/QueuePoisonProbeTest.php`.
+
+A real failure lands the same way: the worker already owns recovery (the
+ten-minute `events:reconcile` pass re-dispatches what never mirrored), and the
+critical line is the part that tells a tired person to go look. If neither
+probe reports and no critical line appears, the queue is healthy — the drill
+existing is what makes that reading trustworthy, in the same tradition as
+`discord:check-moderators` above.
+
+### Production deploys are dispatch-only, behind a required reviewer
+
+Production ships from GitHub Actions, and only ever that way: `workflow_dispatch`
+with `production` chosen, on `main`, behind the `production` environment's
+required reviewer. Reaching the deploy step already means a human asked and a
+reviewer approved. The checklist below is still the release sign-off — QA owns it
+— and the environment gate is its technical half.
+
+This used to say "manual, in the hosting dashboard", and that was right at the
+time. When this file was written, `two-web` was private on GitHub Free, and on
+that plan environments cannot be configured at all — *"any configured protection
+rules or environment secrets will be ignored"*. So the `environment: production`
+gate was not unconfigured but **ignored**: the day somebody created the hook,
+anyone with write access could have shipped from the Actions tab with no
+approval. A gate that fails silently is worse than no gate, so the job was gone
+rather than guarded (TWO-91, TOG-118).
+
+That premise is superseded. The org is on paid GitHub Enterprise Cloud (owner
+decision 2026-08-27, TOG-382 → TOG-564): the `production` environment carries
+required reviewers plus a branch policy, and `main` is ruleset-protected —
+verified live on TOG-6912 via host-token readback (TOG-7649, 2026-09-28).
+The job is therefore restored (TOG-6912). It stays
+gated until the Ship target card ([TOG-6902]) says TWO Web may go live — the
+first production launch needs owner approval. Do not set
+`COOLIFY_PRODUCTION_DEPLOY_HOOK` / `PRODUCTION_URL` until then.
+
+Like staging, the production job fails when it has no target
+(`ci/deploy-target-production.sh`), polls `/up` until the release answers, and
+then runs `bin/smoke-staging.sh` against the apex. No target is a failure, never
+a skip (TOG-913).
 
 ---
 
@@ -550,8 +759,9 @@ So the case now asserts what is load-bearing:
 aggregate — the shape a smaller protection rule naturally takes, and the shape
 `setup-github.sh` originally had — and a pull request that disarms the merge gate
 merges clean, with a green tick, because the only red job is not required. That is
-not hypothetical: nothing is mechanically enforced on GitHub Free today (see
-*Production deploys are manual* below), so this list is the plan for the day
+not hypothetical: on GitHub Free with a private repo nothing was mechanically
+enforced (see *Production deploys are dispatch-only* below for how the deploy
+side of that changed on Enterprise Cloud), so this list is the plan for the day
 protection becomes enforceable, and `static` is the load-bearing entry in it.
 
 Two checks keep that argument from rotting, and they read different things:
@@ -654,7 +864,8 @@ than disabling the pattern.
 `--lint` also goes red if `.gitleaks.toml` is missing, if it cannot be parsed as
 TOML, or if `python3` is not on `PATH` — a config that cannot be read is not being
 enforced, same rule as the budgets. `tomllib` has been in the standard library since
-3.11 and `ubuntu-24.04` ships 3.12, so this needs no install step in `static`.
+3.11 and the runners are Ubuntu 24.04 (3.12), so this needs no install step in
+`static`.
 
 Until this case existed, `gitleaks` was the one required check with no live proof it
 fails — a check nobody had watched work, guarding the one kind of breakage a revert
@@ -796,15 +1007,21 @@ the end of its run is not — another reason `--run` refuses to use one it does 
 
 QA signs this off. Nothing reaches production without it.
 
-This checklist **is** the approval gate. Nothing in GitHub enforces it on our plan
-(see *Production deploys are manual* above), so it is enforced by the person who
-triggers the deploy refusing to trigger it unsigned. Note the commit SHA you signed
-off, and deploy that SHA.
+This checklist **is** the release sign-off. The `production` environment's required
+reviewer is its technical half on our plan (see *Production deploys are
+dispatch-only* above) — the reviewer approves only a signed-off SHA — and the
+person triggering the deploy refusing to trigger it unsigned is the other half.
+Note the commit SHA you signed off, and deploy that SHA.
 
 - [ ] `main` is green — all of `static`, `pest`, `dusk`, `budgets`, and the `tests` aggregate
 - [ ] All six Dusk journeys present and passing, including the degraded path
 - [ ] Flake rate for the week is zero, or every open flake has an issue and a decision
 - [ ] Staging deployed from this exact commit, and smoke-tested by hand
+- [ ] `php artisan discord:check-moderators --require-configured` exits 0 **on the
+      box being deployed** — not on a runner, not locally. This is the only check
+      that reads the environment the application will actually serve from, and the
+      misconfiguration it catches is invisible: the site is up, login works, and
+      the admin panel is offered to nobody with no error anywhere
 - [ ] Integration run against the **staging** bot on the **staging** Discord server (TWO-25)
 - [ ] Degraded path verified for real: bot killed on staging, site still renders,
       counters fall back, queued actions retry, member sees a clear message
@@ -814,8 +1031,10 @@ off, and deploy that SHA.
 - [ ] Migrations reviewed for a safe forward path, and a rollback that is understood
 - [ ] No secret in the diff, no secret in the history
 - [ ] Someone is available to watch it after it goes out
-- [ ] **Then, and only then:** the production deploy is triggered by hand in the
-      hosting dashboard, on the signed-off SHA, by the person holding that login
+- [ ] **Then, and only then:** the production deploy is triggered from Actions
+      (`workflow_dispatch` → `production`, on the signed-off SHA), and the
+      environment's required reviewer approves it. Stays gated until [TOG-6902]
+      says TWO Web may go live.
 
 If a deadline would require shipping something that has not passed this, that goes
 to the CEO in writing. It is not QA's trade-off to make alone, and it is not the

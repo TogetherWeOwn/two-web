@@ -36,7 +36,11 @@ class EventResource extends JsonResource
             'timezone' => $this->timezone,
             'location' => $this->location,
             'capacity' => $this->capacity,
-            'going_count' => $this->goingCount(),
+            // Prefer the eager aggregate the listing selects: calling
+            // `goingCount()` here would be a count query per row in a
+            // collection response. The fallback keeps single-row responses
+            // (show/store/update) working without a special query.
+            'going_count' => $this->going_count ?? $this->goingCount(),
             'status' => $this->status->value,
             'synced_to_discord' => $this->discord_event_id !== null,
         ];

@@ -47,6 +47,10 @@ fixture() {
   # Check 11 reads the secret-scan config. It lives at the repository root rather
   # than under ci/, so it is copied by name.
   cp "$REPO_ROOT/.gitleaks.toml" "$dir/"
+  # Check 12 reads the bundle budget the checker enforces. Copied for the same
+  # reason pages.cjs is: without it every case goes red on a missing file
+  # rather than on the defect it was written for — including `clean`.
+  cp "$REPO_ROOT/ci/bundle-budget.json" "$dir/ci/"
   echo "$dir"
 }
 
@@ -271,6 +275,14 @@ expect_fail budget-aggregation-removed 'budget `largest-contentful-paint` is not
 expect_fail admin-exception-widened 'the relaxed `/admin` LCP budget reads' \
   sed -i 's/buildAssertions(3000)/buildAssertions(4000)/' ci/lighthouserc.cjs
 
+# LHCI launching Chrome without the sandbox workarounds. TOG-7021: on the
+# persistent self-hosted hosts a Chrome that cannot sandbox dies at startup and
+# the job fails as `Invalid URL: undefined` with zero assertion results. Both
+# flags match ci/browser/launch.mjs and ci/a11y.mjs; the lint reads chromeFlags
+# through node, so removing either flag — or the whole key — goes red here.
+expect_fail lhci-chrome-flags-dropped 'without `--no-sandbox`' \
+  sed -i "s/chromeFlags: '--no-sandbox --disable-dev-shm-usage',/chromeFlags: '--disable-dev-shm-usage',/" ci/lighthouserc.cjs
+
 # A second entry appended for an audit that already has one. The pinned line is
 # left exactly as it was — and a JavaScript object literal keeps the *last*
 # duplicate key, so lhci loads the new one and the CEO's LCP budget is gone. The
@@ -299,7 +311,7 @@ expect_fail budget-duplicated 'budget `largest-contentful-paint`' \
 # saying that a grep widened to accept `["']` closes the first two and cannot
 # close the third — a spread has no key to match. Reading the effective value out
 # of the config with node covers all four at once and cannot drift from what lhci
-# loads, because it is the same require(). `node` is on ubuntu-24.04 before
+# loads, because it is the same require(). The runners carry node before
 # `setup-node` runs, so the `static` job can do this where it already stands.
 expect_fail budget-duplicated-double-quoted 'budget `largest-contentful-paint`' \
   sed -i "/'server-response-time':/a\\        \"largest-contentful-paint\": ['warn', { maxNumericValue: 99999 }]," ci/lighthouserc.cjs
@@ -390,6 +402,60 @@ expect_fail gitleaks-allowlist-trivial 'match the empty string' \
 # because a check written for `regexes` alone passes this one.
 expect_fail gitleaks-allowlist-trivial-path 'match the empty string' \
   bash -c "sed -i \"s|^regexes = \\[\$|paths = ['''.*''']\\nregexes = [|\" .gitleaks.toml"
+
+printf '\n\033[1m==> The bundle budget stops budgeting (TOG-5629)\033[0m\n'
+
+# Every case below leaves the Lighthouse budgets, the secret scan and the
+# required checks untouched. What changes is what the bundle budget caps or
+# whether anything enforces it. Nothing else in the pipeline notices: the Pest
+# half (tests/Unit/ViteBundleBudgetTest.php) guards coverage and positivity,
+# not the numbers, and the byte comparison only ever executes in `budgets`
+# against a real manifest.
+
+# A ceiling nudged upwards until the breach goes green. This is the specific
+# failure ci/bundle-budget.json's own header exists to prevent: a quiet edit
+# inside a feature PR, where the number still reads like a budget.
+expect_fail bundle-ceiling-relaxed 'bundle budget for `resources/js/app.js`' \
+  bash -c "sed -i 's/\"resources\\/js\\/app.js\": { \"maxRawBytes\": 5120/\"resources\\/js\\/app.js\": { \"maxRawBytes\": 999999/' ci/bundle-budget.json"
+
+# A ceiling deleted rather than relaxed. The entry is gone, so the asset it
+# used to cap can grow without bound — and the file still reads as a budget
+# for everything else. The `|| true` on the lint's lookup is what keeps this a
+# loud failure instead of a `set -e` kill with no verdict.
+expect_fail bundle-entry-deleted 'bundle budget for `resources/css/hallmark.css`' \
+  bash -c "node -e '
+    const fs = require(\"fs\");
+    const budget = JSON.parse(fs.readFileSync(\"ci/bundle-budget.json\", \"utf8\"));
+    delete budget.budgets[\"resources/css/hallmark.css\"];
+    fs.writeFileSync(\"ci/bundle-budget.json\", JSON.stringify(budget, null, 2) + \"\n\");
+  '"
+
+# The whole file deleted. The checker exits 2 on a missing budget, but nothing
+# runs the checker in `static` — so without this pin the deletion is green
+# until `budgets` gets that far, and a PR that never reaches `budgets` greenly
+# merges a repo with no bundle budget at all.
+expect_fail bundle-file-deleted 'no bundle thresholds to enforce' \
+  bash -c "rm ci/bundle-budget.json"
+
+# The enforcement step dropped from `budgets` while the budget file stays in
+# place. Caps with no comparison: the bundle grows, the checker never runs,
+# every job stays green. Addressed to the `budgets` block by name — a
+# file-wide grep would also match the `--selftest` step in `static`, which
+# proves the checker fails but enforces nothing (no manifest there).
+expect_fail bundle-enforcement-removed 'no longer runs `check-bundle-budget.mjs`' \
+  bash -c "awk '
+    /^  budgets:[[:space:]]*\$/          { inside = 1; print; next }
+    inside && /^  [a-zA-Z0-9_-]+:[[:space:]]*\$/ { inside = 0 }
+    inside && /check-bundle-budget\.mjs/ { next }
+                                        { print }
+  ' .github/workflows/ci.yml > ci.yml.mutated && mv ci.yml.mutated .github/workflows/ci.yml"
+
+# The checker's self-test dropped from `static`. The byte comparison only ever
+# executes in `budgets` against a real manifest, so a neutered checker and a
+# fitting bundle look identical from every job — this step is the only thing
+# that proves the checker still fails. Same argument as check 9's lint pin.
+expect_fail bundle-selftest-removed 'runs `check-bundle-budget.mjs --selftest`' \
+  bash -c "sed -i '/check-bundle-budget.mjs --selftest/d' .github/workflows/ci.yml"
 
 printf '\n\033[1m==> Tripwires (warn, do not block)\033[0m\n'
 

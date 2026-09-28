@@ -3,6 +3,7 @@
 use App\Models\User;
 use Illuminate\Http\Client\ConnectionException;
 use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Log;
 use Laravel\Socialite\Facades\Socialite;
 use Laravel\Socialite\Two\AbstractProvider;
 use Laravel\Socialite\Two\InvalidStateException;
@@ -238,14 +239,40 @@ it('does not hand admin back to a member remembered by cookie after their role w
 });
 
 // ---------------------------------------------------------------------------
-// The four ways this goes wrong. Each one is a designed page, never a stack trace.
+// The ways this goes wrong. Each one is a designed page, never a stack trace.
+// The `error`-param path (deny + other OAuth errors) renders the recovery
+// page directly; the rest redirect home with a banner.
 // ---------------------------------------------------------------------------
 
-it('shows the declined message when a member says no on the Discord consent screen', function () {
+it('shows the recovery page when a member says no on the Discord consent screen', function () {
+    // What Discord actually sends when Cancel is pressed: an `error` param,
+    // not a code. This renders a page with one button to retry — not a
+    // redirect whose banner is easy to miss after a round trip to Discord.
     $response = $this->get('/auth/discord/callback?error=access_denied&error_description=The+user+denied+access');
 
-    $response->assertRedirect(route('home'));
-    $response->assertSessionHas('auth_error', 'denied');
+    $response->assertOk()
+        ->assertSee(__('auth-discord.recovery_denied'), escape: false)
+        ->assertSeeHtml('data-testid="oauth-recovery"')
+        ->assertSeeHtml('role="alert"')
+        ->assertSeeHtml('data-testid="oauth-recovery-retry"')
+        ->assertSee(route('login'), escape: false)
+        ->assertDontSee('The user denied access', escape: false);
+
+    $this->assertGuest();
+    expect(User::query()->count())->toBe(0);
+});
+
+it('shows the recovery page with the generic message for any other OAuth error', function () {
+    // `error=server_error` and friends: Discord refused the login for its own
+    // reasons. Same page, same retry button, different sentence — and
+    // Discord's own error_description is never echoed back.
+    $response = $this->get('/auth/discord/callback?error=server_error&error_description=Something+broke+over+there');
+
+    $response->assertOk()
+        ->assertSee(__('auth-discord.recovery_error'), escape: false)
+        ->assertSeeHtml('data-testid="oauth-recovery"')
+        ->assertSeeHtml('data-testid="oauth-recovery-retry"')
+        ->assertDontSee('Something broke over there', escape: false);
 
     $this->assertGuest();
     expect(User::query()->count())->toBe(0);
@@ -253,6 +280,7 @@ it('shows the declined message when a member says no on the Discord consent scre
 
 it('shows the try-again message when the login attempt expired', function () {
     stubSocialite(throws: new InvalidStateException);
+    Log::spy();
 
     $response = $this->get('/auth/discord/callback?code=stale&state=wrong');
 
@@ -260,6 +288,27 @@ it('shows the try-again message when the login attempt expired', function () {
     $response->assertSessionHas('auth_error', 'expired');
 
     $this->assertGuest();
+
+    // Class only, never the message (TOG-5614). Same rule as JoinController.
+    Log::shouldHaveReceived('warning')->with('Discord token exchange failed.', [
+        'exception' => InvalidStateException::class,
+    ])->once();
+});
+
+it('logs the member-lookup transport failure by class, never the message', function () {
+    // The lookup carries the member's own bearer token (TOG-5614).
+    stubSocialite();
+    Http::fake(fn () => throw new ConnectionException('timed out carrying secrets'));
+    Log::spy();
+
+    $response = $this->get('/auth/discord/callback?code=good&state=x');
+
+    $response->assertRedirect(route('home'));
+    $response->assertSessionHas('auth_error', 'unavailable');
+
+    Log::shouldHaveReceived('warning')->with('Discord guild member lookup did not answer.', [
+        'exception' => ConnectionException::class,
+    ])->once();
 });
 
 it('tells a member who left the server that they need to be in it', function () {
@@ -328,7 +377,7 @@ it('renders a human sentence for every error code we can emit', function (string
         ->get(route('home'))
         ->assertOk()
         ->assertSee(__('auth-discord.'.$code));
-})->with(['denied', 'expired', 'not_a_member', 'unavailable']);
+})->with(['expired', 'not_a_member', 'unavailable']);
 
 // ---------------------------------------------------------------------------
 // Sessions

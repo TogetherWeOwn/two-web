@@ -5,6 +5,7 @@ namespace App\Livewire;
 use App\Models\Profile;
 use App\Models\User;
 use App\Rules\IanaTimeZone;
+use App\Rules\NoControlCharacters;
 use App\Support\Profiles\MemberStats;
 use App\Support\Profiles\Milestone;
 use Illuminate\Auth\Access\AuthorizationException;
@@ -62,6 +63,16 @@ class MemberProfile extends Component
         $this->fillForm();
     }
 
+    /** @return array<string, mixed> */
+    public static function validationRules(): array
+    {
+        return [
+            'bio' => ['nullable', 'string', 'max:1000', new NoControlCharacters],
+            'gamesText' => ['nullable', 'string', 'max:1700', new NoControlCharacters],
+            'timezone' => ['nullable', 'string', new IanaTimeZone],
+        ];
+    }
+
     /** @throws AuthorizationException */
     public function edit(): void
     {
@@ -71,6 +82,11 @@ class MemberProfile extends Component
         $this->saveFailed = false;
         $this->editing = true;
         $this->fillForm();
+        // TOG-6957: opening the form unmounts the focused trigger, dropping
+        // keyboard focus to <body>. The self-dispatch fires after Livewire
+        // has morphed the form in, and the view's listener moves focus to
+        // the form heading.
+        $this->dispatch('profile-state-changed')->self();
     }
 
     public function cancel(): void
@@ -80,17 +96,25 @@ class MemberProfile extends Component
         $this->resetValidation();
         $this->editing = false;
         $this->fillForm();
+        // TOG-6957: closing the form unmounts the focused Cancel control.
+        // Refocus the Edit profile button after the round trip.
+        $this->dispatch('profile-state-changed')->self();
     }
 
     public function save(): void
     {
         Gate::authorize('updateProfile', $this->member);
 
-        $validated = $this->validate([
-            'bio' => ['nullable', 'string', 'max:1000'],
-            'gamesText' => ['nullable', 'string', 'max:1700'],
-            'timezone' => ['nullable', 'string', new IanaTimeZone],
-        ]);
+        // TOG-6957: dispatched BEFORE validation on purpose. A failed
+        // `$this->validate()` throws ValidationException, which aborts this
+        // method — anything dispatched after it would never run. The dispatch
+        // is stored on the request and still reaches the client with the
+        // error response, so the view's listener can move focus to the alert.
+        // On success the same event refocuses the saved confirmation instead;
+        // the listener picks its target from the morphed DOM.
+        $this->dispatch('profile-state-changed')->self();
+
+        $validated = $this->validate(static::validationRules());
 
         $games = [];
         foreach (preg_split('/\R/', $validated['gamesText'] ?? '') ?: [] as $game) {

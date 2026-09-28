@@ -36,6 +36,60 @@ test('a moderator reaches the panel and sees both resources', function () {
     });
 });
 
+test('a moderator signs out of the panel through the account widget and stays out', function () {
+    // The CISO session-handling bar (TOG-5469), violation V4: the /admin sign-out
+    // must be the site sign-out end to end, through the real browser cookie jar.
+    // The Pest test proves the route's wiring; this proves the screen actually
+    // performs it — the account widget form POSTs to /admin/logout, the session
+    // dies, and the signed-out browser is back outside the members-only pages
+    // instead of looking at a panel it can still use.
+    //
+    // waitForReload, not press-then-assert: the same StaleElementReference flake
+    // the site sign-out journey documents applies here, and the assertion that
+    // matters is the page we ended up on. See the 'a member can sign out again'
+    // journey in DiscordLoginTest for the full rationale.
+    $moderator = User::factory()->moderator()->create();
+
+    $this->browse(function (Browser $browser) use ($moderator) {
+        $browser->loginAs($moderator)
+            ->visit('/admin')
+            ->waitForText('TWO Moderation')
+            ->waitForText('Sign out')
+            ->waitForReload(fn (Browser $page) => $page->press('Sign out'))
+            // The panel has no login page, so Filament's LogoutResponse sends
+            // the browser back to /admin — which, as a guest, 302s into the
+            // site login, where the Dusk OAuth stub auto-approves and the
+            // callback's `intended` sends the browser right back to /admin.
+            // The stub's Discord identity is a plain member (`wren`, member
+            // role only), so the chain settles on the 403 page, not the
+            // dashboard: that is the proof the moderator session died. If the
+            // POST had never happened, the browser would still be staff and
+            // /admin would still answer the dashboard with 'TWO Moderation'.
+            //
+            // Waited for with waitUsing, not waitForText: the chain crosses
+            // four navigations and no single text marks the end of it. The
+            // condition is true only at the settled state — path back on
+            // /admin with the dashboard gone — so a broken sign-out times out
+            // here instead of passing vacuously. No-arg closure: Dusk's
+            // waitUsing calls it with no arguments (see the focus-indicator
+            // journey below for the same shape).
+            ->waitUsing(15, 250, function () use ($browser): bool {
+                $path = (string) parse_url((string) $browser->driver->getCurrentURL(), PHP_URL_PATH);
+
+                return $path === '/admin'
+                    && ! str_contains((string) $browser->driver->getPageSource(), 'TWO Moderation');
+            })
+            ->assertPathIs('/admin')
+            ->assertDontSee('TWO Moderation')
+            // And the browser is no longer the moderator: the profile page —
+            // reached as whoever the stub made of the chain — shows the stub
+            // member with no path back into the panel.
+            ->visit('/profile')
+            ->assertSee('WREN')
+            ->assertMissing('[data-testid="admin-link"]');
+    });
+});
+
 test('a plain member is refused the panel and is not bounced into a login loop', function () {
     // The card names this explicitly: a 403, not a login loop. In a real browser
     // a login loop shows up as the URL leaving /admin; a 403 keeps it there and

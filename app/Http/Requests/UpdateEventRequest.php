@@ -4,6 +4,8 @@ namespace App\Http\Requests;
 
 use App\Models\Event;
 use App\Rules\IanaTimeZone;
+use App\Rules\NaiveWallTime;
+use App\Rules\RealWallTime;
 use App\Support\EventInput;
 use Illuminate\Support\Facades\Gate;
 
@@ -35,8 +37,11 @@ class UpdateEventRequest extends AuthenticatedRequest
             'title' => ['required', 'string', 'max:100'],
             'game' => ['nullable', 'string', 'max:100'],
             'description' => ['nullable', 'string', 'max:1000'],
-            'starts_at' => ['required', 'date'],
-            'ends_at' => ['required', 'date', 'after:starts_at'],
+            // Same pair as StoreEventRequest: NaiveWallTime refuses embedded
+            // offsets (TOG-6804); RealWallTime refuses spring-gap wall times
+            // that never occurred (TOG-6803). Both are 422s, never silent.
+            'starts_at' => ['required', 'date', new NaiveWallTime, new RealWallTime],
+            'ends_at' => ['required', 'date', 'after:starts_at', new NaiveWallTime, new RealWallTime],
             'timezone' => ['required', 'string', new IanaTimeZone],
             'location' => ['required', 'string', 'max:255'],
             'capacity' => ['nullable', 'integer', 'min:1'],

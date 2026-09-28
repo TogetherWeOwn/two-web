@@ -1,8 +1,10 @@
 <?php
 
 use App\Http\Middleware\RecordMemberDataAccess;
+use App\Models\Event;
 use App\Models\MemberDataAccessLog;
 use App\Models\Profile;
+use App\Models\Rsvp;
 use App\Models\User;
 use App\Support\MemberDataAccess\AccessRecorder;
 use Filament\Http\Middleware\Authenticate as FilamentAuthenticate;
@@ -118,15 +120,17 @@ it('does not log a moderator loading their own record', function () {
     expect(MemberDataAccessLog::query()->count())->toBe(0);
 });
 
-it('logs nothing on the ordinary site, where the middleware is not applied', function () {
+it('records member-profile reads on the ordinary site', function () {
     $member = User::factory()->create();
     $other = User::factory()->create();
 
-    Route::middleware(['web', 'auth'])->get('members/{id}', fn (string $id) => (string) User::query()->findOrFail($id)->getKey());
+    $this->actingAs($member)->get(route('profiles.show', $other))->assertOk();
 
-    $this->actingAs($member)->get("members/{$other->id}")->assertOk();
+    $log = MemberDataAccessLog::query()->sole();
 
-    expect(MemberDataAccessLog::query()->count())->toBe(0);
+    expect($log->viewer_user_id)->toBe($member->id)
+        ->and($log->subject_user_ids)->toBe([$other->id])
+        ->and($log->route)->toBe('profiles.show');
 });
 
 it('refuses to serve the read when the access log cannot be written', function () {
@@ -294,19 +298,19 @@ it('attributes no read to a request that did not make it', function () {
     //
     // PHP-FPM gives a fresh container per request, so this is not reachable in
     // production today. It is reachable here, which is where this control's
-    // evidence comes from: without it, `it logs nothing on the ordinary site`
-    // passes on where it sits in this file rather than on the recorder.
+    // evidence comes from. The synthetic unlogged route must not attribute its
+    // reads to the next logged request; real member-profile routes are logged.
     $moderator = User::factory()->moderator()->create();
     $onPanel = User::factory()->create();
     $offPanel = User::factory()->create();
 
     panelRoute('admin/members/{id}', fn (string $id) => (string) User::query()->findOrFail($id)->getKey());
     Route::middleware(['web', 'auth'])
-        ->get('members/{id}', fn (string $id) => (string) User::query()->findOrFail($id)->getKey())
-        ->name('test.ordinary.member');
+        ->get('test/unlogged/{id}', fn (string $id) => (string) User::query()->findOrFail($id)->getKey())
+        ->name('test.unlogged.member');
 
     $this->actingAs($moderator)->get("admin/members/{$onPanel->id}")->assertOk();
-    $this->actingAs($moderator)->get("members/{$offPanel->id}")->assertOk();
+    $this->actingAs($moderator)->get("test/unlogged/{$offPanel->id}")->assertOk();
     $this->actingAs($moderator)->get("admin/members/{$onPanel->id}")->assertOk();
 
     $rows = MemberDataAccessLog::query()->orderBy('id')->get();
@@ -426,4 +430,85 @@ it('has retention scheduled, because a retention policy nothing runs is a promis
 
     expect($commands->contains(fn (string $c) => str_contains($c, 'model:prune')
         && str_contains($c, 'MemberDataAccessLog')))->toBeTrue();
+});
+
+it('refuses to serve a user read it cannot attribute to a member', function () {
+    // The User half of the Profile residue above. `select('username')` hydrates a
+    // User with no key on it, so there is nothing to record the read against —
+    // and unlike a Profile there is no owner key to resolve through (usernames
+    // are mutable, display names are not unique). `value('username')` is the
+    // same shape: it is `first(['username'])` underneath. Found by the TOG-5611
+    // coverage audit: both shapes served member contents with no row and no
+    // error before this test.
+    config()->set('member_access_log.enforce', true);
+
+    $moderator = User::factory()->moderator()->create();
+    User::factory()->create(['username' => 'keyless-member-token']);
+
+    panelRoute('admin/members/names', fn () => User::query()->select('username')->get()->pluck('username')->implode(','), action: 'list');
+
+    $this->actingAs($moderator)->get('admin/members/names')
+        ->assertServiceUnavailable()
+        ->assertDontSee('keyless-member-token');
+
+    expect(MemberDataAccessLog::query()->count())->toBe(0);
+});
+
+it('records a keyed partial select on users, because the key is what makes it attributable', function () {
+    // The boundary of the refusal above: the same screen with the key selected
+    // is an ordinary recorded read. This pins which side of the line a panel
+    // dropdown or autocomplete has to stay on.
+    $moderator = User::factory()->moderator()->create();
+    $subject = User::factory()->create();
+
+    panelRoute('admin/members/names', fn () => User::query()->select('id', 'username')->get()->pluck('username')->implode(','), action: 'list');
+
+    $this->actingAs($moderator)->get('admin/members/names')->assertOk();
+
+    expect(MemberDataAccessLog::query()->sole()->subject_user_ids)->toBe([$subject->id]);
+});
+
+it('records member data reached through a relation, because the relation hydrates', function () {
+    // The likeliest future panel screen: an RSVP or attendance list that shows
+    // who is going. Rsvp rows are not observed — only User and Profile are — but
+    // reaching the member through `$rsvp->user` hydrates the User, and that is
+    // what is recorded. If a screen ever shows members from RSVPs without
+    // touching the relation (raw user_ids, a join), that is the pluck-shaped gap
+    // below and it needs note().
+    $moderator = User::factory()->moderator()->create();
+    $member = User::factory()->create(['username' => 'rsvp-member-token']);
+    $event = Event::factory()->create();
+    Rsvp::factory()->for($event)->for($member, 'user')->create();
+
+    panelRoute('admin/events/attendance', fn () => Rsvp::query()->get()->map(fn (Rsvp $rsvp) => $rsvp->user->username)->implode(','), action: 'list');
+
+    $this->actingAs($moderator)->get('admin/events/attendance')->assertOk()->assertSee('rsvp-member-token');
+
+    expect(MemberDataAccessLog::query()->sole()->subject_user_ids)->toBe([$member->id]);
+});
+
+it('records a pluck-shaped read the screen declares with note()', function () {
+    // The gap the automatic path cannot close: `pluck()` runs on the query
+    // builder and never hydrates a model, so the `retrieved` listener never
+    // fires. Raw SQL and the bot's read-only views are the same shape. The
+    // contract is that such a screen calls `note()` with the members it showed
+    // — this pins that the escape hatch writes the row, so a reviewer naming
+    // any of those paths gets a test rather than a shrug.
+    $moderator = User::factory()->moderator()->create();
+    $subject = User::factory()->create(['username' => 'plucked-member-token']);
+
+    panelRoute('admin/members/names', function () use ($subject) {
+        $names = User::query()->pluck('username');
+
+        app(AccessRecorder::class)->note($subject->id);
+
+        return $names->implode(',');
+    }, action: 'list');
+
+    $this->actingAs($moderator)->get('admin/members/names')->assertOk()->assertSee('plucked-member-token');
+
+    $log = MemberDataAccessLog::query()->sole();
+
+    expect($log->subject_user_ids)->toBe([$subject->id])
+        ->and($log->action)->toBe('list');
 });

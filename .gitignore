@@ -23,6 +23,9 @@
 /storage/*.key
 /storage/pail
 /vendor
+/vendor-local
 Homestead.json
 Homestead.yaml
 Thumbs.db
+# Local pg-backup dumps (TOG-5643): real database contents, never committed.
+/backups/*.dump

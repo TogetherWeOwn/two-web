@@ -33,7 +33,7 @@ jobs:
     runs-on: [self-hosted, two-selfhosted]
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
 
       # Where did this job actually run? `runs-on:` asks; only the job can
       # answer. Fails on a GitHub-hosted runner (which bills) and publishes its
@@ -43,11 +43,11 @@ jobs:
         run: ./ci/attest-runner.sh
 
       # `--lint` reads the performance budgets by loading ci/lighthouserc.cjs the
-      # way lhci loads it, so this job needs node now. ubuntu-24.04 ships one, but
-      # every other job here pins the version and this should not be the exception
-      # — an unpinned interpreter is exactly the kind of thing that works until the
-      # runner image moves. No install step follows it; this is seconds.
-      - uses: actions/setup-node@v4
+      # way lhci loads it, so this job needs node now. The runners have one
+      # preinstalled, but every other job here pins the version and this should not
+      # be the exception — an unpinned interpreter is exactly the kind of thing that
+      # works until somebody upgrades the host. No install step follows it; seconds.
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: ${{ env.NODE_VERSION }}
 
@@ -170,6 +170,32 @@ jobs:
       - name: PHP runtime config self-test
         run: ./ci/php-runtime-config-selftest.sh
 
+      # `.env.example` is the source of truth for the file layout; `docs/env.md`
+      # is the reference for what each key means. Before TOG-7282 nothing
+      # watched the gap between them, so a var landed in one file and stayed
+      # missing from the other until a fresh checkout or deploy broke on it.
+      # Fails in both directions: an undocumented example key, or a documented
+      # key that lives in neither the example nor the deliberate-absence
+      # allowlist. Under a second, no network.
+      - name: Env docs match .env.example
+        run: ./ci/check-env-docs.sh
+
+      # The check on the check. A drift script that always passes and one that
+      # works look identical from here, so this throws drift at it in both
+      # directions — plus the parser-failure shapes — and asserts it goes red
+      # for the stated reason. Same half second, still no network.
+      - name: Env docs check self-test
+        run: ./ci/check-env-docs-selftest.sh
+
+      # The Vite bundle budget checker (TOG-5629). Its own `--selftest` runs
+      # here, in `static`, for the same reason the line below exists: the byte
+      # comparison needs a real manifest so it runs in `budgets`, and a checker
+      # that quietly stopped checking is indistinguishable from a fitting
+      # bundle unless something offline proves it still fails. No build, no
+      # network — synthetic manifests in a temp dir, milliseconds.
+      - name: Bundle budget self-test
+        run: node ci/check-bundle-budget.mjs --selftest
+
       # The `budgets` verdict, which had no test until it shipped a defect. lhci
       # runs there under `continue-on-error: true`, so its exit code is discarded
       # and `ci/lh-annotate.mjs` is what actually turns the job red — the whole
@@ -236,28 +262,71 @@ jobs:
       - name: Mail auth self-test
         run: ./ci/mail-auth-check-selftest.sh
 
-      - uses: shivammathur/setup-php@v2
+      # The local backup script and its restore proof (TOG-5643). The real
+      # proof needs docker + Postgres and runs by hand per docs/runbook.md;
+      # what runs here is the offline half: a stubbed `docker` drives the real
+      # script through its local-only refusal, the empty-dump check, a
+      # round-trip with matching and mismatching counts, a corrupt dump, and
+      # the password-never-in-argv audit. A guard that quietly stopped
+      # guarding is otherwise indistinguishable from one that works, up until
+      # someone dumps production onto a laptop or trusts a backup that never
+      # restored. No network, no docker, no database.
+      - name: Postgres backup self-test
+        run: ./ci/pg-backup-selftest.sh
+
+      - uses: shivammathur/setup-php@f3e473d116dcccaddc5834248c87452386958240 # v2
         with:
           php-version: ${{ env.PHP_VERSION }}
           extensions: pdo_pgsql, intl, bcmath
           coverage: none
           tools: composer:v2
 
+      # setup-php on self-hosted runners unpacks PHP from php-builder tarballs
+      # and then re-points the SHARED /usr/bin/php at it via
+      # update-alternatives — and every concurrent job on this host re-points
+      # that link when its own setup-php runs (src/scripts/linux.sh:
+      # add_php/switch_version; its installer even prefers `apt-fast`, the
+      # process seen holding the dpkg lock in the dusk log). On TOG-5877 a job
+      # that installed and verified 8.4 executed a later step under 8.3.35
+      # after a concurrent setup-php re-pointed the shared link between them,
+      # and pest once died with ETXTBSY on the shared composer shim. So
+      # nothing below may resolve `php` or `composer` through PATH: pin the
+      # versioned binary (the alternatives target, immune to the link switch),
+      # copy the composer shim job-local, and invoke the copy explicitly
+      # through the pinned binary. The smoke checks fail here, seconds in, if
+      # the pin itself is broken.
+      - name: Pin the setup-php PHP and Composer binaries (TOG-5877)
+        run: |
+          php_bin="$(command -v "php${PHP_VERSION}")"
+          [ -n "$php_bin" ] || { echo "::error::php${PHP_VERSION} not found after setup-php — refusing to run on the wrong interpreter (TOG-5877)"; exit 1; }
+          composer_src="$(command -v composer)"
+          [ -n "$composer_src" ] || { echo "::error::composer not found after setup-php (TOG-5877)"; exit 1; }
+          head -1 "$composer_src" | grep -q php || { echo "::error::composer is not a PHP script — cannot pin it to the pinned interpreter (TOG-5877)"; exit 1; }
+          cp "$composer_src" "$RUNNER_TEMP/composer-pinned"
+          echo "CI_PHP_BIN=$php_bin" >> "$GITHUB_ENV"
+          echo "CI_COMPOSER_BIN=$RUNNER_TEMP/composer-pinned" >> "$GITHUB_ENV"
+          "$php_bin" -v | head -1
+          [ "$("$php_bin" -r 'echo PHP_MAJOR_VERSION, ".", PHP_MINOR_VERSION;')" = "$PHP_VERSION" ] || { echo "::error::pinned PHP is $("$php_bin" -v | head -1), not PHP ${PHP_VERSION} — refusing to run on the wrong interpreter (TOG-5877)"; exit 1; }
+          "$php_bin" "$RUNNER_TEMP/composer-pinned" --version
+
       - name: Cache Composer packages
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: vendor
           key: composer-${{ env.PHP_VERSION }}-${{ hashFiles('composer.lock') }}
           restore-keys: composer-${{ env.PHP_VERSION }}-
 
-      - run: composer install --no-interaction --prefer-dist --no-progress
+      - run: |
+          "$CI_PHP_BIN" "$CI_COMPOSER_BIN" install --no-interaction --prefer-dist --no-progress
 
       # --test means "tell me, do not fix". CI never rewrites the author's code.
       - name: Pint
-        run: vendor/bin/pint --test
+        run: |
+            "$CI_PHP_BIN" vendor/bin/pint --test
 
       - name: PHPStan
-        run: vendor/bin/phpstan analyse --memory-limit=512M --no-progress --error-format=github
+        run: |
+            "$CI_PHP_BIN" vendor/bin/phpstan analyse --memory-limit=512M --no-progress --error-format=github
 
   # ---------------------------------------------------------------------------
   # Pest: unit + feature, against real Postgres. Not sqlite — phpunit.xml explains
@@ -290,28 +359,57 @@ jobs:
           --health-retries 20
 
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
 
       # See the note in `static`. Every job attests; a job that does not could be
       # moved onto a billable runner with nothing going red (TOG-2847).
       - name: Attest the runner
         run: ./ci/attest-runner.sh
 
-      - uses: shivammathur/setup-php@v2
+      - uses: shivammathur/setup-php@f3e473d116dcccaddc5834248c87452386958240 # v2
         with:
           php-version: ${{ env.PHP_VERSION }}
           extensions: pdo_pgsql, intl, bcmath
           coverage: none
           tools: composer:v2
 
+      # setup-php on self-hosted runners unpacks PHP from php-builder tarballs
+      # and then re-points the SHARED /usr/bin/php at it via
+      # update-alternatives — and every concurrent job on this host re-points
+      # that link when its own setup-php runs (src/scripts/linux.sh:
+      # add_php/switch_version; its installer even prefers `apt-fast`, the
+      # process seen holding the dpkg lock in the dusk log). On TOG-5877 a job
+      # that installed and verified 8.4 executed a later step under 8.3.35
+      # after a concurrent setup-php re-pointed the shared link between them,
+      # and pest once died with ETXTBSY on the shared composer shim. So
+      # nothing below may resolve `php` or `composer` through PATH: pin the
+      # versioned binary (the alternatives target, immune to the link switch),
+      # copy the composer shim job-local, and invoke the copy explicitly
+      # through the pinned binary. The smoke checks fail here, seconds in, if
+      # the pin itself is broken.
+      - name: Pin the setup-php PHP and Composer binaries (TOG-5877)
+        run: |
+          php_bin="$(command -v "php${PHP_VERSION}")"
+          [ -n "$php_bin" ] || { echo "::error::php${PHP_VERSION} not found after setup-php — refusing to run on the wrong interpreter (TOG-5877)"; exit 1; }
+          composer_src="$(command -v composer)"
+          [ -n "$composer_src" ] || { echo "::error::composer not found after setup-php (TOG-5877)"; exit 1; }
+          head -1 "$composer_src" | grep -q php || { echo "::error::composer is not a PHP script — cannot pin it to the pinned interpreter (TOG-5877)"; exit 1; }
+          cp "$composer_src" "$RUNNER_TEMP/composer-pinned"
+          echo "CI_PHP_BIN=$php_bin" >> "$GITHUB_ENV"
+          echo "CI_COMPOSER_BIN=$RUNNER_TEMP/composer-pinned" >> "$GITHUB_ENV"
+          "$php_bin" -v | head -1
+          [ "$("$php_bin" -r 'echo PHP_MAJOR_VERSION, ".", PHP_MINOR_VERSION;')" = "$PHP_VERSION" ] || { echo "::error::pinned PHP is $("$php_bin" -v | head -1), not PHP ${PHP_VERSION} — refusing to run on the wrong interpreter (TOG-5877)"; exit 1; }
+          "$php_bin" "$RUNNER_TEMP/composer-pinned" --version
+
       - name: Cache Composer packages
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: vendor
           key: composer-${{ env.PHP_VERSION }}-${{ hashFiles('composer.lock') }}
           restore-keys: composer-${{ env.PHP_VERSION }}-
 
-      - run: composer install --no-interaction --prefer-dist --no-progress
+      - run: |
+          "$CI_PHP_BIN" "$CI_COMPOSER_BIN" install --no-interaction --prefer-dist --no-progress
 
       - name: Prepare .env
         env:
@@ -319,7 +417,7 @@ jobs:
         run: |
           cp .env.example .env
           sed -i "s#^DB_PORT=.*#DB_PORT=${DB_PORT}#" .env
-          php artisan key:generate
+          "$CI_PHP_BIN" artisan key:generate
 
       # Migrations are run explicitly rather than left to RefreshDatabase so a broken
       # migration fails as a migration, not as forty confusing test failures.
@@ -336,10 +434,12 @@ jobs:
           DB_DATABASE: two_web_test
           DB_USERNAME: two_web
           DB_PASSWORD: two_web
-        run: php artisan migrate --force --no-interaction
+        run: |
+            "$CI_PHP_BIN" artisan migrate --force --no-interaction
 
       - name: Pest
-        run: vendor/bin/pest --colors=always --ci
+        run: |
+            "$CI_PHP_BIN" vendor/bin/pest --colors=always --ci
 
   # ---------------------------------------------------------------------------
   # Dusk: real Chrome, real HTTP server, real Postgres. The funnel lives or dies
@@ -350,6 +450,18 @@ jobs:
     name: dusk
     runs-on: [self-hosted, two-selfhosted]
     timeout-minutes: 20
+
+    # The persistent self-hosted hosts run Chrome as an unprivileged user,
+    # so the renderer dies at session creation without the sandbox
+    # workarounds the budgets harness already pins on the same hosts
+    # (ci/lighthouserc.cjs, ci/browser/launch.mjs, ci/a11y.mjs; TOG-7021).
+    # DuskTestCase reads extra flags from DUSK_CHROME_ARGS (TOG-6769 seam);
+    # leaving it unset is the 4/19 session-start failure on PR #368
+    # (TOG-7699). Neither flag is excluded: the non-root Chrome builds on
+    # these hosts accept --no-sandbox, proved by the budgets puppeteer
+    # self-test passing with it in the same failing run.
+    env:
+      DUSK_CHROME_ARGS: '--no-sandbox --disable-dev-shm-usage'
 
     services:
       postgres:
@@ -369,33 +481,50 @@ jobs:
           --health-retries 20
 
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
 
       # See the note in `static`. Every job attests; a job that does not could be
       # moved onto a billable runner with nothing going red (TOG-2847).
       - name: Attest the runner
         run: ./ci/attest-runner.sh
 
-      - uses: shivammathur/setup-php@v2
+      - uses: shivammathur/setup-php@f3e473d116dcccaddc5834248c87452386958240 # v2
         with:
           php-version: ${{ env.PHP_VERSION }}
           extensions: pdo_pgsql, intl, bcmath
           coverage: none
           tools: composer:v2
 
-      - uses: actions/setup-node@v4
+      # See the pin note in `static`: the shared /usr/bin/php link moves under
+      # concurrent jobs, so this job pins the versioned binary too.
+      - name: Pin the setup-php PHP and Composer binaries (TOG-5877)
+        run: |
+          php_bin="$(command -v "php${PHP_VERSION}")"
+          [ -n "$php_bin" ] || { echo "::error::php${PHP_VERSION} not found after setup-php — refusing to run on the wrong interpreter (TOG-5877)"; exit 1; }
+          composer_src="$(command -v composer)"
+          [ -n "$composer_src" ] || { echo "::error::composer not found after setup-php (TOG-5877)"; exit 1; }
+          head -1 "$composer_src" | grep -q php || { echo "::error::composer is not a PHP script — cannot pin it to the pinned interpreter (TOG-5877)"; exit 1; }
+          cp "$composer_src" "$RUNNER_TEMP/composer-pinned"
+          echo "CI_PHP_BIN=$php_bin" >> "$GITHUB_ENV"
+          echo "CI_COMPOSER_BIN=$RUNNER_TEMP/composer-pinned" >> "$GITHUB_ENV"
+          "$php_bin" -v | head -1
+          [ "$("$php_bin" -r 'echo PHP_MAJOR_VERSION, ".", PHP_MINOR_VERSION;')" = "$PHP_VERSION" ] || { echo "::error::pinned PHP is $("$php_bin" -v | head -1), not PHP ${PHP_VERSION} — refusing to run on the wrong interpreter (TOG-5877)"; exit 1; }
+          "$php_bin" "$RUNNER_TEMP/composer-pinned" --version
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: npm
 
       - name: Cache Composer packages
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: vendor
           key: composer-${{ env.PHP_VERSION }}-${{ hashFiles('composer.lock') }}
           restore-keys: composer-${{ env.PHP_VERSION }}-
 
-      - run: composer install --no-interaction --prefer-dist --no-progress
+      - run: |
+          "$CI_PHP_BIN" "$CI_COMPOSER_BIN" install --no-interaction --prefer-dist --no-progress
 
       # --include=dev because the runner sets NODE_ENV=production in some images and
       # vite is a devDependency. Same reason the composer setup script does it.
@@ -411,12 +540,31 @@ jobs:
       # of making an unversioned host package part of the runner contract. Ubuntu's
       # chromium-browser package is a snap transitional package, and snap is not a
       # reliable dependency inside an Actions job, so use Google's apt package.
+      #
+      # Three host flakes met here, all TOG-5877. First, the rbx1 uplink refuses
+      # dl.google.com intermittently (4–6 of 30 connects, operator-measured), so
+      # the download retries with backoff instead of failing the job on one
+      # refused connection. Second, a prior run's Chrome install leaves its apt
+      # source behind on the persistent runner, and a later `apt-get update`
+      # dies on that stale source over IPv6 the VM does not have — so the
+      # stale source is removed both before the update and after the install
+      # (the .deb's postinst re-adds it; the browser stays installed without
+      # it). Third, a host process (seen: apt-fast, which setup-php's own
+      # installer prefers) can hold the dpkg lock, so the install retries
+      # instead of failing on a lock held by somebody else's apt.
       - name: Install Chrome
         run: |
-          curl -fsSLo "$RUNNER_TEMP/google-chrome.deb" \
+          curl -fsSL --retry 6 --retry-all-errors --retry-delay 5 \
+            -o "$RUNNER_TEMP/google-chrome.deb" \
             https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb
+          sudo rm -f /etc/apt/sources.list.d/google-chrome.list
           sudo apt-get update
-          sudo apt-get install -y "$RUNNER_TEMP/google-chrome.deb"
+          for i in 1 2 3 4 5 6; do
+            sudo apt-get install -y "$RUNNER_TEMP/google-chrome.deb" && break
+            [ "$i" -eq 6 ] && { echo "::error::Chrome install failed after 6 attempts (TOG-5877)"; exit 1; }
+            sleep 10
+          done
+          sudo rm -f /etc/apt/sources.list.d/google-chrome.list
           echo "CHROME_BIN=$(command -v google-chrome-stable)" >> "$GITHUB_ENV"
 
       # APP_URL must match the server Dusk talks to or every assertion on a redirect
@@ -440,15 +588,17 @@ jobs:
             "DUSK_DISCORD_PROVIDER_URL=http://127.0.0.1:${CI_STUB_PORT}" \
             "DISCORD_API_BASE=http://127.0.0.1:${CI_STUB_PORT}/api/v10" \
             'DUSK_BOT_RECEIPT=storage/logs/dusk-bot-receipt.json' >> .env
-          php artisan key:generate
-          php artisan config:clear
+          "$CI_PHP_BIN" artisan key:generate
+          "$CI_PHP_BIN" artisan config:clear
 
-      - run: php artisan migrate --force --no-interaction
+      - run: |
+          "$CI_PHP_BIN" artisan migrate --force --no-interaction
 
       # --detect matches the driver to the Chrome the runner already has. Pinning a
       # version here is how Dusk suites start failing on a Tuesday for no reason.
       - name: Install matching ChromeDriver
-        run: php artisan dusk:chrome-driver --detect
+        run: |
+            "$CI_PHP_BIN" artisan dusk:chrome-driver --detect
 
       # Output goes to files, not the step's stdout. A backgrounded process holding
       # the step's pipe open makes the step hang until the job times out, and the
@@ -458,9 +608,9 @@ jobs:
           rm -f storage/logs/dusk-bot-receipt.json storage/logs/dusk-stub-calls.jsonl
           DUSK_STUB_PORT="$CI_STUB_PORT" node ci/dusk-stub.mjs > storage/logs/dusk-stub.log 2>&1 &
           echo $! > storage/logs/dusk-stub.pid
-          CACHE_STORE=file php artisan queue:work --queue=default --sleep=1 --tries=1 --timeout=30 > storage/logs/queue.log 2>&1 &
+          CACHE_STORE=file "$CI_PHP_BIN" artisan queue:work --queue=default --sleep=1 --tries=1 --timeout=30 > storage/logs/queue.log 2>&1 &
           echo $! > storage/logs/queue.pid
-          php artisan serve --host=127.0.0.1 --port="$CI_APP_PORT" --no-reload > storage/logs/serve.log 2>&1 &
+          "$CI_PHP_BIN" artisan serve --host=127.0.0.1 --port="$CI_APP_PORT" --no-reload > storage/logs/serve.log 2>&1 &
           echo $! > storage/logs/serve.pid
           for i in $(seq 1 30); do
             if curl -fsS "http://127.0.0.1:${CI_STUB_PORT}/up" > /dev/null && curl -fsS "http://127.0.0.1:${CI_APP_PORT}/up" > /dev/null; then
@@ -473,10 +623,12 @@ jobs:
           exit 1
 
       - name: Dusk
-        run: php artisan dusk --colors=always
+        run: |
+            "$CI_PHP_BIN" artisan dusk --colors=always
 
       - name: Verify the external calls were observed
-        run: php ci/dusk-receipts-check.php
+        run: |
+            "$CI_PHP_BIN" ci/dusk-receipts-check.php
 
       - name: Stop Dusk services
         if: always()
@@ -492,7 +644,7 @@ jobs:
       # re-run it instead of reading it.
       - name: Upload failure evidence
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: dusk-failures
           path: |
@@ -502,6 +654,36 @@ jobs:
             storage/logs
           retention-days: 14
           if-no-files-found: ignore
+
+      # Every test now screenshots on pass or fail (tests/DuskTestCase.php
+      # tearDown, TOG-782), so evidence exists regardless of outcome — hence
+      # always() rather than failure() like the GH Actions upload above. This
+      # goes to the Paperclip board as a second, parallel destination (the
+      # owner asked for evidence he can watch from the board, not by clicking
+      # into a GH Actions run); the GH Actions artifact upload above is
+      # unrelated and untouched.
+      #
+      # continue-on-error rather than gating on the secret's presence: until
+      # PAPERCLIP_BOARD_API_KEY is minted (a one-time human action — see PR
+      # description) this step goes visibly red, which is a more honest
+      # signal than silently skipping.
+      - name: Upload Dusk evidence to Paperclip
+        if: always()
+        continue-on-error: true
+        env:
+          PAPERCLIP_API_URL: ${{ vars.PAPERCLIP_API_URL }}
+          PAPERCLIP_API_KEY: ${{ secrets.PAPERCLIP_BOARD_API_KEY }}
+          PAPERCLIP_COMPANY_ID: ${{ vars.PAPERCLIP_COMPANY_ID }}
+          PAPERCLIP_TASK_ID: ${{ vars.PAPERCLIP_E2E_EVIDENCE_ISSUE_ID }}
+          PAPERCLIP_RUN_ID: gh-actions-${{ github.run_id }}-${{ github.job }}
+        run: |
+          shopt -s nullglob
+          for f in tests/Browser/screenshots/*.png; do
+            name="$(basename "$f" .png)"
+            ./.github/scripts/paperclip-upload-artifact.sh "$f" \
+              --title "two-web/${{ github.run_id }}/dusk/${name}" \
+              --summary "Dusk evidence, run ${{ github.run_id }}, job dusk"
+          done
 
   # ---------------------------------------------------------------------------
   # Budgets. Performance and accessibility are enforced as failures, not warnings.
@@ -532,7 +714,7 @@ jobs:
           --health-retries 20
 
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
 
       # See the note in `static`. Every job attests; a job that does not could be
       # moved onto a billable runner with nothing going red (TOG-2847).
@@ -547,13 +729,30 @@ jobs:
       # tax on every gated page's TTFB that no user or production host ever pays
       # (TOG-3310). validate_timestamps=0 is safe because nothing touches the
       # checked-out PHP files between here and the server shutting down.
-      - uses: shivammathur/setup-php@v2
+      - uses: shivammathur/setup-php@f3e473d116dcccaddc5834248c87452386958240 # v2
         with:
           php-version: ${{ env.PHP_VERSION }}
           extensions: pdo_pgsql, intl, bcmath, opcache
           coverage: none
           tools: composer:v2
           ini-values: opcache.enable=1, opcache.enable_cli=1, opcache.validate_timestamps=0
+
+      # See the pin note in `static`: the shared /usr/bin/php link moves under
+      # concurrent jobs, so this job pins the versioned binary too. Placed
+      # before the opcache pin so every `php` below is already the right one.
+      - name: Pin the setup-php PHP and Composer binaries (TOG-5877)
+        run: |
+          php_bin="$(command -v "php${PHP_VERSION}")"
+          [ -n "$php_bin" ] || { echo "::error::php${PHP_VERSION} not found after setup-php — refusing to run on the wrong interpreter (TOG-5877)"; exit 1; }
+          composer_src="$(command -v composer)"
+          [ -n "$composer_src" ] || { echo "::error::composer not found after setup-php (TOG-5877)"; exit 1; }
+          head -1 "$composer_src" | grep -q php || { echo "::error::composer is not a PHP script — cannot pin it to the pinned interpreter (TOG-5877)"; exit 1; }
+          cp "$composer_src" "$RUNNER_TEMP/composer-pinned"
+          echo "CI_PHP_BIN=$php_bin" >> "$GITHUB_ENV"
+          echo "CI_COMPOSER_BIN=$RUNNER_TEMP/composer-pinned" >> "$GITHUB_ENV"
+          "$php_bin" -v | head -1
+          [ "$("$php_bin" -r 'echo PHP_MAJOR_VERSION, ".", PHP_MINOR_VERSION;')" = "$PHP_VERSION" ] || { echo "::error::pinned PHP is $("$php_bin" -v | head -1), not PHP ${PHP_VERSION} — refusing to run on the wrong interpreter (TOG-5877)"; exit 1; }
+          "$php_bin" "$RUNNER_TEMP/composer-pinned" --version
 
       # setup-php's ini-values above land in the SHARED system PHP ini. On the
       # persistent self-hosted host up to five runner processes share that one
@@ -575,13 +774,13 @@ jobs:
           printf 'opcache.enable=1\nopcache.enable_cli=1\nopcache.validate_timestamps=0\n' > "$dir/zz-opcache-budgets.ini"
           echo "PHP_INI_SCAN_DIR=:$dir" >> "$GITHUB_ENV"
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: npm
 
       - name: Cache Composer packages
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: vendor
           key: composer-${{ env.PHP_VERSION }}-${{ hashFiles('composer.lock') }}
@@ -589,10 +788,19 @@ jobs:
 
       # --no-dev: we measure what production serves. Debug tooling in the container
       # changes the numbers and flatters us.
-      - run: composer install --no-interaction --prefer-dist --no-progress --no-dev --optimize-autoloader
+      - run: |
+          "$CI_PHP_BIN" "$CI_COMPOSER_BIN" install --no-interaction --prefer-dist --no-progress --no-dev --optimize-autoloader
 
       - run: npm ci --include=dev
       - run: npm run build
+
+      # The Vite bundle budget (TOG-5629): every emitted entrypoint against its
+      # raw + gzip ceiling in ci/bundle-budget.json. Fails the job, not a
+      # warning — an over-budget bundle is bytes on Slow 4G competing with the
+      # font LCP is waiting on (TOG-53). Runs here, right after the build, so a
+      # breach fails before the twenty minutes of Lighthouse that follow.
+      - name: Bundle budget
+        run: node ci/check-bundle-budget.mjs
 
       # Five runner processes share one host network namespace. Derive stable
       # per-runner ports so parallel Dusk/budgets jobs never bind the same socket.
@@ -608,11 +816,11 @@ jobs:
           sed -i 's#^APP_DEBUG=.*#APP_DEBUG=false#' .env
           sed -i "s#^APP_URL=.*#APP_URL=${CI_BASE_URL}#" .env
           sed -i "s#^DB_PORT=.*#DB_PORT=${DB_PORT}#" .env
-          php artisan key:generate
-          php artisan migrate --force --no-interaction
-          php artisan config:cache
-          php artisan route:cache
-          php artisan view:cache
+          "$CI_PHP_BIN" artisan key:generate
+          "$CI_PHP_BIN" artisan migrate --force --no-interaction
+          "$CI_PHP_BIN" artisan config:cache
+          "$CI_PHP_BIN" artisan route:cache
+          "$CI_PHP_BIN" artisan view:cache
 
       # Backgrounded output goes to a file for the same reason as the Dusk job: a
       # process holding the step's pipe open hangs the step.
@@ -631,7 +839,7 @@ jobs:
           # See ci/reclaim-ports.sh (TOG-2847).
           ./ci/reclaim-ports.sh "$PROXY_UPSTREAM_PORT" "$PROXY_LISTEN_PORT"
 
-          php artisan serve --host=127.0.0.1 --port="$PROXY_UPSTREAM_PORT" --no-reload > storage/logs/serve.log 2>&1 &
+          "$CI_PHP_BIN" artisan serve --host=127.0.0.1 --port="$PROXY_UPSTREAM_PORT" --no-reload > storage/logs/serve.log 2>&1 &
           echo $! > storage/logs/serve.pid
           node ci/compressing-proxy.mjs > storage/logs/proxy.log 2>&1 &
           echo $! > storage/logs/proxy.pid
@@ -664,7 +872,7 @@ jobs:
       # then the pin has no module to enable and enable_cli stays off, red here.
       - name: Confirm opcache is active and measure /up
         run: |
-          status="$(php -i | grep -E '^opcache\.(enable|enable_cli)\b')"
+          status="$("$CI_PHP_BIN" -i | grep -E '^opcache\.(enable|enable_cli)\b')"
           echo "$status"
           echo "$status" | grep -q '^opcache.enable => On' || { echo "::error::opcache.enable is not On for this job's PHP — the TOG-3310 harness tax is back"; exit 1; }
           echo "$status" | grep -q '^opcache.enable_cli => On' || { echo "::error::opcache.enable_cli is not On — artisan serve won't opcode-cache across requests (TOG-3310)"; exit 1; }
@@ -723,10 +931,35 @@ jobs:
       # below re-raises it and fails the job. It exists so the breached numbers get
       # turned into annotations before the job stops, which is the difference
       # between a red build that names the audit and one that says only "exit 1".
+      # TOG-7021: LHCI shelled out to whatever Chrome the persistent host
+      # happened to have — unpinned binary, no sandbox workarounds — and when
+      # that Chrome died at startup the job failed with `Invalid URL:
+      # undefined`, the DevTools endpoint of a browser that never started, and
+      # zero assertion results. No retry: the flake policy forbids it. The fix
+      # is declared up front instead — the same pinned Chromium every other
+      # browser step in this job already measures with, plus launch flags that
+      # match ci/browser/launch.mjs and ci/a11y.mjs — and the run log is kept
+      # so the next crash is diagnosable from the artifact, not the log tail.
       - name: Lighthouse — performance budget
         id: lighthouse
         continue-on-error: true
-        run: npx lhci autorun --config=./ci/lighthouserc.cjs
+        run: |
+          set +e
+          # chrome-launcher reads CHROME_PATH before any install detection, so
+          # this is the Chromium downloaded with the pinned puppeteer above —
+          # not whatever google-chrome-stable apt last put on this host.
+          export CHROME_PATH="$(node -e "import('puppeteer').then(p => console.log(p.default.executablePath()))")"
+          echo "measuring with $CHROME_PATH"
+          # Tee the run into .lighthouseci so it ships inside the
+          # budget-reports artifact below. A startup crash leaves no assertion
+          # results; without this its error lives only in the step log.
+          # Explicit exit code: steps.lighthouse.outcome below depends on it,
+          # and a pipe through tee would report tee's status instead.
+          mkdir -p .lighthouseci
+          npx lhci autorun --config=./ci/lighthouserc.cjs > .lighthouseci/lhci.log 2>&1
+          rc=$?
+          cat .lighthouseci/lhci.log
+          exit $rc
 
       # Reads what lhci already wrote and re-emits it as ::error::, then exits
       # non-zero if anything breached. Same verdict, readable without the job log.
@@ -793,7 +1026,7 @@ jobs:
       # both paths are generated reports, and the flag only applies to them.
       - name: Upload budget reports
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: budget-reports
           path: |
@@ -827,7 +1060,7 @@ jobs:
       # This job had no checkout: it only reads `needs` results. It needs one now
       # so it can attest its own runner — the aggregate bills like any other job,
       # and being cheap is not the same as being free (TOG-2847).
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
 
       - name: Attest the runner
         run: ./ci/attest-runner.sh

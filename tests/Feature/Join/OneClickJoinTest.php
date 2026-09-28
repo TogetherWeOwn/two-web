@@ -80,6 +80,10 @@ it('adds and signs in the member before landing on the profile', function () {
     $user = User::query()->sole();
     $this->assertAuthenticatedAs($user);
 
+    // New rows still land non-moderator via the column default; login sets
+    // the flag from Discord roles on the next sign-in.
+    expect($user->is_moderator)->toBeFalse();
+
     Http::assertSent(function (ClientRequest $request) {
         $payload = json_decode($request->body(), true);
 
@@ -91,6 +95,50 @@ it('adds and signs in the member before landing on the profile', function () {
             ]
             && $request->header('Idempotency-Key') === [];
     });
+});
+
+it('shows the join confirmation on the profile after a successful join', function () {
+    // TOG-6229: the callback flashes `join_result` onto the profile redirect,
+    // but nothing in the rendered chain read it — the new member landed back
+    // from Discord with no "you are in". This follows the redirect and pins
+    // the copy on the page, then pins that it shows exactly once.
+    stubJoinProvider();
+    Http::fake([JOIN_ENDPOINT => Http::response([
+        'ok' => true,
+        'result' => ['outcome' => 'added'],
+        'request_id' => '01JPROFILEFLASH',
+    ], 200)]);
+
+    $this->get('/join/callback?code=good&state=x')
+        ->assertRedirect(route('profile'));
+
+    $this->get(route('profile'))
+        ->assertOk()
+        ->assertSeeHtml('data-testid="join-result"')
+        ->assertSeeHtml('role="status"')
+        ->assertSee(__('join.result.added'), escape: false);
+
+    $this->get(route('profile'))
+        ->assertOk()
+        ->assertDontSee('data-testid="join-result"', escape: false);
+});
+
+it('does not demote a returning moderator on re-join', function () {
+    $existing = User::factory()->moderator()->create(['discord_id' => JOIN_ID]);
+
+    stubJoinProvider();
+    Http::fake([JOIN_ENDPOINT => Http::response([
+        'ok' => true,
+        'result' => ['outcome' => 'already_member'],
+        'request_id' => '01JMODKEPT',
+    ], 200)]);
+
+    $this->get('/join/callback?code=good&state=x')
+        ->assertRedirect(route('profile'))
+        ->assertSessionHas('join_result', 'already_member');
+
+    expect($existing->fresh()->is_moderator)->toBeTrue()
+        ->and(User::query()->where('discord_id', JOIN_ID)->count())->toBe(1);
 });
 
 it('falls back to the invite without storing the token when the bot is down', function () {

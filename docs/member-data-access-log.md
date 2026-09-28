@@ -1,6 +1,7 @@
 # Member data access log
 
-Who looked at member data through the admin panel, when, and at whose records.
+Who looked at member data through the admin panel or authenticated member-profile
+routes, when, and at whose records.
 
 **Last checked:** 25 August 2026 · **Issues:** TOG-355 (this) · TOG-106 (which
 Discord role means moderator) · TOG-54 (the panel itself) · TOG-448 (review that
@@ -42,9 +43,11 @@ and nobody sees a panel at all.
 ## What is built
 
 Everything below is in the tree and covered by
-`tests/Feature/MemberDataAccessLogTest.php` — twenty tests: one per clause of the
-requirement, and one per way the control was found to be evadable in review. None
-of it depends on Filament, which is not a dependency of this repo yet.
+`tests/Feature/MemberDataAccessLogTest.php` — twenty-four tests: one per clause
+of the requirement, one per way the control was found to be evadable in review,
+and four from the TOG-5611 coverage audit (keyless-User refusal, keyed-partial
+boundary, relation traversal, the `note()` escape hatch). None of it depends on
+Filament, which is not a dependency of this repo yet.
 
 | Piece | File |
 |---|---|
@@ -74,6 +77,32 @@ naming the route, for anything carrying `can:access-admin` without
 it is the one test here whose job starts later.
 
 ---
+
+## Member-profile coverage (TOG-7057)
+
+`profile` and `profiles.show` carry the same control behind
+`auth` (`member,view`). The viewer remains the
+signed-in actor, never the route's target. The viewer-own-record exclusion below
+is unchanged, so viewing your own profile writes no row. (TOG-8440, per the
+TOG-8433 spec: PATCH /members/{user} — `profiles.update` — is deleted;
+MemberProfile::save() is the single writer and its Livewire update endpoint
+never runs this middleware, so profile writes log nothing here by construction.)
+
+Laravel can bind `{user}` before this middleware arms its Eloquent listener. The
+middleware therefore also observes bound `User`/`Profile` parameters before
+flushing a successful response or redirect. This closes the otherwise invisible
+read of a member who has no separate Profile row. Set semantics keep a bound user
+and their retrieved profile in one row with one subject. Denied or missing route
+targets are not added by this fallback.
+
+`tests/Feature/MemberDataAccessCompletenessTest.php` commits the TOG-6776 proposed
+gate and covers both HTML and JSON Accept headers, profiles present/absent, exact
+actor/subject fields, own-record exclusions, guest/404/denied-save no-write
+behavior, and log-outage refusal. The profile route still serves HTML; the test
+also exercises a JSON response from a bound-member fixture. No JSON endpoint is
+introduced. A route-table guard covers the `members` namespace, profile controller,
+and `profiles.*` names, checks the resolved middleware, and detects a newly added
+unlogged route even if its binding is named `{member}` instead of `{user}`.
 
 ## The three decisions worth defending
 
@@ -111,6 +140,23 @@ the read silently, and what gets served in that case is a bio: contents, not an
 identifier. A select carrying neither the key nor `user_id` cannot be resolved at
 all, and is refused rather than dropped — see §2.
 
+The same rule covers a `User` hydrated without its key — `select('username')`,
+or `value('username')`, which is `first(['username'])` underneath. There is no
+owner key to resolve through (usernames are mutable, display names are not
+unique), so refusal is the only honest answer. The boundary is the key: a
+partial select carrying it (`select('id', 'username')`) is an ordinary recorded
+read. Both sides are pinned — `it refuses to serve a user read it cannot
+attribute to a member` and `it records a keyed partial select on users` — so a
+panel dropdown or autocomplete knows which side of the line it has to stay on.
+
+What the automatic path cannot see at all is a read that never hydrates:
+`pluck()`, aggregates, raw SQL, and the bot's read-only views. `pluck()` runs
+on the query builder — no model, no `retrieved` event, nothing for the listener
+to catch. Those screens must call `note()` with the members they showed, and
+`it records a pluck-shaped read the screen declares with note()` pins that the
+escape hatch writes the row. This is the same standing obligation as the raw-SQL
+one in "Still open" below, extended to plucks by the TOG-5611 audit.
+
 The viewer's own record is excluded. The authenticated user is hydrated on every
 request; without the exclusion, every page view would log a moderator looking at
 themselves and the real signal would drown in it.
@@ -128,8 +174,9 @@ the days it happened to be working — which is not a property you can find out
 about *after* you need it.
 
 The trade is cheaper than it reads, and the reason is worth stating: **this
-middleware is not on `web`.** A broken log table cannot take the member-facing
-site down; the blast radius is admin-panel reads only.
+middleware is not on `web`.** The blast radius is admin-panel reads and
+member-profile reads of other members. Public pages and unrelated member routes
+remain outside it; own-profile reads/writes need no access-log row.
 
 Three things can make a read unrecordable, and all three get the same answer:
 
@@ -229,7 +276,8 @@ beyond staging rather than by this table:
    dashboards, no rate limiting. The log answers questions when someone asks
    them. If a "who read the whole member list this week" query ever gets written,
    `subject_count` and the GIN index on `subject_user_ids` are there for it.
-3. **Reads outside Eloquent are not seen** — raw SQL, and the bot's read-only
+3. **Reads that never hydrate are not seen** — raw SQL, `pluck()` and other
+   query-builder reads that bypass the model layer, and the bot's read-only
    views (TWO-23). `note()` is the escape hatch and calling it is a thing to
    remember, which is the weakness of every escape hatch. Named again here
    because §1's automatic path is what the rest of this document leans on.

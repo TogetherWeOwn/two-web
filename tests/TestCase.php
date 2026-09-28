@@ -3,6 +3,7 @@
 namespace Tests;
 
 use Illuminate\Foundation\Testing\TestCase as BaseTestCase;
+use Illuminate\Http\Request;
 
 abstract class TestCase extends BaseTestCase
 {
@@ -37,5 +38,17 @@ abstract class TestCase extends BaseTestCase
         parent::setUp();
 
         $this->withoutVite();
+    }
+
+    protected function tearDown(): void
+    {
+        try {
+            parent::tearDown();
+        } finally {
+            // Production-mode tests populate Symfony's static host allowlist.
+            // Laravel resets TrustHosts config, but not this request state;
+            // otherwise a later testing-mode request inherits the old hosts.
+            Request::setTrustedHosts([]);
+        }
     }
 }

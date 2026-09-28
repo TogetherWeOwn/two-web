@@ -7,6 +7,11 @@ use App\Support\Profiles\MemberStatsSource;
 use App\Support\Profiles\Milestone;
 use Illuminate\Support\Carbon;
 
+// TOG-8440: PATCH /members/{user} (`profiles.update`) is deleted per the
+// TOG-8433 spec — MemberProfile::save() is the single writer. This file keeps
+// the read-path coverage (GET /members/{user}); write-path coverage lives in
+// tests/Feature/Livewire/MemberProfileTest.php.
+
 function availableMemberStats(string $discordId): MemberStats
 {
     return MemberStats::available(
@@ -56,76 +61,6 @@ it('lets any signed-in member view another member profile', function () {
         ->assertSee('Helldivers 2')
         ->assertSee('From Discord')
         ->assertDontSee('data-testid="profile-edit-form"', escape: false);
-});
-
-it('only lets a member update the fields they own', function () {
-    $member = User::factory()->create([
-        'username' => 'before-name',
-        'display_name' => 'Before Name',
-        'discord_joined_at' => '2024-03-01 12:00:00',
-        'is_moderator' => false,
-    ]);
-
-    $this->actingAs($member)
-        ->patch(route('profiles.update', $member), [
-            'bio' => 'Now playing evenings.',
-            'games' => ['  Minecraft ', 'Valorant', 'Minecraft'],
-            'timezone' => 'America/New_York',
-            'username' => 'forged-name',
-            'display_name' => 'Forged Name',
-            'discord_joined_at' => '2030-01-01 00:00:00',
-            'is_moderator' => true,
-        ])
-        ->assertRedirect(route('profiles.show', $member));
-
-    expect($member->fresh())
-        ->username->toBe('before-name')
-        ->display_name->toBe('Before Name')
-        ->is_moderator->toBeFalse()
-        ->and($member->fresh()?->discord_joined_at?->toDateTimeString())->toBe('2024-03-01 12:00:00')
-        ->and($member->profile()->first())
-        ->bio->toBe('Now playing evenings.')
-        ->games->toBe(['Minecraft', 'Valorant'])
-        ->timezone->toBe('America/New_York');
-});
-
-it('rejects invalid member-owned fields without changing the profile', function () {
-    $member = User::factory()->create();
-    $profile = Profile::factory()->for($member)->create([
-        'bio' => 'Before',
-        'games' => ['Minecraft'],
-        'timezone' => 'Europe/London',
-    ]);
-
-    $this->actingAs($member)
-        ->from(route('profiles.show', $member))
-        ->patch(route('profiles.update', $member), [
-            'bio' => str_repeat('a', 1001),
-            'games' => [str_repeat('b', 81)],
-            'timezone' => 'BST',
-        ])
-        ->assertRedirect(route('profiles.show', $member))
-        ->assertSessionHasErrors(['bio', 'games.0', 'timezone']);
-
-    expect($profile->fresh())
-        ->bio->toBe('Before')
-        ->games->toBe(['Minecraft'])
-        ->timezone->toBe('Europe/London');
-});
-
-it('forbids editing another members profile', function () {
-    $viewer = User::factory()->create();
-    $member = User::factory()->create();
-
-    $this->actingAs($viewer)
-        ->patch(route('profiles.update', $member), [
-            'bio' => 'Changed by somebody else.',
-            'games' => [],
-            'timezone' => 'UTC',
-        ])
-        ->assertForbidden();
-
-    expect($member->profile()->exists())->toBeFalse();
 });
 
 it('still renders the profile when member stats are unavailable', function () {

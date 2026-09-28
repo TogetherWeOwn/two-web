@@ -1,667 +1,104 @@
 # Domains and DNS
 
-Everything we own, what each name points at today, and what has to change. If you
-are looking at DNS at 2am, this is the page.
-
-**Last verified against live DNS and HTTP:** 19 August 2026 · **Issue:** TWO-38
-· **Mail rows re-verified:** 5 September 2026 (TOG-1154) — run
-`node ci/mail-auth-check.mjs` rather than trusting the mail tables below
-
----
-
-## Where this is going
-
-The new Laravel site **replaces the WordPress site** — founder's decision.
-
-1. **Now:** build locally. `staging.togetherweown.com` **does not exist** — the
-   record was deleted on 5 September 2026 (TOG-1156/TOG-1160) because there was no
-   origin behind it to wall off. It returns, grey-cloud and behind basic auth, the
-   day TWO-37 lands one.
-2. **Launch:** the **apex**, `togetherweown.com`. One record change, scheduled by
-   **TWO-61**, once the site is proven on staging.
-
-**There is no intermediate public subdomain, and that is a change from the previous
-version of this page.** That version assumed a live WooCommerce Subscriptions store
-at the apex that had to keep earning, so the new site had to launch somewhere else
-and move later. That store does not exist. The apex is a WordPress.com install from
-1 August 2026 with **no products, no sitemap, and one page** — measured below. The
-only thing on it worth protecting is the `/discord` link, and protecting that is
-easier at the apex than anywhere else.
-
-So the intermediate subdomain buys nothing and costs a lot: a name nobody agreed on,
-a permanent 301 source we maintain forever, a forced logout for every member on the
-day we move, and a second set of OAuth redirect URIs. **Recommendation: skip it.**
-Launch is the apex swap. Rollback is putting the old record back — WordPress stays
-intact and paid for through the swap and for two weeks after.
-
-**Nothing in TWO-38 touches the apex `A` record.** TWO-38's job is to make the day
-someone does touch it cost seven minutes — see the checklist at the bottom.
-
----
-
-## What is actually live today
-
-Measured 19 August 2026, not assumed. The apex serves Cloudflare's bot challenge to
-a plain `curl`, so **send a browser user agent or you will document a `403`**:
-
-```bash
-UA='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36'
-curl -sSI -A "$UA" https://togetherweown.com/
-curl -s -H 'accept: application/dns-json' 'https://cloudflare-dns.com/dns-query?name=<host>&type=TXT'
-```
-
-| Name | What it does right now | Verdict |
-|---|---|---|
-| `togetherweown.com` | WordPress.com, **empty** — title `Together We Own -`, one outbound link, no sitemap, no store | Cut over to us |
-| `www.togetherweown.com` | Same origin, same challenge — no redirect to the apex | Fix at cutover |
-| `togetherweown.com/discord` | **302 into a live Discord OAuth join flow.** The only working web→Discord path we have | **Must survive. See below** |
-| `togetherweown.com/join` | 301 → `/join/` → **HTTP 200, titled "Page Not Found", `<meta name="robots" content="follow, noindex">`** — a soft 404 | No `/join` *page*; a 301 to `/discord` — see below |
-| `staging.togetherweown.com` | **Deleted 5 September 2026, 20:20Z (TOG-1160)** — `NXDOMAIN` in both address families, 0 records in the zone for that name. It was a proxied **`CNAME`** to `staging-9a7d-togetherweown9.wpcomstaging.com` (**not** the `A`/`AAAA` pair predicted — see below) answering `403 Error: Active domain connection for this domain not found` from WordPress.com: **upstream breakage, not a control we own**, which is why it was deleted rather than left alone (TOG-1156) | **Recreate only when TWO-37 lands an IP** — see below |
-| `two.gg`, `www.two.gg` | **302**, path-preserving, to `https://togetherweown.com/<path>` | Make it 301 |
-| `two.gg/discord` | **301** to `togetherweown.com/discord/` — already correct | Leave it, retarget at cutover |
-| `two.gg/join` | 302 → the apex soft 404. Sends real people to a dead page | Point it at `/discord` |
-| `togetherweown.net` | 301 to `https://togetherweown.com/` | Correct, leave it |
-| `_dmarc.togetherweown.com` | `v=DMARC1; p=none; rua=mailto:dmarc@togetherweown.com; fo=1` — reporting landed, TOG-1145 | Read the reports, then tighten |
-| `togetherweown.com` SPF | `v=spf1 include:_spf.google.com include:_spf.wpcloud.com ~all` — Google added by TOG-1158 | Do not edit blind |
-| `two.gg` mail records | SPF `v=spf1 include:_spf.google.com -all`, DMARC `p=reject` — both landed TOG-1145 | Done, but see DKIM |
-| `google._domainkey` **both zones** | **NXDOMAIN.** No Workspace DKIM anywhere, while both zones carry 5 Google MX | **TOG-1154** — `two.gg` forwarded mail is rejected today |
-| Apex HSTS | `max-age=31536000`, **no `includeSubDomains`** | Keep it that way until cutover |
-| Apex indexing | Every URL renders one Bricks template (post 21), so 10 pages share its `og:url` and 7 cross-canonicalise to it. No `robots.txt` at all — see below | Clears when Coming Soon is turned off — TOG-1159 / TOG-1170 |
-
-### Coming Soon mode is serving one template as every URL on the site
-
-Rewritten 5 September 2026 (TOG-1170). **The `vary: accept` split this section used
-to describe is gone** — re-measured that day, `Accept: */*` and the browser `Accept`
-return the same document: same title, same `index, follow`, same self-canonical, and
-a tag-for-tag identical `<title>/<meta>/<link>` set (0 differing lines; the remaining
-~2 KB size delta is cache-buster noise). `ci/live-seo-probe.mjs` still keeps the
-`homepage-same-for-crawlers-and-scripts` check so a reappearance is caught, and it
-still sends the browser UA because Cloudflare's challenge is real. Do not re-derive
-the old two-homepage claim from this file's history.
-
-What is actually wrong is bigger and has one cause. Bricks **Coming Soon** mode
-replaces the body of every front-end response with a single template,
-`/template/coming-soon/` (post 21), via `template_include`. WordPress still resolves
-the correct post first, so each URL keeps its own `<title>` and looks healthy at a
-glance — but Rank Math reads the canonical and `og:url` off the *rendered* object and
-truthfully reports post 21. Measured 5 September 2026, **every URL renders
-`postid-21`**, including `/robots.txt` and `/feed/`:
-
-- **10 advertised pages share one `og:url`.** A Discord or Twitter paste of any of
-  them unfurls as the coming-soon template rather than the page linked.
-- **7 pages cross-canonicalise** to `/template/coming-soon/`, which asks Google to
-  index that URL *instead* of them.
-- **`/robots.txt` 301s to `/robots.txt/`** and returns ~129 KB of HTML as
-  `text/html`. WordPress serves robots.txt from a rewrite rule, not a file, so the
-  request is a page lookup and gets intercepted like everything else. Nothing
-  disallows anything and the sitemap is never announced — though
-  `/sitemap_index.xml` itself is present and correct.
-
-**These are not Rank Math settings and there is nothing to fix per page.** Two
-independent controls prove the underlying data is fine, both on the same host:
-
-```bash
-# core WordPress's own oEmbed link emits the RIGHT url on a response whose
-# Rank Math canonical says post 21 — same page, same request:
-curl -s -A "$UA" https://togetherweown.com/sample-page/ \
-  | grep -o 'oembed/1.0/embed?url=[^"&]*'      # -> %2Fsample-page%2F
-
-# and endpoints that never reach template_include list every real page correctly:
-curl -s -A "$UA" https://togetherweown.com/page-sitemap.xml | grep -o '<loc>[^<]*</loc>'
-```
-
-So the fix is **turning the mode off — TOG-1159 — and nothing else**; these failures
-should clear with that flip and are not separate work. `ci/live-seo-probe.mjs` asserts
-this directly as `pages-render-their-own-content`, which names post 21 and says so.
-Run it rather than re-deriving any of the above by hand.
-
-`ci/live-seo-probe.mjs` measures all of this, sends the right headers, and refuses
-to report a result at all when Cloudflare challenges it. Run that instead of
-re-deriving it by hand.
-
-Five things fall out of that which change the plan:
-
-- **There is no wildcard DNS record**, contrary to the TWO-41 inventory. A probe for
-  `nonexistent-probe-9182.togetherweown.com` returns `NXDOMAIN`. `staging` has its
-  own explicit record. That is better news: repointing staging is editing one record
-  and cannot leak any other subdomain.
-- **`/discord` is the whole funnel.** The apex homepage contains exactly one link and
-  it is `https://togetherweown.com/discord`. Everything else here is housekeeping.
-- **Do not invent a `/join` path.** The name that already exists, already has a 301 on
-  `two.gg`, and is already in people's mouths is `/discord`. One name, not two.
-- **`two.gg` is served by a Cloudflare redirect rule with no origin behind it.**
-  It has never needed a server and it should stay that way for as long as possible.
-- **`two.gg` can have `p=reject` today.** The issue's original instinct — publish
-  reject while there is nothing legitimate to break — was right, and with no store
-  anywhere in the estate it is very nearly right for the apex too.
-
-### The `/join` soft 404 is measured, not inferred
-
-This one was challenged on the grounds that the apex answers `403 cf-mitigated:
-challenge` to automated requests, which is indistinguishable from a 404 from
-outside. That is true of a *plain* request and it is why the browser-UA header is at
-the top of this section. With the header, the challenge does not fire and the real
-page comes back. Reproduce it in ten seconds:
-
-```bash
-UA='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36'
-curl -sS -A "$UA" -L https://togetherweown.com/join -o /tmp/join.html -w '%{http_code} %{url_effective}\n'
-grep -o -i '<title>[^<]*</title>\|name="robots" content="[^"]*"' /tmp/join.html
-```
-
-Result: `200 https://togetherweown.com/join/`, title `Page Not Found - Together We
-Own`, and — the decisive part — `<meta name="robots" content="follow, noindex">`.
-**WordPress's own 404 template is telling crawlers not to index it.** A real page
-would not carry that. Two independent signals agree, so this needs no founder
-round-trip: `two.gg/join` sends real people to a dead page today.
-
----
-
-## `/discord` is launch-blocking
-
-Today, `togetherweown.com/discord` 302s to:
-
-```
-https://discord.com/oauth2/authorize
-  ?client_id=456483983870394368
-  &scope=identify email guilds.join guilds.members.read
-  &redirect_uri=https://togetherweown.com/wp-json/two/v1/callback
-  &response_type=code&prompt=consent
-```
-
-Three consequences, in order of how much they will hurt if missed:
-
-1. **Whatever answers the apex must answer `/discord` from minute one.** It is the
-   only conversion path on the site and the only link on the homepage. A 404 there
-   at cutover is a total funnel outage, not a broken redirect.
-2. **That `redirect_uri` is a WordPress endpoint and it dies with WordPress.**
-   `/wp-json/two/v1/callback` cannot exist on a Laravel box. Whoever owns that
-   Discord application has to have our callback allowlisted *before* the swap.
-   Also worth confirming: `client_id=456483983870394368` may or may not be the same
-   application as `DISCORD_CLIENT_ID` for site login. Someone has to check the
-   portal — we cannot, we have no access.
-3. **`guilds.join` means today's flow is genuinely one click.** The member authorises
-   and is added to the server without ever seeing an invite page. A plain redirect to
-   an invite URL is a *worse* funnel than what we have now — an extra page and an
-   extra decision. Matching today's behaviour means adding the member via the API,
-   which under our integration rules is the bot's job, not Laravel's. **Flagged to
-   the CEO as a conversion question, not decided here.**
-
-The Laravel side of this is **TWO-54**, and it is now built — **TOG-77**. What
-shipped, so nobody has to read the code to know what the apex will answer:
-
-| Path | Answers | Depends on |
-|---|---|---|
-| `/discord` | `302` → `services.discord.invite_url`, defaulting to the `WEB-HOMEPAGE` invite from TOG-96, with `Cache-Control: no-store` | nothing — no database, no cache, no session, no bot |
-| `/join` | `301` → `/discord` | nothing |
-
-Four properties of that, each pinned by a test in
-`tests/Feature/DiscordFunnelTest.php` so they cannot be undone quietly:
-
-- **No database.** Both routes are registered from `routes/funnel.php` with an
-  empty middleware stack, *outside* the `web` group. This is not tidiness:
-  `SESSION_DRIVER=database` in every environment we ship, so a route in the `web`
-  group opens a Postgres connection in `StartSession` before the controller runs.
-  The test configures a database-backed session and asserts **zero queries**.
-- **No 503 during a deploy.** Both paths are excepted from
-  `PreventRequestsDuringMaintenance`, so `php artisan down` does not take the
-  funnel dark.
-- **Never an open redirect.** The configured invite is refused unless it is an
-  `https` URL on `discord.gg` or `discord.com`, and the hardcoded fallback is
-  served instead. A mistyped `DISCORD_INVITE_URL` cannot turn the most trusted
-  link we own into a way of sending our own members somewhere else.
-- **302, not 301, on `/discord`.** The destination changes when TOG-80 lands. A
-  301 would already be cached in the browser of every member who had used it —
-  the one population we could never reach to correct.
-
-**Point 3 above is still open and this does not close it.** What shipped is the
-plain invite redirect, which is the *worse* funnel the point warns about: an
-extra page and an extra decision versus today's one click. It is what can be
-built without the bot token, and it is strictly better than the 404 that is the
-alternative on cutover day. **One-click parity is TOG-80**, owned by the Founding
-Engineer, and when it lands it replaces this route's happy path and nothing else
-— the invite redirect stays underneath as what TOG-80 falls back to when the bot
-is unreachable. So the ordering constraint is: cutover needs TOG-77 (done),
-not TOG-80.
-
----
-
-## Records to create or change
-
-`<PROD_IP>` and `<STAGING_IP>` come out of the hosting decision in **TWO-37**. They
-may be the same box to start with. Everything else below is final.
-
-### Staging — delete the record now, recreate it the day something runs there
-
-**Decision, TOG-1156, 5 September 2026: `staging` should not exist today, so the
-record goes away rather than getting a password put in front of it.**
-
-**Done — TOG-1160, 5 September 2026.** The record is deleted. Verified in both
-address families, because deleting only the `A` would leave the name resolving
-over IPv6: `getent ahostsv4` and `getent ahostsv6` for `staging` are both empty,
-while `getent ahostsv4 togetherweown.com` still answers (the control that proves
-the resolver is working, not that everything is NXDOMAIN). The rest of this
-section is written in the present tense of the pre-deletion world; it is kept as
-the reasoning behind the decision, and as the instructions for recreating the
-record later.
-
-**It was a `CNAME`, not the `A`/`AAAA` pair this page and TOG-1156 predicted.**
-What was actually deleted, from the Cloudflare record itself:
-
-| Type | Name | Value as deleted | Cloudflare | TTL |
-|---|---|---|---|---|
-| `CNAME` | `staging` | `staging-9a7d-togetherweown9.wpcomstaging.com` | 🟠 Proxied | Auto |
-
-⚠️ **Resolved addresses do not reveal a proxied record's type.** We wrote `A`/`AAAA`
-because `staging` resolved to `172.66.40.206` and `2606:4700:3108::ac42:28ce`.
-Those are Cloudflare's proxy anycast addresses — *every* proxied record in this zone
-resolves to them whatever its own type, and a `CNAME` behind the orange cloud is
-never visible in a resolver answer at all. Read the type in the Cloudflare DNS table
-before writing down a rollback, or the rollback will recreate a record that never
-existed. **Rollback for this change:** re-create the `CNAME` row above, proxied.
-Note that doing so restores WordPress.com's `403` — an undo, not a fix.
-
-Recreate it properly, as the row below, on the day TWO-37 lands an IP and something
-is actually deployed behind it — not before. The type changes: a grey-cloud `A` at
-our own origin, not a `CNAME` back to WordPress.com.
-
-| Type | Name | Value | Cloudflare | TTL |
-|---|---|---|---|---|
-| `A` | `staging` | `<STAGING_IP>` | ⚪ **DNS only (grey cloud)** | Auto |
-
-**Why delete instead of adding basic auth.** TOG-59 asks for staging "noindex and
-behind basic auth". Basic auth is a control that lives in nginx on an origin box.
-**There is no origin box.** `FORGE_STAGING_DEPLOY_HOOK` is unset, `STAGING_URL` is
-unset, `.github/workflows/deploy.yml` no-ops (TOG-13, TOG-104), and no two-web
-deployment has ever existed behind this name. So "put basic auth on staging" is not
-a small task being deferred — it is **unimplementable until the box exists**, and
-leaving the name published while we wait is the exposure. Deleting the record is
-one edit, needs no origin, no password to store or rotate, and no certificate. It
-is strictly stronger than auth: a name that does not resolve cannot be indexed,
-cannot be probed, and cannot leak a header. The auth requirement returns with the
-box, in the same nginx config that gets written on day one.
-
-**What it is walled off by today, and why that is not good enough.** It answers
-`403 Error: Active domain connection for this domain not found` — WordPress.com's
-error for a hostname whose connection there has lapsed, identifiable by the `x-ac`
-and `a8c-cdn` origin headers. **That is not a control we own.** It satisfies "never
-appears in a search result" by accident, and it stops the moment anyone repairs
-that connection, from a dashboard we do not watch, with no notice to us. Do not
-read it as the requirement being met.
-
-Reproduce it with the browser-UA header from the top of this page — a plain `curl`
-gets Cloudflare's challenge instead and tells you nothing. Or run the check, which
-encodes the distinction between "walled off by us" and "broken upstream" so nobody
-has to re-derive it:
-
-```
-node ci/staging-exposure-check.mjs
-```
-
-Exit 0 means walled off by a control we own, or gone. Exit 1 means exposed **or**
-safe only by accident. It exits 0 the moment the record is deleted — as it now
-does, both checks passing, since TOG-1160.
-
-It resolves **both** address families. It did not at first, and an AAAA-only
-leftover would have read as `NXDOMAIN` and exited 0 while staging was still
-reachable over IPv6. `ci/staging-exposure-check-selftest.sh` pins that against a
-real AAAA-only name, and pins `ci/cutover-check.mjs`, which had its own copy of
-the same lookup.
-
-Two more consequences worth having in writing:
-
-- **Nothing of value is being served there,** so deleting the record breaks nothing.
-- **A `403` from `staging` is not our app failing.** It is the absence of our app.
-  Anyone asked to "check it on staging" should stop here.
-
-**Grey cloud is deliberate, and we now have evidence.** A plain `curl` to the apex
-today comes back `403` with `cf-mitigated: challenge`. QA's Dusk suite is headless
-Chrome; it would get the same page. A proxied staging record buys us a red test
-suite that has nothing to do with our code.
-
-Walled off three ways, all on the origin:
-
-- **Basic auth** in nginx over the whole site, except requests from `127.0.0.1`, so
-  Dusk running on the staging box needs no credentials in the test suite. No
-  password in the repository, ever.
-- **`X-Robots-Tag: noindex, nofollow`** on every response, set by nginx so it cannot
-  be forgotten in application code.
-- **`robots.txt` disallowing everything.** Belt and braces.
-
-Its own Let's Encrypt certificate with auto-renewal, same as production.
-
-### The apex — at cutover, not before
-
-| Type | Name | Value | Cloudflare | TTL |
-|---|---|---|---|---|
-| `A` | `@` | `<PROD_IP>` | 🟠 Proxied | Auto |
-| `A` | `www` | `<PROD_IP>` | 🟠 Proxied | Auto |
-
-Proxied is right here: real browsers, real people, free TLS and caching. The origin
-still terminates TLS with its own Let's Encrypt certificate — Cloudflare on **Full
-(strict)**, never Flexible.
-
-`www` 301s to the apex, in nginx on the origin rather than as a Cloudflare rule, so
-the canonical host is decided in the same file as everything else about the site.
-The apex is canonical because it is what people say out loud.
-
-**This is one record change and one rollback.** Nobody has to schedule a migration
-window for it. TWO-61 picks the day.
-
-### `two.gg`
-
-Leave it as a Cloudflare redirect rule with no origin behind it. Two changes:
-
-| Rule | From | To | Status |
-|---|---|---|---|
-| 1 | `two.gg/join`, `www.two.gg/join` | `https://<community site>/discord` | **301** |
-| 2 | everything else on `two.gg` | `https://<community site>/<path>` | **301** |
-
-> **These two are Rules, not records. A DNS token cannot make either change.**
-> Both live in Cloudflare → Rules → Redirect Rules, and `Zone.DNS: Edit` does not
-> reach them. They are founder clicks. See *Who can actually change these records*
-> at the bottom for the full split of what we can and cannot do ourselves.
-
-- **302 → 301 on the catch-all.** A 302 tells every browser and crawler not to
-  remember, so we pay the round trip forever and the link earns us nothing in
-  search. `two.gg/discord` is *already* a 301 and needs no change beyond retargeting.
-- **`/join` redirects to `/discord`, not the other way round.** `two.gg/join` today
-  lands on a soft 404. Rather than build a second name for the same door, keep the
-  name that already works. People who have `two.gg/join` in a stream title keep
-  working; nobody has to learn a new link.
-- **`<community site>` is the apex.** One value in one rule. That is the entire
-  `two.gg` cost of the swap.
-- **No origin, on purpose.** The most important link we own does not depend on our VM
-  being up. If the box is down, the break-glass is one rule edit: point
-  `two.gg/discord` straight at the raw Discord invite. Write the invite URL in the
-  runbook next to that sentence.
-
-`two.gg/discord` is the link that goes in a stream title or a friend's DM. TWO-38
-owns the name and the redirect. **TWO-9** owns what is counted, and **TWO-54** owns
-the Laravel route it lands on. Whatever that route does, the rule is absolute: a
-member who clicked it must always end up in Discord, even when the invite lookup,
-the database or the bot is unavailable.
-
-### `togetherweown.net`
-
-Already a correct 301 to the `.com`. Defensive registration, no separate content.
-Documented here so the next person does not find a mystery domain in the registrar.
-
----
-
-## Mail: SPF, DKIM and DMARC
-
-**The premise this section used to rest on is dead.** It said `two.gg` "sends no
-mail and has no origin, so there is nothing to break," and recommended `v=spf1
--all` plus an empty DKIM wildcard. That is no longer true and following it now
-would black-hole real mail.
-
-**Both zones publish five Google MX. Workspace mail is real on both, today.**
-Re-measured 5 September 2026 (TOG-1154), two independent resolvers with a
-bogus-selector control in the same batch:
-
-| | `togetherweown.com` | `two.gg` |
-|---|---|---|
-| MX | 5 Google | 5 Google |
-| SPF | `v=spf1 include:_spf.google.com include:_spf.wpcloud.com ~all` | `v=spf1 include:_spf.google.com -all` |
-| DMARC | `p=none; rua=…; fo=1` | **`p=reject`**`; rua=…; fo=1` |
-| `google._domainkey` | **NXDOMAIN** | **NXDOMAIN** |
-
-Run it rather than re-deriving it by hand — **the check is the source of truth
-for this table**:
-
-```
-node ci/mail-auth-check.mjs
-```
-
-### Neither zone has a Workspace DKIM key, and on `two.gg` that is live breakage
-
-`two.gg` is at `p=reject` with no DKIM. Its *direct* mail passes SPF, so it is
-fine. Its **forwarded** mail — a mailing list, a `.forward`, an alias — is not:
-forwarding rewrites the path and breaks SPF, DKIM is the only mechanism that
-survives it, and there is none. A conforming receiver rejects that mail outright.
-Nobody gets a bounce they understand.
-
-`togetherweown.com` had the mirror-image defect and it is now fixed: its SPF
-authorised WordPress.com only, so *every* Workspace message from it failed SPF as
-well as DKIM. `include:_spf.google.com` was added on 5 September 2026 (TOG-1158).
-Both includes are flat, so the record costs 2 of the RFC 7208 §4.6.4 budget of 10.
-
-**Publishing the key needs the Google admin console, which no agent holds** —
-it is `google._domainkey` TXT per domain, generated under Apps → Google Workspace
-→ Gmail → Authenticate email. Tracked on **TOG-1154**, with the operator step on
-**TOG-1167**.
-
-Two traps that make a published record read as success when it is not, both
-encoded in the check so nobody has to remember them:
-
-- **The console defaults to 1024-bit.** Change it to 2048. A 1024-bit key
-  publishes fine and passes every existence check.
-- **`v=DKIM1; p=` is the *revoked* form** (RFC 6376 §3.6.1) — valid syntax, fails
-  every signature. Which is why the old advice to publish an empty
-  `*._domainkey` wildcard must not be applied to a domain that now sends mail.
-
-**A published TXT record is not the finish line.** The check must exit 0, *and*
-`dkim=pass` must appear in the `Authentication-Results` header of a message
-actually received from that domain. DNS proves what we published; only a received
-header proves Google is signing with it.
-
-### `togetherweown.com` — staged, because we have never measured it
-
-There is already a `_dmarc` record. **The `rua` has since landed** (TOG-1145): it
-now reads `v=DMARC1; p=none; rua=mailto:dmarc@togetherweown.com; fo=1`, so the
-two-week clock referred to below has started. Steps 2–4 of the table are still
-ahead of us.
-
-The earlier version of this page justified going slowly here by "the apex sends
-WooCommerce receipts." It does not — there is no store. The honest reason to still
-go slowly is simpler and does not depend on that: **we do not know who sends as this
-domain**, because nobody has ever collected a report. WordPress.com sends admin and
-password-reset mail, the founder may have mail on the domain, and a forwarder or a
-newsletter tool could be in play. `p=reject` with zero visibility bins whatever we
-did not know about, silently, until someone complains they never got the mail.
-
-Two weeks of `rua` data is cheap and turns a guess into a list.
-
-| Step | Record | When |
-|---|---|---|
-| 1 | `_dmarc` TXT → `v=DMARC1; p=none; sp=reject; rua=mailto:<founder>; fo=1` | Now |
-| 2 | Read 2–4 weeks of reports, list every legitimate sender, fix SPF and DKIM alignment | After step 1 |
-| 3 | `p=quarantine; pct=25`, then `pct=100` | Once step 2 is clean |
-| 4 | `p=reject` | Two clean weeks at quarantine |
-
-**The clock starts when `rua` lands, not before.** That is the argument for doing
-step 1 this week even though nothing else here can move.
-
-**`sp=reject` from day one is the important bit.** The subdomain policy covers every
-name under `togetherweown.com` that sends no mail — `staging`, and anything else
-anyone ever adds — so spoofing `billing@staging.togetherweown.com` is dead
-immediately while whatever the apex legitimately sends keeps flowing. That is the
-protection the issue asked for, available this week, with no measurement needed.
-
-The consequence, written down so it does not ambush us: **before this app sends its
-first email**, its sending domain needs SPF and DKIM that align. After cutover this
-app *is* the apex, so it is the apex SPF record that has to learn about our sender.
-Today `MAIL_MAILER=log` and we send none, so this is a note, not a task.
-
-SPF now reads `v=spf1 include:_spf.google.com include:_spf.wpcloud.com ~all`
-(TOG-1158 added the Google include; the WordPress one was there already). Neither
-include may be dropped at cutover just because the web server moved — WordPress.com
-and Workspace are both legitimate senders today. **Do not edit the apex SPF
-blind** — one wrong `-all` does the same damage as a bad DMARC policy.
-
----
-
-## Security headers
-
-Set in nginx on the origin so they apply to staging and the apex alike:
-
-| Header | Value |
-|---|---|
-| `Strict-Transport-Security` | `max-age=31536000; includeSubDomains` |
-| `X-Content-Type-Options` | `nosniff` |
-| `Referrer-Policy` | `strict-origin-when-cross-origin` |
-| `X-Frame-Options` | `DENY` |
-| `Permissions-Policy` | `camera=(), microphone=(), geolocation=()` |
-| `Content-Security-Policy` | Written with the Frontend Engineer once asset origins are known. Report-only first |
-
-**The apex already sends `Strict-Transport-Security: max-age=31536000` with no
-`includeSubDomains`.** Do not add `includeSubDomains` at the apex before cutover:
-today it would cover `staging`, which is fine, but it is a year-long commitment made
-from a host we do not control. Add it in our nginx config on the day we own the apex.
-
-**No `preload` until after the apex cutover.** Preload is a submission to a list
-baked into browsers and it is slow and painful to reverse; it commits every
-subdomain of `togetherweown.com`, including whatever WordPress still owns, to
-HTTPS-only forever. Revisit it once the apex is ours and stable for a month.
-
----
-
-## Cookies and sessions
-
-`SESSION_DOMAIN` stays **null** — host-scoped. It must never be set to
-`.togetherweown.com`, which would hand our session cookie to WordPress on every page
-view of the store. `SESSION_SECURE_COOKIE=true`, `SESSION_SAME_SITE=lax`.
-
-Dropping the intermediate subdomain means **nobody gets logged out at cutover**,
-because nobody was ever logged in anywhere else. Members sign in for the first time
-on the apex. That is one of the reasons to skip the subdomain, and it is the reason
-there is no "announce the logout" line in the checklist below.
-
----
-
-## The cutover checklist
-
-The apex swap is TWO-61's to schedule. This is what it costs when it comes, and
-keeping this list short is a standing obligation on every PR.
-
-**Before the DNS change — founder actions, we have no portal access:**
-
-1. **Add** `https://togetherweown.com/auth/discord/callback` as a redirect URI on the
-   site's Discord application. *Add*, do not swap: swapping is a login outage.
-2. Confirm what owns `client_id=456483983870394368` (the WordPress `/discord` flow)
-   and whether `/discord` on the new site needs to be allowlisted on it too.
-
-**The change itself:**
-
-3. *(us)* `APP_URL` on the production box → `https://togetherweown.com`.
-4. *(us)* Issue the apex certificate on the origin **first**, while DNS still points
-   at WordPress — DNS-01, or Cloudflare stays proxied and the origin cert is validated
-   ahead of the swap. Do not find out about a certificate problem after the cutover.
-5. *(us, with the token — this is the one moment the standing rule above is lifted,
-   and only because TWO-61 scheduled it)* Apex `A` record → `<PROD_IP>`, `www`
-   alongside it. **This is the swap.**
-6. **(founder — Rules, the token cannot do this)** Retarget the `two.gg` redirect
-   rule to the apex.
-7. *(us)* Verify `/discord` in a browser before announcing anything. It is the funnel.
-   **"It returned a 302" is not the bar.** Do a real join: a browser that is not
-   already signed in to Discord, on an account that is not already in the server.
-   A join that works for a signed-in admin proves almost nothing — the admin is
-   already a member, so every interesting step is skipped. Recorded on TOG-77 by
-   whoever measured the WordPress flow, and it is the one part of `/discord` that
-   nothing in this repository can cover: `tests/Feature/DiscordFunnelTest.php`
-   pins what we answer with, and no test we own can prove Discord still honours
-   the code on the other end.
-   *Cheap standing check that needs no account and no browser, good any day of
-   the week — a dead code answers `404`:*
-   `curl -s "https://discord.com/api/v10/invites/<code>?with_counts=true"`
-
-   Everything on this list that a machine can decide now lives in
-   **`ci/cutover-check.mjs`** (TOG-85), so cutover night is the same check every
-   time rather than a tired reading of a checklist. Run it on both sides of the
-   swap — the expectations invert at the flip:
-
-   ```
-   node ci/cutover-check.mjs --phase before --app https://<new app origin>
-   node ci/cutover-check.mjs --phase after
-   ```
-
-   It exits non-zero on any failure and prints what it *cannot* see: the Discord
-   credential rotation and the WordPress.com plan state are console-only. It does
-   not replace the real join above — it replaces the parts of the list that were
-   being eyeballed.
-8. *(us)* Expect new arrivals to land **`pending`** under Rules Screening. A join is
-   not yet an active member, and the funnel has to count the two separately or the
-   conversion rate reads high and means nothing.
-
-**Schedule the founder into the window, do not just notify them.** Step 6 is the only
-step we cannot perform, it sits between the swap and the verification, and until it
-happens `two.gg` is still pointing at whatever the old rule said. A cutover where the
-founder is asleep is a cutover with a half-moved funnel.
-
-**Rollback** is putting the old apex `A` record back — which, with the token, we can
-now do ourselves in under a minute without waking anyone. Keep the WordPress.com
-subscription paid for two weeks after.
-
-**What keeps that list this short:** no hostname is written down anywhere in this
-codebase. `APP_URL` drives every absolute URL, read only through `env()` in
-`config/app.php`, `config/mail.php`, `config/filesystems.php` and the Discord
-redirect URI. That is enforced, not hoped for —
-`tests/Unit/NoHardcodedHostnamesTest.php` fails the build if `togetherweown.com`,
-`togetherweown.net` or `two.gg` appears in `app/`, `config/`, `routes/` or
-`resources/views/`. If you need an exception, add it to the allowlist in that file
-with a reason.
-
----
-
-## Who can actually change these records
-
-The zones are in **Cloudflare** under the founder's account.
-
-**Approved:** a Cloudflare API token scoped to `Zone.DNS: Edit` on **both**
-`togetherweown.com` and `two.gg` — no account access, no billing, no ability to touch
-origin settings. It arrives through the secrets channel as
-`cloudflare_dns_token_two_gg`, bound to this agent as `CLOUDFLARE_DNS_TOKEN`. *(The
-secret name says `two_gg` for historical reasons — an earlier revision scoped it to
-that zone only. It covers both. Not worth a rename; worth knowing when you go
-looking.)* It **expires after 90 days** — whoever notices a `403` from the Cloudflare
-API first should suspect expiry before suspecting the record.
-
-### What the token can and cannot do
-
-Cloudflare scopes tokens **by zone, not by record type**, and DNS and Rules are
-different products. That produces a split worth internalising before you touch
-anything:
-
-| Change | Who | Why |
-|---|---|---|
-| `two.gg` SPF / DMARC / DKIM TXT records | **Us, with the token** | DNS records |
-| **Generating** a Workspace DKIM key | **Nobody here — Google admin console** | Not DNS at all. No agent holds Workspace super-admin and none should; see TOG-1154 |
-| `_dmarc.togetherweown.com` → add `rua` | **Us, with the token** | DNS record |
-| `staging` `CNAME` record **delete** | ~~Us, with the token~~ — **done by the operator, 5 Sep 2026 20:20Z** | DNS record — TOG-1156/TOG-1160, did not wait on TWO-37 |
-| `staging` `A` record recreate | **Us, with the token** | DNS record, once TWO-37 lands an IP |
-| `two.gg` catch-all 302 → 301 | **Founder, in Cloudflare → Rules** | Redirect Rule, not DNS |
-| `two.gg/join` → `/discord` retarget | **Founder, in Cloudflare → Rules** | Redirect Rule, not DNS |
-| Apex `A` record | **Nobody, until TWO-61** | See the standing rule below |
-
-The evidence that the `two.gg` redirects are edge Rules and not records: the response
-carries `server: cloudflare` and a `cf-ray` and **no origin headers at all** — no
-`x-powered-by`, no WordPress fingerprint. There is nothing behind that hostname to
-serve a redirect, so Cloudflare is generating it.
-
-**One nuance that cuts the other way, and it is ours to have caught:** `two.gg` *does*
-have DNS records — proxied `A` (`104.21.13.159`, `172.67.156.192`) and `AAAA`. The
-Redirect Rule only fires because the hostname resolves to Cloudflare's edge in the
-first place. So the token cannot change *where* `two.gg` sends people, but it can
-absolutely stop it sending them anywhere, by breaking the record the rule hangs off.
-The token is not harmless on `two.gg` either. Which is the whole reason for:
-
-### Standing rule: the funnel does not move casually
-
-**The apex `A` record, the `two.gg` `A`/`AAAA` records, and anything else serving
-`/discord` change only as part of the TWO-61 cutover — never as a side effect of
-routine DNS work.**
-
-`togetherweown.com/discord` is a live Discord OAuth join flow and currently **the only
-web→Discord conversion path TWO has**. `two.gg/discord` is the spoken shortcut into
-it. Between them they are the entire funnel this whole project exists to grow. A
-staging repoint or a DMARC edit must never be the thing that takes them dark.
-
-This is a team rule, not a permission boundary — the token can reach these records and
-we are trusting ourselves not to. Worst case if we get it wrong is a coming-soon page
-and a dark join button for the minutes it takes to put the record back, which is
-survivable but is not something to discover on a Friday.
-
-**Fallback if the token does not arrive or has expired:** the founder applies the
-tables above by hand and we verify each one. That is why every record in this document
-is written out in full, with its exact value. Keep it that way.
+This is deployment guidance, not a live inventory. Keep the actual zone names,
+origin addresses, OAuth application IDs, provider account details and rollback
+record values in the deployment operator's access-controlled runbook. Historical
+measurements are not instructions to change today's DNS.
+
+All names below are examples. This document changes no records, credentials,
+application configuration or deployment permissions.
+
+## Application configuration
+
+- Set `APP_URL` to the canonical HTTPS URL for the deployment, for example
+  `https://community.example.com`. Do not hardcode a deployment hostname in app
+  code. `tests/Unit/NoHardcodedHostnamesTest.php` enforces the project's hostname
+  boundary. Outside local/testing, Laravel trusts only that exact hostname (not
+  arbitrary subdomains), rejecting untrusted effective `Host`/`X-Forwarded-Host`
+  values with HTTP 400 before URL generation. Health probes must use that host;
+  alternate-domain redirects belong at the edge, not in the application.
+  `tests/Feature/TrustedHostsTest.php` exercises production/staging behavior,
+  canonical links, OAuth callbacks and the uncacheable `/discord` redirect.
+  Authentication is Discord-only: no password-reset route or reset email exists.
+- Register the deployment's `/auth/discord/callback` URL on its Discord OAuth
+  application **before** moving traffic. Add the callback first; do not remove a
+  working callback during preparation. Keep application IDs and secrets in the
+  environment, not in this document.
+- Keep `SESSION_DOMAIN` null (host-scoped), `SESSION_SECURE_COOKIE=true` and
+  `SESSION_SAME_SITE=lax`. Sharing a cookie with unrelated subdomains broadens its
+  exposure.
+- Keep `DISCORD_MODERATOR_ROLE_IDS` in deployment configuration. Public examples
+  use synthetic snowflakes; never copy them into a real moderator allowlist.
+
+## Staging
+
+Provision a working origin and access controls before publishing a staging DNS
+record. A missing provider target or an upstream error page is **not** an access
+control. Verify both IPv4 and IPv6; an overlooked `AAAA` record can keep an origin
+reachable after its `A` record is removed.
+
+Use authentication or an equivalent explicit access gate, an
+`X-Robots-Tag: noindex, nofollow` response header and a robots policy that disallows
+indexing. Browser tests must exercise the application rather than a proxy's bot
+challenge. Record the chosen proxy mode and how test clients authenticate in the
+private deployment runbook; do not solve testing by exposing staging publicly.
+
+Staging needs a valid TLS certificate and renewal. A proxied DNS answer does not
+reveal the underlying record type or origin: read the authoritative provider
+configuration before documenting a rollback.
+
+## Canonical domain and redirects
+
+Choose one canonical HTTPS hostname. Redirect alternate names to it while
+preserving paths, and verify the `/discord` and `/join` entry points explicitly.
+An HTTP 200 can be a soft 404; inspect the page or redirect destination as well as
+the status code. DNS records and provider redirect rules are separate controls,
+and permission to edit one does not imply permission to edit the other.
+
+Preserve the community's join route throughout a cutover. The Laravel route
+contract is covered by `tests/Feature/DiscordFunnelTest.php`; that does not prove
+a provider-side redirect, invite or OAuth callback works. Verify the complete
+flow in a browser using a test account that is not already a member.
+
+## Mail and HTTPS policy
+
+Moving the web origin does not establish who sends mail for a domain. Inventory
+legitimate senders before changing SPF, DKIM or DMARC; do not remove an existing
+sender merely because the web server moved.
+
+- Keep SPF within the RFC 7208 DNS-lookup budget.
+- Generate DKIM through the mail provider. An empty `p=` revokes a key; a DNS
+  record alone does not prove messages are being signed. Verify received-message
+  authentication results too.
+- Stage DMARC enforcement using actual reports. Consider forwarded mail, which
+  may lose SPF alignment and depend on a valid DKIM signature.
+- Validate TLS at the origin as well as at any reverse proxy. Do not use a proxy
+  mode that sends sensitive application traffic to the origin over HTTP.
+- Add HSTS `includeSubDomains` only after every covered subdomain supports HTTPS.
+  Preload is a separate, long-lived commitment, not part of routine DNS work.
+
+## Cutover checklist
+
+Publication of this repository does **not** authorize a deployment or DNS change.
+Use the approved release process in [CI and deployment](ci.md).
+
+Before an authorized cutover:
+
+1. Re-read the current provider configuration. Privately record the exact old
+   record types, values, proxy modes and TTLs, plus the tested rollback procedure.
+2. Verify the new origin, TLS certificate, access policy, application environment
+   and OAuth callback registrations without moving production traffic.
+3. Verify provider redirects and the join flow. Coordinate with the operator
+   responsible for each control; an application release cannot change a provider
+   redirect rule by itself.
+4. Make only the approved record changes. Verify both address families, canonical
+   redirects, `/discord`, `/join`, authentication and application health.
+5. Keep the prior origin available for the agreed rollback window. Roll back to
+   the recorded configuration if the release acceptance checks fail.
+
+The repository includes `ci/cutover-check.mjs`, `ci/staging-exposure-check.mjs`,
+`ci/mail-auth-check.mjs` and `ci/live-seo-probe.mjs`. Read each tool's target and
+options before use: some are project-specific probes, not generic DNS clients.
+Their self-tests can validate probe behavior without changing live records. A
+probe result is evidence for the target and time measured, not permission to
+change infrastructure.

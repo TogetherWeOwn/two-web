@@ -340,6 +340,10 @@ body {
 
 .hallmark-featured img {
     width: 100%;
+    /* Moderator URLs carry no dimensions, so reserve a 16:9 box (no CLS)
+       and cover it — the same crop the taste concept uses. */
+    aspect-ratio: 16 / 9;
+    object-fit: cover;
     height: auto;
     border: var(--rule-hair) solid var(--color-rule);
 }
@@ -526,6 +530,14 @@ body {
     .hallmark-nav__cta,
     .hallmark-join,
     .hallmark-link {
-        transition-duration: 150ms;
+        transition: none;
+    }
+
+    .hallmark-nav__cta:hover,
+    .hallmark-join:hover,
+    .hallmark-nav__cta:active,
+    .hallmark-join:active,
+    .hallmark-link:active {
+        transform: none;
     }
 }

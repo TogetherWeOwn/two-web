@@ -5,14 +5,20 @@ namespace App\Providers;
 use App\Models\Profile;
 use App\Models\User;
 use App\Services\Bot\InternalActionClient;
+use App\Services\Paperclip\RestartCardClient;
 use App\Support\Counts\CountsReader;
 use App\Support\Counts\CountsSource;
+use App\Support\Events\DiscordEventsReader;
+use App\Support\Events\DiscordEventsSource;
 use App\Support\MemberDataAccess\AccessRecorder;
 use App\Support\Profiles\MemberStatsReader;
 use App\Support\Profiles\MemberStatsSource;
 use Illuminate\Contracts\Foundation\Application;
+use Illuminate\Queue\Events\JobFailed;
 use Illuminate\Support\Facades\Event;
 use Illuminate\Support\Facades\Gate;
+use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\Queue;
 use Illuminate\Support\ServiceProvider;
 use Livewire\Livewire;
 use SocialiteProviders\Discord\DiscordExtendSocialite;
@@ -41,6 +47,13 @@ class AppServiceProvider extends ServiceProvider
         // take the member-owned half of the profile down with it.
         $this->app->bind(MemberStatsSource::class, MemberStatsReader::class);
 
+        // The calendar's Discord-native rows (TOG-5168): one cached read of
+        // `web_v1.upcoming_events`, merged into the local rows by the
+        // component. Bound, not shared, for the same reason as the counts
+        // reader — the cache inside already deduplicates, and a singleton
+        // would only keep a stale bot connection alive on a worker.
+        $this->app->bind(DiscordEventsSource::class, DiscordEventsReader::class);
+
         // Bound rather than shared: it reads config at resolve time and holds no
         // state between calls, so a singleton would only buy the chance of a
         // stale secret surviving a config change.
@@ -55,6 +68,24 @@ class AppServiceProvider extends ServiceProvider
             secret: $this->stringConfig('services.bot.secret'),
             keyId: $this->stringConfig('services.bot.key_id'),
             timeoutSeconds: (int) config('services.bot.timeout', 5),
+        ));
+
+        // The board-write seam for cold-setting restart cards (TOG-3537). Bound,
+        // not shared, for the same reason as the bot client: it reads config at
+        // resolve time and holds no state, so a singleton would only risk a stale
+        // token surviving a config change. Every value is passed in, including
+        // the missing ones — the client decides that a blank value is a
+        // PaperclipNotConfiguredException, which is what makes the filer fail
+        // closed rather than failing at container resolution.
+        $this->app->bind(RestartCardClient::class, fn (Application $app): RestartCardClient => new RestartCardClient(
+            url: $this->stringConfig('services.paperclip.url'),
+            token: $this->stringConfig('services.paperclip.token'),
+            companyId: $this->stringConfig('services.paperclip.company_id'),
+            operatorLabelId: $this->stringConfig('services.paperclip.operator_label_id'),
+            parentIssueId: $this->stringConfig('services.paperclip.parent_issue_id'),
+            restartAssigneeAgentId: $this->stringConfig('services.paperclip.restart_assignee_agent_id'),
+            botEnvironment: $this->stringConfig('services.paperclip.bot_environment'),
+            timeoutSeconds: (int) config('services.paperclip.timeout', 5),
         ));
     }
 
@@ -117,7 +148,7 @@ class AppServiceProvider extends ServiceProvider
         // Discord roles on every login — see DiscordLoginController — so removing
         // somebody's moderator role in Discord removes it here at their next
         // sign-in. There is no way to grant it from inside the website.
-        Gate::define('access-admin', fn (User $user): bool => $user->is_moderator);
+        Gate::define('access-admin', fn (User $user): bool => $user->is_moderator === true);
 
         // Reading member data through the admin panel gets recorded, and the
         // recording hangs off model hydration rather than off each screen
@@ -132,5 +163,34 @@ class AppServiceProvider extends ServiceProvider
                 fn (User|Profile $subject) => app(AccessRecorder::class)->observe($subject),
             );
         }
+
+        // A failed job is the only queue outcome nobody watches by habit. A
+        // stuck or dead worker is visible in `queue:check-depth` (pending grows,
+        // reserved sticks), but a job that fails terminally — a bot refusal, a
+        // malformed payload — just sits in `failed_jobs` while the member's
+        // RSVP reads "pending" forever. The worker already owns recovery (the
+        // reconcile pass re-dispatches); what is missing is the surfacing, so
+        // this listener is the alert half of TOG-6948: one critical log line per
+        // failed job, with the class, queue and exception message as structured
+        // context, so whatever tails the log on the box sees it without having
+        // to remember to query the table. `failing` fires for every driver —
+        // database, sync, null — and for jobs that call `fail()` themselves as
+        // well as jobs the worker gives up on, so the dead-letter path and the
+        // exhausted-retries path both land here. `job` is the class via
+        // resolveQueuedJobClass, not resolveName: a job with a displayName
+        // (like the poison probe's marker) would otherwise log the instance
+        // label where a greppable class belongs. The instance label still goes
+        // out as `display`, so the alert carries both what broke and which one.
+        Queue::failing(function (JobFailed $event): void {
+            Log::critical('Queue job failed.', [
+                'connection' => $event->connectionName,
+                'queue' => $event->job->getQueue(),
+                'job' => $event->job->resolveQueuedJobClass(),
+                'display' => $event->job->resolveName(),
+                'attempts' => $event->job->attempts(),
+                'exception' => get_class($event->exception),
+                'message' => $event->exception->getMessage(),
+            ]);
+        });
     }
 }

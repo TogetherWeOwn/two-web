@@ -87,12 +87,15 @@ test('a member can sign out again', function () {
 
 test('cancelling on the Discord consent screen gives a sentence, not a stack trace', function () {
     // A real browser hitting the real callback with the real thing Discord sends
-    // when a member presses Cancel. No stubbing involved.
+    // when a member presses Cancel. No stubbing involved. The recovery page
+    // renders in place (200), so the path stays on the callback.
     $this->browse(function (Browser $browser) {
         $browser->visit('/auth/discord/callback?error=access_denied&error_description=The+user+denied+access')
-            ->assertPathIs('/')
-            ->assertVisible('[data-testid="auth-error"]')
-            ->assertSee(__('auth-discord.denied'))
-            ->assertAttribute('[data-testid="auth-error"]', 'role', 'alert');
+            ->assertPathIs('/auth/discord/callback')
+            ->assertVisible('[data-testid="oauth-recovery"]')
+            ->assertSee(__('auth-discord.recovery_denied'))
+            ->assertAttribute('[data-testid="oauth-recovery"]', 'role', 'alert')
+            ->assertVisible('[data-testid="oauth-recovery-retry"]')
+            ->assertAttribute('[data-testid="oauth-recovery-retry"]', 'href', url('/auth/discord/redirect'));
     });
 });

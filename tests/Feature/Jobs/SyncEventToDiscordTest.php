@@ -207,6 +207,89 @@ it('does not tell discord about a draft, because a draft has never been publishe
 });
 
 // ---------------------------------------------------------------------------
+// Cancelling. A cancelled event must leave Discord through event.cancel —
+// sending it through event.upsert re-receives a live event (TOG-5863).
+// ---------------------------------------------------------------------------
+
+function jobBotCancelled(string $eventId = '1234567890'): array
+{
+    return ['ok' => true, 'result' => ['outcome' => 'cancelled', 'event_id' => $eventId], 'request_id' => '01JCANCEL0123456789'];
+}
+
+it('cancels rather than upserts when the event was cancelled', function () {
+    Http::fake([JOB_BOT_ENDPOINT => Http::response(jobBotCancelled())]);
+
+    $event = syncableEvent(['status' => EventStatus::Cancelled, 'discord_event_id' => '1234567890']);
+
+    (new SyncEventToDiscord($event->event_key))->handle(app(InternalActionClient::class));
+
+    Http::assertSent(function ($request) use ($event) {
+        $body = json_decode($request->body(), true);
+
+        return $body['action'] === 'event.cancel'
+            && ($body['event_key'] ?? null) === $event->event_key
+            && ! array_key_exists('name', $body);
+    });
+
+    // One call, and it was the cancel — no upsert alongside it.
+    $sent = Http::recorded();
+    expect($sent)->toHaveCount(1)
+        ->and(json_decode($sent[0][0]->body(), true)['action'])->toBe('event.cancel');
+});
+
+it('sends only the event key on a cancel, so the bot cannot mistake it for a live event', function () {
+    Http::fake([JOB_BOT_ENDPOINT => Http::response(jobBotCancelled())]);
+
+    $event = syncableEvent(['status' => EventStatus::Cancelled, 'discord_event_id' => '1234567890']);
+
+    (new SyncEventToDiscord($event->event_key))->handle(app(InternalActionClient::class));
+
+    Http::assertSent(fn ($request) => $request->body() === '{"action":"event.cancel","event_key":"'.$event->event_key.'"}');
+});
+
+it('does not call the bot when a cancelled event was never mirrored', function () {
+    Http::fake();
+
+    // Publish-then-cancel inside the debounce window: the single surviving job
+    // finds a cancelled row Discord never saw. The bot only knows mapped keys,
+    // so a cancel here earns a terminal action_not_allowed for an end state
+    // that already holds.
+    $event = syncableEvent(['status' => EventStatus::Cancelled, 'discord_event_id' => null]);
+    $rsvp = Rsvp::factory()->create(['event_id' => $event->id, 'synced_to_discord_at' => null]);
+
+    (new SyncEventToDiscord($event->event_key))->handle(app(InternalActionClient::class));
+
+    Http::assertNothingSent();
+
+    // …but the answers must not read "Syncing to Discord" forever under a
+    // "Cancelled" banner: there is no mirror to disagree with us.
+    expect($rsvp->fresh()->synced_to_discord_at)->not->toBeNull();
+});
+
+it('releases a cancelled event when the bot cannot be reached', function () {
+    Http::fake(fn () => throw new ConnectionException('Connection refused'));
+
+    $event = syncableEvent(['status' => EventStatus::Cancelled, 'discord_event_id' => '1234567890']);
+
+    $job = (new SyncEventToDiscord($event->event_key))->withFakeQueueInteractions();
+    $job->handle(app(InternalActionClient::class));
+
+    // Same as the upsert path: the row is committed and correct, so wait.
+    $job->assertReleased()->assertNotFailed();
+});
+
+it('fails a cancelled event on a terminal refusal, naming the cancel action', function () {
+    Http::fake([JOB_BOT_ENDPOINT => Http::response(botRefusal('action_not_allowed', false), 403)]);
+
+    $event = syncableEvent(['status' => EventStatus::Cancelled, 'discord_event_id' => '1234567890']);
+
+    $job = (new SyncEventToDiscord($event->event_key))->withFakeQueueInteractions();
+    $job->handle(app(InternalActionClient::class));
+
+    $job->assertFailed()->assertNotReleased();
+});
+
+// ---------------------------------------------------------------------------
 // The idempotency key. This is the one that produces duplicate Discord events.
 // ---------------------------------------------------------------------------
 

@@ -61,8 +61,7 @@ Then start everything with one command:
 composer dev                  # web server, queue worker, log tail, Vite
 ```
 
-Open <http://localhost:8000>. You should see a placeholder page saying the scaffold
-is running. <http://localhost:8000/up> is the health check.
+Open <http://localhost:8000>. You should see the TWO landing page — the Lobby Ledger hero with a Join Discord button, live member counts, rank progression, and the next upcoming events. <http://localhost:8000/up> is the health check.
 
 ### Check it actually works
 
@@ -73,6 +72,22 @@ composer check                # formatting, static analysis, and the test suite
 All three must be green before you open a pull request. If `composer check` is red
 on a fresh clone, that is a bug in this README or in the scaffold — say so, do not
 work around it.
+
+### Smoke-check staging after a deploy
+
+```bash
+bin/smoke-staging.sh https://staging.togetherweown.com
+```
+
+Asserts `/up` → 200, `/discord` → 302 to a Discord invite, `/` → 200, and
+`/events.json` → 302 to the Discord login handoff for guests (that route lives
+inside the `auth` group, so an unauthenticated 200 is impossible by design).
+Prints PASS/FAIL per check; exit 0 when all pass. Staging sits behind
+Cloudflare Access — export `CF_ACCESS_CLIENT_ID` and `CF_ACCESS_CLIENT_SECRET`
+(a service token, never committed) so the edge lets the probe through, and pass
+`--cookie 'two_web_session=...'` with a real staging session to also assert the
+authenticated `/events.json` → 200. `bin/smoke-staging.sh --selftest` runs the
+checks against a local stub with no network.
 
 ---
 
@@ -214,6 +229,13 @@ to the last cached value. Anything that needs a Discord action is queued, retrie
 with backoff, and tells the member plainly what state it is in. `rsvps` carries a
 `synced_to_discord_at` column so a page can tell the truth about whether Discord
 knows yet. QA tests this path deliberately, so build for it.
+
+### A demo calendar for staging reviewers
+
+`php artisan db:seed --class=Database\Seeders\StagingCalendarSeeder` builds a
+fixed 50-event calendar (30 published incl. 4 full, 6 drafts, 5 cancelled,
+9 past, across 6 timezones). Re-running updates the same rows, never duplicates;
+it throws in production. See `database/seeders/StagingCalendarSeeder.php`.
 
 ---
 

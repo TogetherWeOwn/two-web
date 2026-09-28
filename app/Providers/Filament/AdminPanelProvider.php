@@ -2,6 +2,8 @@
 
 namespace App\Providers\Filament;
 
+use App\Filament\Widgets\JoinFunnelStats;
+use App\Http\Middleware\AddContentSecurityPolicy;
 use App\Http\Middleware\RecordMemberDataAccess;
 use Filament\FontProviders\LocalFontProvider;
 use Filament\Http\Middleware\Authenticate;
@@ -97,6 +99,7 @@ class AdminPanelProvider extends PanelProvider
             ])
             ->widgets([
                 AccountWidget::class,
+                JoinFunnelStats::class,
             ])
             ->middleware([
                 EncryptCookies::class,
@@ -108,6 +111,9 @@ class AdminPanelProvider extends PanelProvider
                 SubstituteBindings::class,
                 DisableBladeIconComponents::class,
                 DispatchServingFilamentEvent::class,
+                // Same CSP as the public `web` stack (TOG-6770), which this
+                // panel does not use — without it /admin pages ship no policy.
+                AddContentSecurityPolicy::class,
             ])
             ->authMiddleware([
                 Authenticate::class,
