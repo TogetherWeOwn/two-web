@@ -7,6 +7,7 @@ use App\Models\Event;
 use App\Models\Rsvp;
 use App\Models\User;
 use App\Support\Events\DiscordEventsSource;
+use Carbon\CarbonImmutable;
 use Livewire\Livewire;
 
 /**
@@ -655,15 +656,26 @@ it('hides the skeleton and shows the content up front, never both', function () 
 });
 
 it('disables the action controls while their answer is in flight', function () {
-    $html = Livewire::test(EventsCalendar::class)->html();
+    // Each control is asserted in the state that renders it: the view toggle
+    // always, the month steps in the calendar, "See past events" in the
+    // no-upcoming state, and the clear-search buttons only while searching.
+    expect(Livewire::test(EventsCalendar::class)->html())
+        ->toMatch('/wire:click="setView\(\'list\'\)"\s+wire:loading\.attr="disabled"\s+wire:target="setView"/')
+        ->toMatch('/wire:click="setView\(\'calendar\'\)"\s+wire:loading\.attr="disabled"\s+wire:target="setView"/');
 
-    expect($html)
-        ->toContain('wire:loading.attr="disabled"')
-        ->toContain('wire:target="setView"')
-        ->toContain('wire:target="previousMonth"')
-        ->toContain('wire:target="nextMonth"')
-        ->toContain('wire:target="showPast"')
-        ->toContain('wire:target="clearSearch"');
+    expect(Livewire::test(EventsCalendar::class)->call('setView', 'calendar')->html())
+        ->toMatch('/wire:click="previousMonth"\s+wire:loading\.attr="disabled"\s+wire:target="previousMonth"/')
+        ->toMatch('/wire:click="nextMonth"\s+wire:loading\.attr="disabled"\s+wire:target="nextMonth"/');
+
+    pastEvent();
+
+    expect(Livewire::test(EventsCalendar::class)->html())
+        ->toMatch('/wire:click="showPast"\s+wire:loading\.attr="disabled"\s+wire:target="showPast"/');
+
+    expect(Livewire::test(EventsCalendar::class)->set('search', 'no such event')->html())
+        ->toContain('data-testid="events-search-clear"')
+        ->toContain('data-testid="events-search-clear-empty"')
+        ->toMatch('/wire:click="clearSearch"\s+wire:loading\.attr="disabled"\s+wire:target="clearSearch"/');
 });
 
 it('still renders the page after each loading-targeted action', function () {
@@ -715,13 +727,38 @@ it('announces the past-events reveal, and stays silent until asked', function ()
         ->assertSee('Showing past events.');
 });
 
-it('announces month steps through a polite live month label', function () {
-    $html = Livewire::test(EventsCalendar::class)
-        ->call('setView', 'calendar')
-        ->html();
+it('announces month steps through a polite month status', function () {
+    $status = fn ($component) => preg_match(
+        '/data-testid="calendar-month-status">([^<]*)<\/p>/', $component->html(), $m
+    ) ? $m[1] : null;
+    $label = fn ($component) => CarbonImmutable::createFromFormat('Y-m-d', $component->get('month').'-01')
+        ->format('F Y');
 
-    expect($html)->toContain('aria-live="polite"')
-        ->toContain('data-testid="calendar-month"');
+    $component = Livewire::test(EventsCalendar::class)->call('setView', 'calendar');
+    expect($status($component))->toBe($label($component));
+
+    $component->call('nextMonth');
+    expect($status($component))->toBe($label($component));
+
+    // The list view has no month to announce.
+    expect(Livewire::test(EventsCalendar::class)->html())
+        ->toMatch('/data-testid="calendar-month-status"><\/p>/');
+});
+
+it('keeps the live regions outside the wrapper hidden mid-request', function () {
+    // TOG-5416: `events-content` goes display:none while a request is in
+    // flight. A live region inside it is hidden, or swapped in hidden, and is
+    // not reliably announced, so every region sits before the wrapper opens.
+    $html = Livewire::test(EventsCalendar::class)->call('setView', 'calendar')->html();
+    $wrapper = strpos($html, 'data-testid="events-content"');
+
+    foreach (['events-view-status', 'events-past-status', 'calendar-month-status'] as $region) {
+        $at = strpos($html, 'data-testid="'.$region.'"');
+        expect($at)->not->toBeFalse()->toBeLessThan($wrapper);
+    }
+
+    // The visible month label inside the wrapper is no longer the live one.
+    expect($html)->not->toMatch('/aria-live="polite"\s+data-testid="calendar-month"/');
 });
 
 /* ---------------------------------------------------------------------------

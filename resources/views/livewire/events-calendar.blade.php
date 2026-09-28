@@ -160,6 +160,24 @@
          flash on every debounced keystroke is worse than the wait, and the
          aria-live search status above already names that change.
          ------------------------------------------------------------------ --}}
+    {{-- ------------------------------------------------------------------
+         Live regions (TOG-7332) for changes inside the content wrapper below.
+         They sit OUTSIDE it on purpose (TOG-5416): the wrapper goes
+         `display: none` mid-request, and a region that is hidden, or swapped in
+         while it was hidden, is not reliably announced. Always rendered, so
+         each region exists before its text changes.
+
+         Past drawer: empty until asked, so initial load stays silent.
+         $showingPast, not $showPast: a search also reveals past matches, and
+         that change is already named by the search status above.
+
+         Month: the visible label in the calendar bar is not live; this mirror
+         is, so a screen reader user stepping months is not moving blind
+         through the grid.
+         ------------------------------------------------------------------ --}}
+    <p class="sr-only" role="status" data-testid="events-past-status">@if ($view === 'list' && $showingPast && $past->isNotEmpty())Showing past events.@endif</p>
+    <p class="sr-only" role="status" data-testid="calendar-month-status">@if ($view === 'calendar'){{ $monthLabel }}@endif</p>
+
     <div wire:loading.flex
          wire:target="setView, previousMonth, nextMonth, showPast, clearSearch, retryLoad"
          role="status"
@@ -307,12 +325,6 @@
             </ul>
         @endif
 
-        {{-- TOG-7332: the "See past events" drawer reveals the list below
-             without reloading. role="status" announces the reveal politely;
-             empty until asked so initial load stays silent. $showingPast, not
-             $showPast: a search also reveals past matches, and that change is
-             already named by the search status above. --}}
-        <p class="sr-only" role="status" data-testid="events-past-status">@if ($showingPast && $past->isNotEmpty())Showing past events.@endif</p>
 
     {{-- ------------------------------------------------------------------
          Calendar view. A real table, because a month grid is tabular data and
@@ -337,10 +349,9 @@
                 </svg>
             </button>
 
-            {{-- aria-live: the month changes without the page reloading, so the
-                 change has to be announced or a screen reader user is moving
-                 blind through the grid. --}}
-            <p class="text-lg font-semibold text-ink" aria-live="polite" data-testid="calendar-month">
+            {{-- Announced by `calendar-month-status` above the content wrapper
+                 (TOG-5416), not here: this label is hidden mid-request. --}}
+            <p class="text-lg font-semibold text-ink" data-testid="calendar-month">
                 {{ $monthLabel }}
             </p>
 
