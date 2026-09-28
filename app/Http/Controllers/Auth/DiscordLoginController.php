@@ -116,7 +116,65 @@ class DiscordLoginController
         // way in; a remember cookie adds a second one that cannot re-read roles.
         Auth::login($user);
 
-        return redirect()->intended(route('profile'));
+        // Never intended() blind: the framework replays the session's
+        // `url.intended` slot verbatim — UrlGenerator::to() passes any absolute
+        // URL through untouched — so a planted slot bounces a just-logged-in
+        // member to someone else's site. The slot is ours to read and write
+        // here, but it is writable by anything sharing the session, so the seam
+        // defends itself: same-origin replays, everything else the profile.
+        return $this->safeIntendedRedirect(route('profile'));
+    }
+
+    /**
+     * The session's intended URL when it points at us, the fallback otherwise.
+     *
+     * Pulls, never peeks: a hostile value must not survive to be replayed by a
+     * later redirect once we have refused it here.
+     */
+    private function safeIntendedRedirect(string $fallback): RedirectResponse
+    {
+        $intended = session()->pull('url.intended');
+
+        if (is_string($intended) && $intended !== '' && $this->isLocalUrl($intended)) {
+            return redirect()->to($intended);
+        }
+
+        return redirect()->to($fallback);
+    }
+
+    /**
+     * Same-origin, nothing else. A relative reference can only resolve against
+     * us; an absolute URL must carry our exact host — not a suffix of it, so
+     * `localhost.evil.example` fails — over http(s), with our port when one is
+     * named, and with no userinfo smuggling a second host past the check.
+     * Anything parse_url cannot split, or any scheme that is not navigation
+     * (javascript:, data:), fails closed.
+     */
+    private function isLocalUrl(string $url): bool
+    {
+        $parts = parse_url($url);
+
+        if (! is_array($parts)) {
+            return false;
+        }
+
+        if (! isset($parts['host']) || $parts['host'] === '') {
+            return ! isset($parts['scheme']) || $parts['scheme'] === '';
+        }
+
+        if (isset($parts['user']) || isset($parts['pass'])) {
+            return false;
+        }
+
+        if (strtolower($parts['host']) !== strtolower((string) request()->getHost())) {
+            return false;
+        }
+
+        if (isset($parts['port']) && $parts['port'] !== request()->getPort()) {
+            return false;
+        }
+
+        return ! isset($parts['scheme']) || in_array(strtolower($parts['scheme']), ['http', 'https'], true);
     }
 
     public function logout(Request $request): RedirectResponse
