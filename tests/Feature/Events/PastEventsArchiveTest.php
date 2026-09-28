@@ -163,6 +163,40 @@ it('says what the empty archive means instead of rendering a bare list', functio
         ->assertSee('See upcoming events');
 });
 
+it('names the miss on an out-of-range page instead of claiming the archive is empty', function () {
+    // TOG-7989: past `lastPage` Laravel returns an empty collection, which
+    // used to fall into the first-visit empty state — a stale/bookmarked deep
+    // link was told no events ever happened on a non-empty archive.
+    foreach (range(1, 5) as $i) {
+        archivePastEvent([
+            'title' => "Night {$i}",
+            'starts_at' => now()->subDays($i),
+            'ends_at' => now()->subDays($i)->addHours(2),
+        ]);
+    }
+
+    $this->get(route('events.past').'?page=999')
+        ->assertOk()
+        ->assertSee('data-testid="past-events-out-of-range"', escape: false)
+        ->assertSee('That page doesn')
+        ->assertDontSee('data-testid="past-events-empty"', escape: false)
+        ->assertDontSee('data-testid="past-events-list"', escape: false);
+
+    Livewire::test(PastEvents::class)
+        ->call('gotoPage', 999)
+        ->assertSeeHtml('data-testid="past-events-out-of-range"')
+        ->assertDontSeeHtml('data-testid="past-events-empty"');
+});
+
+it('keeps the first-visit empty state on an out-of-range page of an empty archive', function () {
+    // The archive really is empty here: `$events->total() === 0`, so the
+    // out-of-range state must not appear — there is no page count to name.
+    $this->get(route('events.past').'?page=999')
+        ->assertOk()
+        ->assertSee('data-testid="past-events-empty"', escape: false)
+        ->assertDontSee('data-testid="past-events-out-of-range"', escape: false);
+});
+
 it('is linked from the events page', function () {
     $this->get(route('events.index'))
         ->assertOk()
