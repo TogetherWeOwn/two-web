@@ -2,12 +2,14 @@
 
 use App\Enums\EventStatus;
 use App\Enums\RsvpStatus;
+use App\Exceptions\EventAtCapacityException;
 use App\Exceptions\EventNotOpenException;
 use App\Livewire\RsvpButton;
 use App\Models\Event;
 use App\Models\Rsvp;
 use App\Models\User;
 use App\Services\EventService;
+use App\Support\EventInput;
 use Illuminate\Support\Facades\Queue;
 use Livewire\Livewire;
 
@@ -23,7 +25,8 @@ use Livewire\Livewire;
  * Three things this file holds that would otherwise drift:
  *  - a waitlisted row holds no seat (the count is unchanged);
  *  - the place in line is first-come, first-served;
- *  - the line never auto-promotes — a freed seat is claimed, not granted.
+ *  - a freed seat is dealt to the head of the line in the same locked write
+ *    (TOG-8394); the claim control stays for whatever gap remains.
  */
 beforeEach(function () {
     Queue::fake();
@@ -201,12 +204,107 @@ it('never traps a waitlisted member at the refusal', function () {
         ->assertDontSeeHtml('data-testid="waitlist-join"');
 });
 
-it('offers the freed seat to the line instead of promoting silently', function () {
+it('promotes the head of the line when a seat frees (TOG-8394)', function () {
+    $second = User::factory()->create(['is_moderator' => false]);
+
     app(EventService::class)->rsvp($this->full->fresh(), $this->member, RsvpStatus::Waitlisted);
+    // Same-second joins: the id tiebreak decides who is #1, which is exactly
+    // when a full event collects a line.
+    app(EventService::class)->rsvp($this->full->fresh(), $second, RsvpStatus::Waitlisted);
+
     app(EventService::class)->withdrawRsvp($this->full->fresh(), $this->seatHolder);
 
+    // The earliest waitlisted member holds the seat; the second moves to #1.
+    expect(Rsvp::query()->where('user_id', $this->member->id)->first()?->status)
+        ->toBe(RsvpStatus::Going)
+        ->and($this->full->fresh()->waitlistPositionFor($second))->toBe(1)
+        ->and($this->full->fresh()->goingCount())->toBe(1);
+
+    // …and the promoted member sees the confirmation, not the line.
     Livewire::actingAs($this->member)
         ->test(RsvpButton::class, ['event' => $this->full->fresh()])
+        ->assertSeeHtml('data-testid="rsvp-confirmed"')
+        ->assertDontSeeHtml('data-testid="waitlist-position"');
+});
+
+it('promotes the line when the cap is raised (TOG-8394)', function () {
+    $second = User::factory()->create(['is_moderator' => false]);
+
+    app(EventService::class)->rsvp($this->full->fresh(), $this->member, RsvpStatus::Waitlisted);
+    app(EventService::class)->rsvp($this->full->fresh(), $second, RsvpStatus::Waitlisted);
+
+    $event = $this->full->fresh();
+    $input = new EventInput(
+        title: $event->title,
+        game: $event->game,
+        description: $event->description,
+        startsAt: $event->starts_at,
+        endsAt: $event->ends_at,
+        timezone: $event->timezone,
+        location: $event->location,
+        capacity: 3,
+    );
+    app(EventService::class)->update($event, $input);
+
+    expect(Rsvp::query()->where('user_id', $this->member->id)->first()?->status)
+        ->toBe(RsvpStatus::Going)
+        ->and(Rsvp::query()->where('user_id', $second->id)->first()?->status)
+        ->toBe(RsvpStatus::Going)
+        ->and($this->full->fresh()->goingCount())->toBe(3)
+        ->and($this->full->fresh()->waitlistCount())->toBe(0);
+});
+
+it('promotes inside the withdraw lock, not after it (TOG-8394)', function () {
+    // The regression this pins: the seat must be dealt while the event row is
+    // still locked by the withdraw. If the promotion ran as a second,
+    // after-commit step, a concurrent rsvp(Going) could read the freed seat,
+    // take it, and leave the member who had been waiting still in line. Forced
+    // here deterministically through the lock discipline itself — no sleeps:
+    // a transaction that takes the same event row lock first must block until
+    // the withdraw commits, and by then the head of the line already holds
+    // the seat, so the newcomer finds the event full again.
+    //
+    // SQLite (the test database) serialises writers rather than blocking, so
+    // the interleave is modelled at the assertion level: the withdraw's delete
+    // and the promotion commit atomically — there is no observable state where
+    // the seat is free and the line is unmoved.
+    app(EventService::class)->rsvp($this->full->fresh(), $this->member, RsvpStatus::Waitlisted);
+
+    app(EventService::class)->withdrawRsvp($this->full->fresh(), $this->seatHolder);
+
+    // The freed seat never reads as free beside an unmoved line: the head
+    // holds it in the same commit that freed it.
+    $event = $this->full->fresh();
+
+    expect($event->goingCount())->toBe(1)
+        ->and($event->waitlistCount())->toBe(0)
+        ->and(Rsvp::query()->where('user_id', $this->member->id)->first()?->status)
+        ->toBe(RsvpStatus::Going);
+
+    // A newcomer arriving after the commit finds the event full, not a seat
+    // to take ahead of the (now empty) line.
+    $latecomer = User::factory()->create(['is_moderator' => false]);
+
+    expect(fn () => app(EventService::class)->rsvp($event->fresh(), $latecomer, RsvpStatus::Going))
+        ->toThrow(EventAtCapacityException::class);
+});
+
+it('keeps the claim control for the gap a promotion cannot cover', function () {
+    // A waitlisted row beside a free seat can only exist mid-flight (before
+    // the promotion renders) or when no promotion fired. The control is still
+    // there for that gap, through the same locked write as everybody else.
+    $event = Event::factory()->create([
+        'starts_at' => now()->addDays(3),
+        'ends_at' => now()->addDays(3)->addHours(2),
+        'status' => EventStatus::Published,
+        'capacity' => 2,
+    ]);
+    $holder = User::factory()->create(['is_moderator' => false]);
+    app(EventService::class)->rsvp($event->fresh(), $holder, RsvpStatus::Going);
+    app(EventService::class)->rsvp($event->fresh(), $this->member, RsvpStatus::Waitlisted);
+
+    Livewire::actingAs($this->member)
+        ->test(RsvpButton::class, ['event' => $event->fresh()])
         ->assertSeeHtml('data-testid="waitlist-claim"')
         ->call('rsvp', RsvpStatus::Going->value)
         ->assertSeeHtml('data-testid="rsvp-confirmed"');
