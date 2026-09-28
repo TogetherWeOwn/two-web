@@ -2,6 +2,8 @@
 
 namespace App\Http\Middleware;
 
+use App\Models\Profile;
+use App\Models\User;
 use App\Support\MemberDataAccess\AccessRecorder;
 use Closure;
 use Illuminate\Database\QueryException;
@@ -17,8 +19,8 @@ use Throwable;
  * Records the member data a request read, before that request is allowed to
  * answer.
  *
- * Applied as `member-access-log` to the admin panel's middleware stack, where it
- * covers every screen the panel has now and every screen it grows later:
+ * Applied as `member-access-log` to the authenticated member-profile routes and
+ * the admin panel's middleware stack, including future screens on that stack:
  *
  *     ->middleware(['auth', 'can:access-admin', 'member-access-log'])
  *
@@ -44,6 +46,19 @@ class RecordMemberDataAccess
         $response = $next($request);
 
         try {
+            // Route-model binding can hydrate the member before this middleware
+            // arms the listener. Include those models even when the member has no
+            // Profile row to retrieve later. Do not count a denied/missing target
+            // as a served read; the recorder still excludes the viewer and dedupes
+            // models also observed while the response was generated.
+            if ($response->getStatusCode() < 400) {
+                foreach ($request->route()?->parameters() ?? [] as $parameter) {
+                    if ($parameter instanceof User || $parameter instanceof Profile) {
+                        $recorder->observe($parameter);
+                    }
+                }
+            }
+
             $recorded = $recorder->flush($request);
         } catch (Throwable $e) {
             $this->refuse($request, 'Member data access could not be recorded; refusing to serve the read.', [

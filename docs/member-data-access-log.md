@@ -1,6 +1,7 @@
 # Member data access log
 
-Who looked at member data through the admin panel, when, and at whose records.
+Who looked at member data through the admin panel or authenticated member-profile
+routes, when, and at whose records.
 
 **Last checked:** 25 August 2026 · **Issues:** TOG-355 (this) · TOG-106 (which
 Discord role means moderator) · TOG-54 (the panel itself) · TOG-448 (review that
@@ -77,6 +78,29 @@ it is the one test here whose job starts later.
 
 ---
 
+## Member-profile coverage (TOG-7057)
+
+`profile`, `profiles.show`, and `profiles.update` carry the same control behind
+`auth`. Reads use `member,view`; PATCH uses `member,update`. The viewer remains the
+signed-in actor, never the route's target. The viewer-own-record exclusion below
+is unchanged, so viewing or updating your own profile writes no row.
+
+Laravel can bind `{user}` before this middleware arms its Eloquent listener. The
+middleware therefore also observes bound `User`/`Profile` parameters before
+flushing a successful response or redirect. This closes the otherwise invisible
+read of a member who has no separate Profile row. Set semantics keep a bound user
+and their retrieved profile in one row with one subject. Denied or missing route
+targets are not added by this fallback.
+
+`tests/Feature/MemberDataAccessCompletenessTest.php` commits the TOG-6776 proposed
+gate and covers both HTML and JSON Accept headers, profiles present/absent, exact
+actor/subject fields, own-record exclusions, guest/404/denied-PATCH no-write
+behavior, and log-outage refusal. The profile route still serves HTML; the test
+also exercises a JSON response from a bound-member fixture. No JSON endpoint is
+introduced. A route-table guard covers the `members` namespace, profile controller,
+and `profiles.*` names, checks the resolved middleware, and detects a newly added
+unlogged route even if its binding is named `{member}` instead of `{user}`.
+
 ## The three decisions worth defending
 
 ### 1. Subjects are collected from Eloquent, not declared per screen
@@ -147,8 +171,9 @@ the days it happened to be working — which is not a property you can find out
 about *after* you need it.
 
 The trade is cheaper than it reads, and the reason is worth stating: **this
-middleware is not on `web`.** A broken log table cannot take the member-facing
-site down; the blast radius is admin-panel reads only.
+middleware is not on `web`.** The blast radius is admin-panel reads and
+member-profile reads of other members. Public pages and unrelated member routes
+remain outside it; own-profile reads/writes need no access-log row.
 
 Three things can make a read unrecordable, and all three get the same answer:
 
