@@ -68,24 +68,48 @@ Types: `feat`, `fix`, `docs`, `test`, `chore`, `refactor`.
 
 ## Commits
 
-Imperative subject, under 72 characters, no trailing period:
+Conventional Commits header (enforced by `pr-lint`): `type(scope): summary`,
+at most 100 characters, no trailing period. Types: `feat`, `fix`, `perf`,
+`refactor`, `test`, `docs`, `build`, `ci`, `chore`, `revert`, `style`,
+`security`. Imperative mood, written for a reader of the changelog — each
+squash-merged PR title becomes one `CHANGELOG.md` entry:
 
 ```
-Add Discord OAuth login and role to permission mapping
-Fix RSVP count when a member cancels twice
+fix(rsvp): keep waitlist view when a freed-seat claim loses the race
+feat(auth): re-render stale tabs to guest pitch after cross-tab sign-out
 ```
 
-Reference the issue in the body when there is one (`TWO-27`).
+Reference the card in the body as `Refs: TOG-1234`, never in the title.
+
+## Releases
+
+Releases are automated with [release-please](https://github.com/googleapis/release-please)
+(`release-please-config.json` + `.release-please-manifest.json`, release-type
+`php`). Merge a conventional commit to `main` and release-please opens or
+updates a release PR; merging that PR writes `CHANGELOG.md`, tags `vX.Y.Z`
+and publishes a GitHub Release. Never tag or release by hand.
+
+`CHANGELOG.md` uses the [Common Changelog](https://common-changelog.org/)
+categories, in its order: **Changed** (`perf`, `revert`), **Added** (`feat`),
+**Fixed** (`fix`, `security`). `chore`, `docs`, `test`, `ci`, `build`,
+`refactor` and `style` stay out of the changelog.
+
+Versioning is SemVer, starting at `0.1.0`. `feat!` / `BREAKING CHANGE` bumps
+major (minor while `0.x`). `composer.json` carries no `version` field — this
+is a deployable app, not a library — so releases touch only the changelog,
+the tag, and the GitHub Release.
 
 ## Pull requests
 
 1. Branch off `main`.
-2. Open the PR. CI must be green — tests, static analysis, formatting, and the
-   secret scan.
+2. Open the PR with a Conventional Commits title (see Commits above) and the
+   card as `Refs: TOG-1234` in the body. Required checks must be green:
+   `static`, `pest`, `dusk`, `budgets`, `deps-audit`, `tests`, `gitleaks`,
+   and `pr-lint`.
 3. A code owner approves — see [.github/CODEOWNERS](.github/CODEOWNERS).
    **You cannot approve your own PR.** That applies to everyone including
    whoever wrote this.
-4. Merge. The branch deletes itself.
+4. Squash-merge. The branch deletes itself.
 
 A red PR does not merge. If CI is wrong, fix CI in its own PR rather than
 routing around it.

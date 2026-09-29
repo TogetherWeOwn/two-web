@@ -71,5 +71,7 @@ anonymous those who do not.
 
 ## Supported versions
 
-Pre-launch: only the latest `main` is supported. We do not backport security
-fixes to older commits.
+Security fixes land on `main` and ship with the next release-please release
+(see [CHANGELOG.md](CHANGELOG.md)). Pre-`1.0.0` versions are pre-production;
+upgrade to the latest tagged release. We do not backport security fixes to
+older commits.
