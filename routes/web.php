@@ -226,10 +226,15 @@ Route::middleware('auth')->group(function () {
     // the middleware refuses a hammering run before validation, policy and
     // the database run, keyed per member like the controller limiter. Both
     // verbs share the one bucket, so switching PUT/DELETE cannot multiply it.
+    //
+    // TOG-8824: a named limiter, not bare `throttle:12,1`. The bare form keys
+    // an authenticated request by sha1(user id) alone, so RSVP writes shared
+    // one counter with every `throttle:10,1` route (/join/discord,
+    // /auth/discord/*) and hammering one side could 429 the other.
     Route::put('/events/{event}/rsvp', [RsvpController::class, 'update'])
-        ->middleware('throttle:12,1')
+        ->middleware('throttle:rsvp-writes')
         ->name('events.rsvp.update');
     Route::delete('/events/{event}/rsvp', [RsvpController::class, 'destroy'])
-        ->middleware('throttle:12,1')
+        ->middleware('throttle:rsvp-writes')
         ->name('events.rsvp.destroy');
 });
