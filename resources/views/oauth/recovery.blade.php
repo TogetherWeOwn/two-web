@@ -9,6 +9,10 @@
 
         The `error_description` and `error_uri` params Discord sends are never
         rendered: they are third-party strings and not ours to echo.
+
+        Copy contract: `docs/troubleshooting-join.md` (§ Denied / Expired)
+        pins the deny vs expired sentences and the retry path; the
+        member-facing wording lives in FAQ Q2 (`content/faq-preview.md`).
     --}}
     <section class="bg-violet">
         <div class="mx-auto max-w-3xl px-4 py-16 md:px-6 md:py-20 lg:px-8">
