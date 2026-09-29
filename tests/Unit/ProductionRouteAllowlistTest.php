@@ -14,6 +14,13 @@
 // The allowlist pins reality, not intent: when a route is added, removed, or
 // renamed in production, this test fails and the author updates the list
 // deliberately — that failure is the mechanism working.
+//
+// TOG-9665: Livewire's FrontendAssets registers exactly one of
+// `/livewire/livewire.js` (APP_DEBUG on) / `/livewire/livewire.min.js` (off),
+// so no single allowlist line matches every boot. Both variants are normalized
+// out of the exact comparison and the test pins the mechanism instead —
+// exactly one variant registers — while anything else under a Livewire asset
+// prefix still fails below as an unexpected route.
 
 use Illuminate\Contracts\Console\Kernel;
 use Illuminate\Foundation\Application;
@@ -100,7 +107,11 @@ function expectedProductionRoutes(): array
         'GET|HEAD join',
         'GET|HEAD join/callback',
         'GET|HEAD join/discord',
-        'GET|HEAD livewire/livewire.js',
+        // TOG-9665: no runtime-variant line here — Livewire registers exactly
+        // one of `livewire.js` (APP_DEBUG on) / `livewire.min.js` (off), so the
+        // exact comparison cannot pin either. The test below normalizes both
+        // variants out and asserts exactly one registers. The `.map` file is
+        // unconditional, so it stays pinned.
         'GET|HEAD livewire/livewire.min.js.map',
         'GET|HEAD livewire/preview-file/{filename}',
         'GET|HEAD members/{user}',
@@ -133,6 +144,26 @@ function expectedProductionRoutes(): array
 it('registers exactly the allowlisted routes in production', function () {
     $actual = productionRouteKeys('production');
     $expected = expectedProductionRoutes();
+
+    // TOG-9665: normalize the debug-conditional Livewire runtime out of the
+    // exact comparison. FrontendAssets registers exactly one of `livewire.js`
+    // (APP_DEBUG on) / `livewire.min.js` (off), so pinning either line fails
+    // on every boot with the other value — and forcing APP_DEBUG=false from
+    // this helper does not stick: phpdotenv's immutable writer treats a
+    // variable it loaded on an earlier boot in this process as fair game and
+    // overwrites the override from .env on the next boot (probed 2026-09-29:
+    // env() reads false right after forcing, true again after bootstrap when
+    // the ambient variable is unset). Pin the mechanism instead: exactly one
+    // of the two known variants registers. Anything else under a Livewire
+    // asset URI — a second variant, a renamed file — is not filtered and
+    // still fails below as an unexpected route.
+    $livewireVariants = ['GET|HEAD livewire/livewire.js', 'GET|HEAD livewire/livewire.min.js'];
+    $actualLivewire = array_values(array_intersect($actual, $livewireVariants));
+
+    expect($actualLivewire)->toHaveCount(1, 'Livewire must register exactly one runtime variant, got: '.implode(', ', $actualLivewire));
+
+    $actual = array_values(array_diff($actual, $livewireVariants));
+    $expected = array_values(array_diff($expected, $livewireVariants));
 
     $unexpected = array_values(array_diff($actual, $expected));
     $missing = array_values(array_diff($expected, $actual));
