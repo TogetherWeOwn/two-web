@@ -10,7 +10,10 @@
                :canonical="route('events.page', $event)"
                :shareDescription="$event->description ?: 'An event at Together We Own.'">
     <div class="mx-auto w-full max-w-3xl px-4 py-10 md:px-6 lg:px-8">
+        {{-- `data-print="hide"`: the print sheet (TOG-6930) drops this — a
+             "back" link has nowhere to go on paper. --}}
         <a href="{{ route('events.index') }}"
+           data-print="hide"
            class="text-sm text-ink-muted hover:text-ink transition-colors duration-fast ease-out-quick">
             ← All events
         </a>
@@ -86,7 +89,9 @@
                  and the Google one-click for the member who lives in a browser.
                  Above the RSVP divider on purpose — saving the date is not RSVPing,
                  and a guest who cannot RSVP can still add the event. --}}
-            <div class="mt-4 flex flex-wrap items-center gap-2" data-testid="event-calendar-links">
+            {{-- `data-print="hide"`: the calendar buttons are taps with
+                 tap-target sizing — dead weight on paper (TOG-6930). --}}
+            <div class="mt-4 flex flex-wrap items-center gap-2" data-testid="event-calendar-links" data-print="hide">
                 <a href="{{ route('events.ics', $event) }}"
                    data-testid="event-ics"
                    class="inline-flex items-center justify-center gap-2 min-h-11 px-5 rounded-md
@@ -134,7 +139,9 @@
                  Names only, no profile links (TOG-6926 owns that). --}}
             @auth
                 @if ($attendees->isNotEmpty())
-                    <div class="mt-6 border-t border-line pt-6" data-testid="event-attendees">
+                    {{-- Names are RSVP-derived: they print nowhere (TOG-6930).
+                         A printout left on a desk must not leak who's going. --}}
+                    <div class="mt-6 border-t border-line pt-6" data-testid="event-attendees" data-print="hide">
                         <h2 class="text-sm font-semibold text-ink">
                             Who's going ({{ $attendees->count() }})
                         </h2>
@@ -150,7 +157,10 @@
                 @endif
             @endauth
 
-            <div class="mt-6 border-t border-line pt-6">
+            {{-- `data-print="hide"`: RSVP controls and the join pitch are
+                 taps, not information — a printed "I'm in" button or a
+                 "Join the Discord" CTA does nothing on paper (TOG-6930). --}}
+            <div class="mt-6 border-t border-line pt-6" data-print="hide">
                 @auth
                     <livewire:rsvp-button :event="$event" />
                 @endauth
@@ -176,14 +186,25 @@
                     </div>
                 @endguest
             </div>
+
+            {{-- The print handout footer (TOG-6930): the event's own URL, so a
+                 printed page points back at the live one. Screen-hidden with
+                 the `hidden` utility — the on-screen page already shows the
+                 URL in the address bar — and revealed only by the
+                 `@media print` rules in app.css. --}}
+            <p class="mt-6 border-t border-line pt-4 text-sm text-ink-muted hidden" data-testid="event-print-url" data-print="url">
+                {{ route('events.page', $event) }}
+            </p>
         </article>
 
         {{-- Prev/next event, in `starts_at` order. The ends of the line omit
              their missing side rather than rendering a dead link — the first
              event has no previous, the last has no next. --}}
         @if ($previousEvent || $nextEvent)
+            {{-- `data-print="hide"`: prev/next cards navigate elsewhere — they
+                 are not this event (TOG-6930). --}}
             <nav class="mt-6 flex items-stretch justify-between gap-3" aria-label="More events"
-                 data-testid="event-pagination">
+                 data-testid="event-pagination" data-print="hide">
                 @if ($previousEvent)
                     <a href="{{ route('events.page', $previousEvent) }}"
                        data-testid="event-previous"
@@ -219,9 +240,11 @@
              with nothing under it is worse than nothing. Guests get the join
              pitch with it, members already have the RSVP control above. --}}
         @if ($relatedEvents->isNotEmpty())
+            {{-- `data-print="hide"`: other events are discovery, not this
+                 event's handout (TOG-6930). --}}
             <section class="mt-6 rounded-lg bg-surface border border-line p-5 md:p-8"
                      aria-label="Related events"
-                     data-testid="event-related">
+                     data-testid="event-related" data-print="hide">
                 <h2 class="text-sm font-semibold text-ink">
                     More events you might like
                 </h2>
@@ -270,7 +293,10 @@
         fills and reveals it; `role="status"` announces the confirmation
         without stealing focus.
     --}}
-    <div class="pointer-events-none fixed inset-x-0 bottom-6 z-50 flex justify-center px-4">
+    {{-- `data-print="hide"`: a fixed toast repeats on every printed page
+         when revealed — and a transient "link copied" note is meaningless
+         on paper (TOG-6930). --}}
+    <div class="pointer-events-none fixed inset-x-0 bottom-6 z-50 flex justify-center px-4" data-print="hide">
         <p class="hidden max-w-md rounded-lg border border-line bg-online-quiet p-4 text-sm text-ink shadow-overlay"
            role="status"
            data-testid="event-copy-toast"></p>

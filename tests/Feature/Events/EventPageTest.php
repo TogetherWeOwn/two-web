@@ -183,3 +183,17 @@ it('hides a draft from guests and members but shows it to moderators', function 
         ->assertOk()
         ->assertSee($draft->title);
 });
+
+it('prints the canonical URL in a screen-hidden handout footer', function () {
+    // The URL half of TOG-6930's "QR-or-URL": a printed page points back at
+    // the live one. `hidden` keeps it off the screen (the address bar already
+    // shows the URL); the `@media print` sheet in app.css reveals it. Pinned
+    // for a guest — the page is public — and the static half of this contract
+    // (the markers, the rules) lives in tests/Unit/EventPrintSheetTest.php.
+    $event = publishedEvent();
+
+    $this->get(route('events.page', $event))
+        ->assertOk()
+        ->assertSeeHtml('data-testid="event-print-url" data-print="url"')
+        ->assertSee(route('events.page', $event), false);
+});

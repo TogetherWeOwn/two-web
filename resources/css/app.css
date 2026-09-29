@@ -172,3 +172,51 @@
 .bg-taste-paper a[href='#main']:focus-visible {
     outline-color: var(--color-taste-ink);
 }
+
+/* Print handout for the shareable event page (TOG-6930). The page is a
+   dark-ground screen design; paper is white and browsers drop backgrounds
+   in print, so without this the event would print white-on-white. The
+   contract, marked with `data-print` attributes in events/show.blade.php:
+
+   - `data-print="hide"`: back link, calendar buttons, attendee names, the
+     RSVP/join block, prev/next cards, related events. Taps and navigation
+     are dead weight on paper, and the attendee list stays off a printout
+     that can be left on a desk (TOG-5621).
+   - `data-print="url"`: the event's own URL. `hidden` on screen (the
+     address bar already shows it) and revealed only here, so the handout
+     points back at the live page.
+
+   What survives is title, game, status/going badges, time, venue and
+   description — in black on white (21:1) with a light rule, hierarchy
+   carried by size and weight rather than colour. Hex here is the medium,
+   not the system: paper white and ink black are not design tokens.
+
+   Lives here, not in two.css: that file is vendored from two-design and
+   digest-pinned by tests/Unit/VendoredTokensTest.php. */
+@media print {
+    @page {
+        margin: 15mm;
+    }
+
+    body {
+        background-color: #fff;
+    }
+
+    [data-print='hide'] {
+        display: none !important;
+    }
+
+    [data-print='url'] {
+        display: block !important;
+        break-inside: avoid;
+    }
+
+    [data-testid='event-page'],
+    [data-testid='event-page'] * {
+        background: transparent !important;
+        box-shadow: none !important;
+        text-shadow: none !important;
+        color: #000 !important;
+        border-color: #bbb !important;
+    }
+}
