@@ -620,6 +620,43 @@ Pinned by `tests/Unit/PreDeploySnapshotDocTest.php`, which asserts this section
 still names the schedule, the Backup Now rule, the bound — and that
 `deploy.yml` still carries no snapshot step of its own.
 
+### Who polls `/up`, and who gets paged (TOG-7327)
+
+`/up` is Laravel's health endpoint (`health: '/up'` in `bootstrap/app.php`,
+pinned by `tests/Feature/HealthCheckTest.php`). It answers 200 when the
+application boots far enough to serve. What polls it today, and what does
+not:
+
+- **Deploy time.** `deploy.yml` polls `${STAGING}/up` for up to ten minutes
+  after triggering the Coolify staging deploy — a queued deploy that never
+  answers fails the job. Then `bin/smoke-staging.sh` asserts `/up` → 200
+  again, alongside `/discord`, `/`, and `/events.json`. Green `staging`
+  means the new release answered, and nothing more.
+- **CI time.** The Dusk, budgets, and opcache jobs poll a local `/up` to
+  learn when the throwaway `artisan serve` under test is ready, and how fast
+  it answers. That proves the build boots; it says nothing about any
+  deployed host.
+- **Continuously, on any environment: nobody.** No cron, no scheduled
+  workflow, and no third-party pinger polls `/up` on a deployed host (this
+  repo uses no paid services) — the one scheduled workflow that does exist,
+  `codeowners.yml`'s weekly check, has nothing to do with `/up`. When
+  staging or production stops answering between deploys, nothing notices
+  until a human loads the page or the next deploy's poll fails. The release
+  checklist's "someone is available to watch it after it goes out" is,
+  today, the entire paging policy: the person who triggered the deploy
+  watches it by hand.
+
+The bound, stated plainly: every `/up` poll in this repo is attached to a
+deploy or a CI run. There is no standing watch, and this section must not be
+read as one. Adding one is a small, free step for the day production exists
+— a Coolify HTTP healthcheck on the app pointed at `/up`, or a scheduled
+workflow that curls the production URL and files an issue on failure — but
+that step is not taken here: no prod activation happens on this card, and no
+monitor is wired to a host that does not exist yet.
+
+Pinned by `tests/Unit/HealthMonitoringRunbookTest.php`, which asserts this
+section still names each poller, the gap, and the bound.
+
 ### Production deploys are dispatch-only, behind a required reviewer
 
 Production ships from GitHub Actions, and only ever that way: `workflow_dispatch`
