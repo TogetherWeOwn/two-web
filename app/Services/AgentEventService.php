@@ -145,7 +145,9 @@ class AgentEventService
         $stagingGuild = (string) config('agent-events.staging_guild_id', '');
         $productionGuild = (string) config('agent-events.production_guild_id', '');
 
-        if ($admittedCaller !== '' && $grant->agent_id !== $admittedCaller) {
+        // Fail closed: no admitted caller is configured. Every grant is
+        // denied here, so an unconfigured ingress never serves any caller.
+        if ($admittedCaller === '' || $grant->agent_id !== $admittedCaller) {
             $this->audit($grant, $op, null, $idempotencyKey, $digest, $requestId, 'denied', 'wrong_caller', null);
 
             return $this->answer(403, [

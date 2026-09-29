@@ -550,8 +550,8 @@ jobs:
       # chromium-browser package is a snap transitional package, and snap is not a
       # reliable dependency inside an Actions job, so use Google's apt package.
       #
-      # Three host flakes met here, all TOG-5877. First, the rbx1 uplink refuses
-      # dl.google.com intermittently (4–6 of 30 connects, operator-measured), so
+      # Three download flakes met here, all TOG-5877. First, the runner uplink
+      # refuses dl.google.com intermittently (4–6 of 30 connects, measured), so
       # the download retries with backoff instead of failing the job on one
       # refused connection. Second, a prior run's Chrome install leaves its apt
       # source behind on the persistent runner, and a later `apt-get update`
@@ -663,36 +663,6 @@ jobs:
             storage/logs
           retention-days: 14
           if-no-files-found: ignore
-
-      # Every test now screenshots on pass or fail (tests/DuskTestCase.php
-      # tearDown, TOG-782), so evidence exists regardless of outcome — hence
-      # always() rather than failure() like the GH Actions upload above. This
-      # goes to the Paperclip board as a second, parallel destination (the
-      # owner asked for evidence he can watch from the board, not by clicking
-      # into a GH Actions run); the GH Actions artifact upload above is
-      # unrelated and untouched.
-      #
-      # continue-on-error rather than gating on the secret's presence: until
-      # PAPERCLIP_BOARD_API_KEY is minted (a one-time human action — see PR
-      # description) this step goes visibly red, which is a more honest
-      # signal than silently skipping.
-      - name: Upload Dusk evidence to Paperclip
-        if: always()
-        continue-on-error: true
-        env:
-          PAPERCLIP_API_URL: ${{ vars.PAPERCLIP_API_URL }}
-          PAPERCLIP_API_KEY: ${{ secrets.PAPERCLIP_BOARD_API_KEY }}
-          PAPERCLIP_COMPANY_ID: ${{ vars.PAPERCLIP_COMPANY_ID }}
-          PAPERCLIP_TASK_ID: ${{ vars.PAPERCLIP_E2E_EVIDENCE_ISSUE_ID }}
-          PAPERCLIP_RUN_ID: gh-actions-${{ github.run_id }}-${{ github.job }}
-        run: |
-          shopt -s nullglob
-          for f in tests/Browser/screenshots/*.png; do
-            name="$(basename "$f" .png)"
-            ./.github/scripts/paperclip-upload-artifact.sh "$f" \
-              --title "two-web/${{ github.run_id }}/dusk/${name}" \
-              --summary "Dusk evidence, run ${{ github.run_id }}, job dusk"
-          done
 
   # ---------------------------------------------------------------------------
   # Budgets. Performance and accessibility are enforced as failures, not warnings.
