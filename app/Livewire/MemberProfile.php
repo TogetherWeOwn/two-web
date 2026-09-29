@@ -187,6 +187,12 @@ class MemberProfile extends Component
         $validated = $this->validate(static::validationRules());
 
         if (SpamTrap::honeypotFilled($this->website) || SpamTrap::tooFast($this->formOpenedAt)) {
+            // Mirror the genuine path's resets: the trap must end in the
+            // exact success state, including no stale failure/expired banners
+            // (main's TOG-8137 flags postdate the slice). Converging the two
+            // responses also keeps the trap oracle-free.
+            $this->saveFailed = false;
+            $this->sessionExpired = false;
             $this->editing = false;
             $this->saved = true;
             $this->fillForm();
