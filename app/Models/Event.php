@@ -6,6 +6,7 @@ use App\Enums\EventStatus;
 use App\Enums\RecurrenceFrequency;
 use App\Enums\RsvpStatus;
 use App\Exceptions\ImmutableAttributeException;
+use App\Support\Events\AnonymousEventCard;
 use Carbon\CarbonImmutable;
 use Database\Factories\EventFactory;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
@@ -131,6 +132,16 @@ class Event extends Model
             if ($event->isDirty('event_key')) {
                 throw ImmutableAttributeException::for($event, 'event_key');
             }
+        });
+
+        // TOG-9277: any moderator or service edit retires the cached guest
+        // fragments. `saved` (not `updated`) so the create path bumps too —
+        // harmless (nothing is cached yet) and one hook covers every write.
+        static::saved(function (Event $event): void {
+            AnonymousEventCard::bump($event);
+        });
+        static::deleted(function (Event $event): void {
+            AnonymousEventCard::purge($event);
         });
     }
 

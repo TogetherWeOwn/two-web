@@ -13,6 +13,7 @@ use App\Models\Event;
 use App\Models\Rsvp;
 use App\Models\User;
 use App\Support\EventInput;
+use App\Support\Events\AnonymousEventCard;
 use App\Support\RecurrenceInput;
 use App\Support\RecurrenceSchedule;
 use Carbon\CarbonImmutable;
@@ -273,6 +274,11 @@ class EventService
             if ($deleted > 0) {
                 $this->promoteWaitlist($locked);
                 $this->syncAfterCommit($locked);
+                // TOG-9277: the mass delete above bypasses `Rsvp::deleted`, and
+                // the promotions' saves fire it per row — but only when there
+                // is a line. Bump unconditionally so a plain withdraw retires
+                // the cached guest fragments too.
+                AnonymousEventCard::bump($locked);
             }
         });
     }

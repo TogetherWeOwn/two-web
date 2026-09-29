@@ -5,6 +5,7 @@ namespace App\Livewire;
 use App\Enums\EventStatus;
 use App\Enums\RsvpStatus;
 use App\Models\Event;
+use App\Support\SafeRedirect;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Support\Facades\Gate;
 use Illuminate\View\View;
@@ -38,6 +39,18 @@ class PastEvents extends Component
      */
     private const PER_PAGE = 20;
 
+    /**
+     * Where the guest login links send the member back to after Discord.
+     * Same contract as `EventsCalendar::$returnTo` (TOG-9254/TOG-9277):
+     * captured in mount, never read from the request in the card loop.
+     */
+    public ?string $returnTo = null;
+
+    public function mount(): void
+    {
+        $this->returnTo = SafeRedirect::safe(request()->getPathInfo());
+    }
+
     public function render(): View
     {
         $events = $this->visible()
@@ -55,6 +68,8 @@ class PastEvents extends Component
 
         return view('livewire.past-events', [
             'events' => $events,
+            // TOG-9277: the guest card fragments key on this (see $returnTo).
+            'returnTo' => $this->returnTo,
             // Share tags (TOG-5624). Same contract as the calendar: `layoutData`
             // merges into the `#[Layout]` params, and `route()` builds from
             // APP_URL, never a hardcoded hostname.
