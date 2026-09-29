@@ -157,13 +157,15 @@
 
                 @guest
                     {{-- Not a disabled RSVP button. A guest's next action is to join,
-                         and the events index makes the same pitch the same way. --}}
+                         and the events index makes the same pitch the same way.
+                         `?next=` returns them to this event after the join
+                         journey (TOG-9254). --}}
                     <div data-testid="event-join-pitch">
                         <p class="max-w-prose text-sm text-ink-muted">
                             Game nights get posted here first. Join the Discord and you'll
                             see them before they land on this page.
                         </p>
-                        <a href="{{ route('join') }}"
+                        <a href="{{ route('join', ['next' => route('events.page', $event, false)]) }}"
                            data-testid="discord-join"
                            class="mt-4 inline-flex items-center justify-center gap-2 min-h-11 px-6 rounded-md
                                   bg-brand text-on-brand font-semibold
@@ -249,7 +251,7 @@
                         These fill up fast for members. Join the Discord and you'll
                         hear about the next one before it lands here.
                     </p>
-                    <a href="{{ route('join') }}"
+                    <a href="{{ route('join', ['next' => route('events.page', $event, false)]) }}"
                        data-testid="event-related-join"
                        class="mt-4 inline-flex items-center justify-center gap-2 min-h-11 px-6 rounded-md
                               bg-brand text-on-brand font-semibold
