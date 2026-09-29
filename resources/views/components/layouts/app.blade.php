@@ -86,6 +86,105 @@
         {{ $slot }}
     </main>
 
+    @auth
+        {{-- Cross-tab sign-out (TOG-8136). Logout destroys the session
+             server-side but a second tab keeps rendering @auth controls —
+             RSVP buttons, attendee names, the profile — until its next load,
+             and the next click there 302s with no explanation. This script
+             closes that gap two ways:
+               1. `storage` event: the tab that submits the logout form writes
+                  `two-auth = signed-out` first, so a side-by-side tab reloads
+                  at once instead of waiting to be looked at.
+               2. visibility/focus/pageshow re-check: the tab asks
+                  `GET auth.status`, and a `false` reloads it into the guest
+                  render — the same page a manual refresh already shows on a
+                  dead session, so no new bounce is invented here. This path
+                  also covers session expiry (SESSION_LIFETIME), which has no
+                  logout form to broadcast from.
+             Guests get none of this (zero bytes, no probe): a signed-out page
+             is already the correct render. A failed probe — offline, 429, 500 —
+             leaves the page exactly as it is; only a positive `false` reloads,
+             so this can never log a member out. Inline rather than a Vite
+             entry: it must run on every authenticated page, and the global
+             bundle is pinned import-free (AssetCompressionTest). --}}
+        <script data-testid="auth-tab-sync">
+            (() => {
+                // Livewire morphs can re-insert this block; run once per page.
+                if (window.__twoAuthTabSync) {
+                    return;
+                }
+                window.__twoAuthTabSync = true;
+
+                const STORAGE_KEY = 'two-auth';
+                const STATUS_URL = @js(route('auth.status'));
+
+                try {
+                    window.localStorage.setItem(STORAGE_KEY, 'signed-in');
+                } catch (e) {
+                    // Private mode or disabled storage: the server re-check
+                    // below still works, the instant path just stays quiet.
+                }
+
+                let checking = false;
+
+                async function recheck() {
+                    if (checking || document.visibilityState === 'hidden') {
+                        return;
+                    }
+                    checking = true;
+                    try {
+                        const res = await fetch(STATUS_URL, {
+                            headers: { Accept: 'application/json' },
+                            credentials: 'same-origin',
+                        });
+                        if (res.ok) {
+                            const body = await res.json();
+                            if (body && body.authenticated === false) {
+                                window.location.reload();
+                            }
+                        }
+                    } catch (e) {
+                        // Offline or failing: leave the page as-is. The next
+                        // visibility change tries again.
+                    } finally {
+                        checking = false;
+                    }
+                }
+
+                document.addEventListener('visibilitychange', () => {
+                    if (document.visibilityState === 'visible') {
+                        recheck();
+                    }
+                });
+                window.addEventListener('focus', recheck);
+                window.addEventListener('pageshow', (event) => {
+                    if (event.persisted) {
+                        recheck();
+                    }
+                });
+                window.addEventListener('storage', (event) => {
+                    if (event.key === STORAGE_KEY && event.newValue === 'signed-out') {
+                        window.location.reload();
+                    }
+                });
+
+                // The logout form lives in the member profile (and any future
+                // twin): delegation survives Livewire morphs, and the write is
+                // synchronous so it lands before the POST navigates away.
+                document.addEventListener('submit', (event) => {
+                    const form = event.target;
+                    if (form instanceof HTMLFormElement && form.action.endsWith('/logout')) {
+                        try {
+                            window.localStorage.setItem(STORAGE_KEY, 'signed-out');
+                        } catch (e) {
+                            // Same degraded path as above: the re-check covers it.
+                        }
+                    }
+                });
+            })();
+        </script>
+    @endauth
+
     @if ($deferLivewire ?? false)
         {{-- TOG-7927: the pre-boot guard. Until the deferred runtime below boots,
              `wire:click` handlers are unbound — a rendered "I'm in" button takes
