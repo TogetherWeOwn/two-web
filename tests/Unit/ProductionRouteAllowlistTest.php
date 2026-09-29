@@ -99,6 +99,7 @@ function expectedProductionRoutes(): array
         'GET|HEAD events/{event}',
         'GET|HEAD events/{event}.ics',
         'GET|HEAD faq',
+        'GET|HEAD faq/votes',
         'GET|HEAD filament/exports/{export}/download',
         'GET|HEAD filament/imports/{import}/failed-rows/download',
         'GET|HEAD join',
@@ -132,6 +133,7 @@ function expectedProductionRoutes(): array
         // TOG-8705: self-service data — the member's deletion ask.
         'POST profile/deletion-request',
         'PUT events/{event}/rsvp',
+        'PUT faq/votes/{entry}',
         'PUT storage/{path}',
     ];
 }
