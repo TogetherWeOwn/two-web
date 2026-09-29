@@ -498,6 +498,53 @@ it('announces the expired session as an alert, because it interrupted what they 
 });
 
 /* ---------------------------------------------------------------------------
+   Expired-session 419 interceptor (TOG-9354). The sessionExpired branch above
+   only runs when the round trip reaches the component — but a dead session
+   419s in ValidateCsrfToken first (stale data-csrf against a fresh session),
+   so Livewire's handlePageExpiry answers with a native confirm() and the
+   banner stays unreachable. The blade intercepts the 419 per-component and
+   reloads into the guest render, which carries the same login link with the
+   ?next= return. Pinned as shipped markup (like DeferredPrebootGuardTest):
+   the browser behaviour itself is Dusk's ground in EventsRsvpTest.
+   --------------------------------------------------------------------------- */
+
+it('ships the expired-session 419 interceptor on the events page', function () {
+    $html = (string) $this->actingAs($this->member)
+        ->get(route('events.index'))
+        ->assertOk()
+        ->getContent();
+
+    // Non-vacuous: the signed-in member is offered the control the hook guards.
+    expect($html)->toContain('data-testid="rsvp-going"');
+
+    // The @script block travels inside the wire:effects JSON attribute, which
+    // is HTML-escaped — quotes render as &#039;, `>` as `&gt;` — so the hook
+    // name is pinned in its escaped form, not the blade source form.
+    expect($html)->toContain('$wire.$hook(')
+        ->and($html)->toContain('&#039;request&#039;')
+        ->and($html)->toContain('status !== 419')
+        ->and($html)->toContain('preventDefault()')
+        ->and($html)->toContain('window.location.reload()');
+});
+
+it('scopes the interceptor to 419s so other failures keep the failure modal', function () {
+    $html = (string) $this->actingAs($this->member)
+        ->get(route('events.index'))
+        ->assertOk()
+        ->getContent();
+
+    $guard = strpos($html, 'status !== 419');
+    $prevent = strpos($html, 'preventDefault()');
+
+    expect($guard)->not->toBeFalse('interceptor 419 guard missing from events page')
+        ->and($prevent)->not->toBeFalse('interceptor preventDefault missing from events page');
+
+    // The early return stands before the prevention: a non-419 failure never
+    // reaches preventDefault and keeps Livewire's failure modal.
+    expect($prevent)->toBeGreaterThan($guard);
+});
+
+/* ---------------------------------------------------------------------------
    The loading state. It is a real requirement — "an honest loading state" — and
    in Livewire it is `wire:loading` markup, which is asserted as markup.
    --------------------------------------------------------------------------- */
