@@ -158,10 +158,7 @@
                                           class="w-full rounded-md border bg-canvas px-3 py-2.5 text-ink placeholder:text-ink-muted transition-colors duration-fast ease-out-quick hover:border-ink-muted @error('bio') border-alert @else border-line-strong @enderror"></textarea>
                                 <p class="mt-1.5 text-sm text-ink-muted">A few sentences is plenty.</p>
                                 @error('bio')
-                                    <p id="bio-error" class="mt-1.5 flex items-start gap-1.5 text-sm text-alert">
-                                        <svg class="mt-0.5 size-4 shrink-0" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 1.5 15 14H1L8 1.5Zm0 4a.75.75 0 0 0-.75.75v3a.75.75 0 0 0 1.5 0v-3A.75.75 0 0 0 8 5.5Zm0 6.75a.9.9 0 1 0 0-1.8.9.9 0 0 0 0 1.8Z"/></svg>
-                                        <span>{{ $message }}</span>
-                                    </p>
+                                    @include('partials.field-error', ['id' => 'bio-error', 'message' => $message])
                                 @enderror
                             </div>
 
@@ -176,10 +173,7 @@
                                           class="w-full rounded-md border bg-canvas px-3 py-2.5 text-ink placeholder:text-ink-muted transition-colors duration-fast ease-out-quick hover:border-ink-muted @error('gamesText') border-alert @else border-line-strong @enderror"></textarea>
                                 <p class="mt-1.5 text-sm text-ink-muted">Up to 20. Duplicates are removed.</p>
                                 @error('gamesText')
-                                    <p id="games-error" class="mt-1.5 flex items-start gap-1.5 text-sm text-alert">
-                                        <svg class="mt-0.5 size-4 shrink-0" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 1.5 15 14H1L8 1.5Zm0 4a.75.75 0 0 0-.75.75v3a.75.75 0 0 0 1.5 0v-3A.75.75 0 0 0 8 5.5Zm0 6.75a.9.9 0 1 0 0-1.8.9.9 0 0 0 0 1.8Z"/></svg>
-                                        <span>{{ $message }}</span>
-                                    </p>
+                                    @include('partials.field-error', ['id' => 'games-error', 'message' => $message])
                                 @enderror
                             </div>
 
@@ -200,10 +194,7 @@
                                 </datalist>
                                 <p class="mt-1.5 text-sm text-ink-muted">Use an IANA timezone such as America/New_York.</p>
                                 @error('timezone')
-                                    <p id="timezone-error" class="mt-1.5 flex items-start gap-1.5 text-sm text-alert">
-                                        <svg class="mt-0.5 size-4 shrink-0" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 1.5 15 14H1L8 1.5Zm0 4a.75.75 0 0 0-.75.75v3a.75.75 0 0 0 1.5 0v-3A.75.75 0 0 0 8 5.5Zm0 6.75a.9.9 0 1 0 0-1.8.9.9 0 0 0 0 1.8Z"/></svg>
-                                        <span>{{ $message }}</span>
-                                    </p>
+                                    @include('partials.field-error', ['id' => 'timezone-error', 'message' => $message])
                                 @enderror
                             </div>
 
