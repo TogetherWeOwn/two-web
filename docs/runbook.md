@@ -435,6 +435,53 @@ Exit codes: `0` parity, `1` drift (the lines below), `2` called wrongly
 
 ---
 
+## Finding CSP violation reports (TOG-9276)
+
+**What it is.** `POST /csp-reports` is a log-only sink (TOG-8403): each
+sampled report lands as one `csp.report.violation` warning row in the app
+log, carrying the fixed key set (`blocked_uri`, `violated_directive`,
+`document_uri`, `source_file`, `line_number`) — never the raw body. There
+is no dashboard and no table to query; the log line is the store. This
+section is the documented provider path: how a reviewer triggers a
+violation on staging and finds it.
+
+**Read it on staging, verbatim.** Same box access as any outage read
+(quick-reference step 3 below):
+
+```bash
+grep 'csp.report.violation' /var/www/two-web/storage/logs/laravel.log | tail -30
+# [2026-09-29 14:19:38] local.WARNING: csp.report.violation {"blocked_uri":"inline","violated_directive":"script-src","document_uri":"...","source_file":"...","line_number":1}
+```
+
+What the fields mean: `violated_directive` names the policy clause that
+fired (`script-src` and friends); `blocked_uri` is what the browser refused
+(`inline` for an inline script); `document_uri` is the page that produced
+the report. A burst of `script-src` / `inline` rows on a page with no inline
+script of ours is the signal to tune the policy, not a user to chase —
+reports carry no user id, no session, and no IP beyond what the log line
+itself holds.
+
+**Trigger one on purpose.** Flip `CSP_REPORT_ONLY=true` on staging (Coolify
+env config, [`docs/env.md` §15](env.md#15-csp-report-only-mode)), load any
+page, then fire a violation from devtools — appending an inline script
+suffices (`document.body.appendChild(Object.assign(document.createElement('script'),{textContent:'void 0'}))`).
+Report-only mode logs it without blocking anything. Then run the grep above.
+Flip the flag back when done: report-only left on is an unenforced policy,
+and `docs/env.md` §15 says so.
+
+**The bounds, stated plainly.** `CSP_REPORT_SAMPLE_RATE=0.0` means valid
+reports are parsed but never logged (blind) — the grep finds nothing and
+that is configuration, not absence of violations. Oversize bodies log under
+`csp.report.dropped_oversize`, not here, so a flood shows up as drops, not
+violations. Log retention is [TOG-8728](/TOG/issues/TOG-8728) (backlog, not
+this card): whatever rotates `laravel.log` bounds how far back this grep
+reaches.
+
+Pinned by `tests/Unit/CspReportQueryDocTest.php`, which asserts this section
+still names the grep string, the trigger, and the bounds.
+
+---
+
 ## Quick-reference: "it is down, what do I do"
 
 1. `curl -sSI https://togetherweown.com/up` — is the app answering at all?
