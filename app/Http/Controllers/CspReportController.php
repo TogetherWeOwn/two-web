@@ -13,7 +13,9 @@ use Illuminate\Support\Facades\Log;
  * the browser fires this from pages whose session may already be gone, and —
  * like `/discord` — it answers when the app database is down (a report is
  * logged, never stored). No session, no CSRF, no throttle (the route reads no
- * cache, and the edge already rate-limits), no auth.
+ * cache; `throttle` middleware reads the database-backed cache store, so it
+ * would fail the outage-answer promise — flood control lives in this
+ * controller instead), no auth.
  *
  * Accepts the CSP `report-uri` JSON shape (`{"csp-report": {...}}`) and the
  * newer `Reporting API` shape (`[{...}]`), logs a sampled subset at warning
