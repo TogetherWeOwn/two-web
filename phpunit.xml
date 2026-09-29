@@ -38,9 +38,18 @@
              runs against whatever Postgres you can reach — docker-compose, a CI service
              container, or a shared server. The database *name* is forced, so a test run
              can never wipe your development data. docker-compose creates it; if you are
-             not using Docker, create it yourself once. -->
-        <env name="DB_CONNECTION" value="pgsql"/>
-        <env name="DB_DATABASE" value="two_web_test"/>
+             not using Docker, create it yourself once.
+
+             `force="true"` (TOG-9649). Without it this block only fills gaps, so a
+             `.env` file or an inherited environment variable silently repoints the
+             suite at another database and RefreshDatabase runs migrate:fresh there
+             — the 2026-09-29 production wipe. Forced values beat `.env`-file values.
+             (A *real* process environment variable still wins over PHPUnit for a
+             Laravel app — PHPUnit never touches `$_SERVER`, which Laravel reads
+             first. That case is caught by the `Tests\TestCase` guard, which refuses
+             any non-`two_web_test*` database before the first migration runs.) -->
+        <env name="DB_CONNECTION" value="pgsql" force="true"/>
+        <env name="DB_DATABASE" value="two_web_test" force="true"/>
 
         <env name="MAIL_MAILER" value="array"/>
         <env name="QUEUE_CONNECTION" value="sync"/>
