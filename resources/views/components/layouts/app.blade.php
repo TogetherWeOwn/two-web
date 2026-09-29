@@ -56,6 +56,13 @@
          matching atom:link rel="self". Unconditional: the URL is stable and
          public, and a conditional risks pages that silently opt out. --}}
     <link rel="alternate" type="application/rss+xml" title="{{ config('app.name') }} Events" href="{{ route('events.rss') }}">
+    {{-- Discord CDN hints (TOG-8413). Member avatars come from
+         cdn.discordapp.com and the profile avatar <img> is eager above the
+         fold, so warming DNS/TLS here cuts that fetch's setup latency. No
+         crossorigin: the avatar is a no-CORS <img>, and a crossorigin hint
+         would open a pooled connection the image never reuses. --}}
+    <link rel="dns-prefetch" href="https://cdn.discordapp.com">
+    <link rel="preconnect" href="https://cdn.discordapp.com">
     {{-- Archivo is self-hosted and the headline uses its width axis. Without
          this the hero reflows on first paint and the join button moves. --}}
     <link rel="preload" href="/fonts/archivo-latin.woff2" as="font" type="font/woff2" crossorigin>
