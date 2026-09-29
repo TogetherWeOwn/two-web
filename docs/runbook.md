@@ -347,6 +347,82 @@ script's self-test, it binds local ports).
 
 ---
 
+## Error alerting (TOG-8730)
+
+The uptime ping above answers "is the site down". This section answers "is
+the site broken while still answering" — a 500 on one route, a job the
+worker gives up on. No Sentry, no Flare, no Bugsnag: none installed, none
+allowed. The channel is the log the box already tails, plus cron mail as
+the pager.
+
+**Two alert lines, both already in the log.** The application emits them:
+
+1. `Unhandled exception.` — one critical line per distinct unhandled
+   failure, logged by the `report` listener in `bootstrap/app.php`, with
+   the exception class, route and message as structured context. It runs
+   after the framework's own dont-report list, so 404s, 403s, validation
+   and throttles never alert — only genuine 500s. A per-fingerprint rate
+   limit (`App\Support\ErrorAlertRateLimit`: one alert per exception
+   class + route per 5 minutes) mutes repeats, so a crashing deploy
+   produces one line, not thousands. If the limiter store itself is down,
+   the guard degrades to unmuted rather than silent — a second mail beats
+   a swallowed outage.
+2. `Queue job failed.` — one critical line per failed job, logged by the
+   `Queue::failing` listener in `AppServiceProvider` (TOG-6948).
+
+**Who watches:** cron on the box, owned by DevOps (same box and same
+ownership as the uptime ping). The watcher is `bin/error-log-watch.sh` —
+it scans the log delta since the last run for those two lines and exits
+nonzero with the lines attached when one landed, so cron mail is the
+pager. The QUIET path prints nothing — stock cron mails on *any* job
+output regardless of exit code, so a chatty QUIET would page the on-call
+every 5 minutes forever. **No mail is QUIET, and an `ALERT` mail is a
+page** (`--verbose` restores the QUIET one-liner for hand runs).
+
+**Cadence:** every 5 minutes, production and staging (staging first —
+staging proves the path before production needs it):
+
+```cron
+MAILTO=devops@example.com
+*/5 * * * * /var/www/two-web/bin/error-log-watch.sh
+```
+
+(Use the real on-call address for `MAILTO`, set in the cron environment on
+the box — never in the repo. The log path defaults to the checkout's own
+`storage/logs/laravel.log`; a Coolify deploy whose log lives elsewhere
+passes `--log` explicitly.)
+
+**The drill — prove a 500 pages (staging, after each deploy until this
+settles):**
+
+```bash
+php artisan error-alert:probe --json   # alert fires once, repeat muted
+bin/error-log-watch.sh --verbose       # ALERT mail content, by hand
+```
+
+The probe throws a marker exception through the same `report` listener a
+real 500 travels and reports whether the alert fired and the repeat was
+muted; the watcher half is a log tail by hand. Pinned by
+`tests/Feature/Console/ErrorAlertProbeTest.php`.
+
+**Honest limits, same as the ping:**
+
+- A rotated log re-reads from the top (offset past EOF), so one duplicate
+  mail follows each rotation. The price of a pager that never goes blind.
+- An alert already mailed is not re-mailed: the offset advances even on
+  ALERT, so the mail carries the lines once. The next *new* alert still
+  pages. If paging ever needs re-mail-until-acknowledged, that is a new
+  decision with a new card.
+- Like the ping, this complains when broken — if cron itself dies, no mail
+  arrives and nothing pages.
+
+**Proving the watcher:** `bin/error-log-watch.sh --selftest` drives the
+real script against fixture logs (quiet, fires, queue-half, rotation,
+missing log, usage) entirely offline, the same pattern as
+`bin/uptime-ping.sh --selftest`. Run it after any edit to the script.
+
+---
+
 ## Quick-reference: "it is down, what do I do"
 
 1. `curl -sSI https://togetherweown.com/up` — is the app answering at all?
