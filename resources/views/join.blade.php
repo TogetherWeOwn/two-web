@@ -1,4 +1,4 @@
-<x-layouts.app title="Join Together We Own" :canonical="route('join')" :shareDescription="__('join.intro')">
+<x-layouts.app :title="__('join.heading')" :canonical="route('join')" :shareDescription="__('join.intro')">
     <section class="bg-violet">
         <div class="mx-auto max-w-3xl px-4 py-16 md:px-6 md:py-20 lg:px-8">
             <h1 class="u-display text-3xl text-ink md:text-5xl">{{ __('join.heading') }}</h1>
