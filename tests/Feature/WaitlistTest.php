@@ -344,6 +344,44 @@ it('keeps the claim control for the gap a promotion cannot cover', function () {
         ->toBe(RsvpStatus::Going);
 });
 
+it('keeps the place in line when the freed seat goes to somebody else first (TOG-8820)', function () {
+    // The claim-race loser: a seat reads free beside M's waitlisted row, so
+    // the component offers the claim control; a rival takes that seat before
+    // M clicks. Forced deterministically — fill the seat between render and
+    // claim, no sleeps.
+    $event = Event::factory()->create([
+        'starts_at' => now()->addDays(3),
+        'ends_at' => now()->addDays(3)->addHours(2),
+        'status' => EventStatus::Published,
+        'capacity' => 2,
+    ]);
+    $holder = User::factory()->create(['is_moderator' => false]);
+    $rival = User::factory()->create(['is_moderator' => false]);
+    app(EventService::class)->rsvp($event->fresh(), $holder, RsvpStatus::Going);
+    app(EventService::class)->rsvp($event->fresh(), $this->member, RsvpStatus::Waitlisted);
+
+    $component = Livewire::actingAs($this->member)
+        ->test(RsvpButton::class, ['event' => $event->fresh()])
+        ->assertSeeHtml('data-testid="waitlist-claim"');
+
+    // The interleave: the rival takes the last free seat first.
+    app(EventService::class)->rsvp($event->fresh(), $rival, RsvpStatus::Going);
+
+    $component->call('rsvp', RsvpStatus::Going->value)
+        // The line view stays, with an honest note — not the full refusal.
+        ->assertSeeHtml('data-testid="waitlist-position"')
+        ->assertSee('Someone just took that seat.', false)
+        ->assertSee('#1 in line', false)
+        ->assertSeeHtml('data-testid="waitlist-leave"')
+        ->assertDontSee("This one's full.", false)
+        ->assertDontSeeHtml('data-testid="waitlist-join"');
+
+    // Nothing was written for the loser: still in line, still #1.
+    expect(Rsvp::query()->where('user_id', $this->member->id)->first()?->status)
+        ->toBe(RsvpStatus::Waitlisted)
+        ->and($event->fresh()->waitlistPositionFor($this->member))->toBe(1);
+});
+
 it('moves focus to the place in line after joining', function () {
     $html = Livewire::actingAs($this->member)
         ->test(RsvpButton::class, ['event' => $this->full])
