@@ -1,5 +1,8 @@
 <?php
 
+use App\Models\AgentEventIdempotencyKey;
+use App\Models\EventSearchLog;
+use App\Models\JoinAttempt;
 use App\Models\MemberDataAccessLog;
 use Illuminate\Foundation\Inspiring;
 use Illuminate\Support\Facades\Artisan;
@@ -17,6 +20,28 @@ Artisan::command('inspire', function () {
 // data, which is the right way round for a log but is still a thing to notice:
 // tests/Feature/MemberDataAccessLogTest.php asserts the schedule exists.
 Schedule::command('model:prune', ['--model' => [MemberDataAccessLog::class]])->daily();
+
+// Retention on the join funnel and the agent replay store (TOG-8710).
+// `model:prune` runs the mass delete on each model's prunable(), which can
+// only ever match rows older than that model's configured window — it is not
+// a general delete anyone can point somewhere else. One entry for both
+// models: a single daily pass, same as the access-log entry above, keeps the
+// schedule readable and the prune cost to one wake per model.
+//
+// If the scheduler is not running, both tables grow forever rather than
+// losing data, which is the right way round for a funnel and a replay store
+// but is still a thing to notice:
+// tests/Feature/Console/PruneStaleRetentionTest.php asserts the schedule
+// exists and that both prunable() scopes keep rows inside the window.
+Schedule::command('model:prune', ['--model' => [JoinAttempt::class, AgentEventIdempotencyKey::class]])->daily();
+
+// Retention on the event search log (TOG-8400). Same shape as the entries
+// above: `model:prune` runs the mass delete on EventSearchLog::prunable(),
+// which can only ever match rows older than the configured window. A missed
+// search older than the window is stale signal, not history worth keeping —
+// and what guests looked for is the one table here that must not become a
+// permanent index.
+Schedule::command('model:prune', ['--model' => [EventSearchLog::class]])->daily();
 
 /*
  * Every ten minutes, because that is the gap between an event going stale and a

@@ -2,9 +2,9 @@
 
 namespace App\Console\Commands;
 
+use App\Support\QueueHealth;
 use Illuminate\Console\Command;
 use Illuminate\Database\QueryException;
-use Illuminate\Support\Facades\DB;
 
 /**
  * Pending-job depth of the Postgres queue (TOG-6773).
@@ -57,10 +57,10 @@ class CheckQueueDepth extends Command
 
     public function handle(): int
     {
-        $connection = (string) config('queue.default', 'database');
-        $driver = config("queue.connections.{$connection}.driver");
+        $connection = QueueHealth::connectionName();
+        $driver = QueueHealth::driver();
 
-        if ($driver !== 'database') {
+        if (! QueueHealth::isCountable()) {
             return $this->report([
                 'status' => 'error',
                 'connection' => $connection,
@@ -84,7 +84,9 @@ class CheckQueueDepth extends Command
         }
 
         try {
-            $depth = $this->measure();
+            // Single shared counting with GET /up (QueueHealth::measure): the
+            // two readers must never disagree about what "deep" means.
+            $depth = QueueHealth::measure();
         } catch (QueryException $e) {
             return $this->report([
                 'status' => 'error',
@@ -105,37 +107,6 @@ class CheckQueueDepth extends Command
             'warn_at' => $warn,
             'critical_at' => $critical,
         ], $status === 'ok' ? self::SUCCESS : self::FAILURE);
-    }
-
-    /**
-     * The pending count is the oldest wait in disguise: write-backs are unique
-     * per event key, so each pending row is one event Discord disagrees with
-     * us about, and the oldest `created_at` among them is how long the
-     * longest-waiting answer has gone unmirrored.
-     *
-     * @return array{pending: int, delayed: int, reserved: int, total: int, failed: int, oldest_pending_age_seconds: ?int}
-     */
-    private function measure(): array
-    {
-        // The queue's own connection/table, not the default: DB_QUEUE_CONNECTION
-        // and DB_QUEUE_TABLE exist precisely so the queue can live on its own
-        // database, and counting the wrong table's rows would be worse than
-        // counting nothing.
-        $db = DB::connection(config('queue.connections.database.connection'));
-        $jobs = $db->table(config('queue.connections.database.table', 'jobs'));
-        $now = time();
-
-        $pending = (clone $jobs)->where('available_at', '<=', $now)->whereNull('reserved_at');
-        $oldest = $pending->clone()->min('created_at');
-
-        return [
-            'pending' => $pending->clone()->count(),
-            'delayed' => (clone $jobs)->where('available_at', '>', $now)->count(),
-            'reserved' => (clone $jobs)->whereNotNull('reserved_at')->count(),
-            'total' => (clone $jobs)->count(),
-            'failed' => $db->table(config('queue.failed.table', 'failed_jobs'))->count(),
-            'oldest_pending_age_seconds' => $oldest === null ? null : $now - (int) $oldest,
-        ];
     }
 
     private function threshold(string $name): ?int

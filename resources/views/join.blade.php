@@ -10,11 +10,29 @@
                    role="{{ $success ? 'status' : 'alert' }}"
                    data-testid="join-result">
                     {{ __('join.result.'.session('join_result')) }}
+                    @if (session('join_result') === 'already_member')
+                        {{-- TOG-7318: re-invite. The bot reports already_member
+                             whenever Discord already holds the account —
+                             including members who left, were kicked, or never
+                             finished screening — and one-click has nothing new
+                             to add. Links the database-free /discord funnel so
+                             the way back in works even when the invite lookup
+                             or the database is down. --}}
+                        <a href="{{ route('discord') }}"
+                           data-testid="reinvite-link"
+                           class="underline">
+                            {{ __('join.reinvite') }}
+                        </a>
+                    @endif
                 </p>
             @endif
 
             <div class="mt-8 flex flex-wrap items-center gap-4">
-                <a href="{{ route('join.redirect') }}"
+                {{-- TOG-9254: forward the return-to page into the OAuth
+                     journey. The guard runs here too, so a hostile `?next=`
+                     never reaches the one-click href. --}}
+                @php($joinNext = \App\Support\SafeRedirect::safe(request()->query('next')))
+                <a href="{{ route('join.redirect', $joinNext ? ['next' => $joinNext] : []) }}"
                    data-testid="one-click-join"
                    class="inline-flex min-h-11 items-center justify-center rounded-md bg-brand px-6
                           font-semibold text-on-brand transition-colors duration-fast ease-out-quick

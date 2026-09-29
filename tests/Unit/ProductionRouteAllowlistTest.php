@@ -11,9 +11,9 @@
 // so adding, removing or renaming a production route fails loudly and the
 // author updates the list deliberately.
 //
-// The allowlist pins reality, not intent: the design-lab routes are present
-// here because TOG-5632 has not merged yet. When it merges, this test fails
-// and the merger drops those two lines — that failure is the mechanism working.
+// The allowlist pins reality, not intent: when a route is added, removed, or
+// renamed in production, this test fails and the author updates the list
+// deliberately — that failure is the mechanism working.
 
 use Illuminate\Contracts\Console\Kernel;
 use Illuminate\Foundation\Application;
@@ -85,9 +85,6 @@ function expectedProductionRoutes(): array
         'GET|HEAD admin/featured-contents/{record}/edit',
         'GET|HEAD auth/discord/callback',
         'GET|HEAD auth/discord/redirect',
-        // TOG-5632 removes these two lines when the design-lab gating merges.
-        'GET|HEAD design-lab/hallmark',
-        'GET|HEAD design-lab/taste',
         'GET|HEAD discord',
         'GET|HEAD e/{event}',
         'GET|HEAD events',
@@ -107,6 +104,7 @@ function expectedProductionRoutes(): array
         'GET|HEAD livewire/livewire.min.js.map',
         'GET|HEAD livewire/preview-file/{filename}',
         'GET|HEAD members/{user}',
+        'GET|HEAD privacy',
         'GET|HEAD profile',
         'GET|HEAD robots.txt',
         'GET|HEAD rules',
@@ -114,9 +112,13 @@ function expectedProductionRoutes(): array
         'GET|HEAD storage/{path}',
         'GET|HEAD up',
         'PATCH events/{event}',
-        'PATCH members/{user}',
+        // TOG-8440 deleted PATCH members/{user} (`profiles.update`): the
+        // Livewire form is the single profile writer, so the member surface is
+        // GET-only plus the shared POST livewire/update endpoint below.
         'POST admin/logout',
         'POST api/agent-events',
+        // TOG-8403: the session-free CSP violation sink in routes/funnel.php.
+        'POST csp-reports',
         'POST events',
         'POST events/{event}/cancel',
         'POST events/{event}/publish',

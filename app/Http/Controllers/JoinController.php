@@ -8,6 +8,7 @@ use App\Models\User;
 use App\Services\Bot\Exceptions\BotException;
 use App\Services\Bot\InternalActionClient;
 use App\Support\DiscordWidget;
+use App\Support\SafeRedirect;
 use GuzzleHttp\Exception\ClientException;
 use Illuminate\Contracts\View\View;
 use Illuminate\Http\RedirectResponse;
@@ -52,6 +53,7 @@ final class JoinController
         }
 
         $this->rememberSource($request);
+        $this->rememberNext($request);
 
         return $this->discord()
             ->setScopes(self::SCOPES)
@@ -174,7 +176,15 @@ final class JoinController
 
         Auth::login($user);
 
-        return redirect()->route('profile')->with('join_result', $result->outcome->value);
+        // Back to the page the guest came from, when they came from one and
+        // the value survives the open-redirect guard. The flash rides along
+        // either way, so no confirmation is lost. Anything else — absent,
+        // rejected, already consumed — keeps the old profile landing.
+        $next = SafeRedirect::safe($request->session()->pull('join_next'));
+
+        return $next !== null
+            ? redirect()->to($next)->with('join_result', $result->outcome->value)
+            : redirect()->route('profile')->with('join_result', $result->outcome->value);
     }
 
     private function discord(): AbstractProvider
@@ -217,6 +227,22 @@ final class JoinController
 
         if (is_string($source) && preg_match('/^[a-z0-9][a-z0-9:_-]{0,63}$/i', $source) === 1) {
             $request->session()->put('join_source', $source);
+        }
+    }
+
+    /**
+     * The page to return to after the OAuth round trip, or nothing.
+     *
+     * Stored only when it passes the open-redirect guard, so the session never
+     * holds a value the callback would refuse to use. Hostile values leave no
+     * trace and the callback keeps the old profile landing.
+     */
+    private function rememberNext(Request $request): void
+    {
+        $next = SafeRedirect::safe($request->query('next'));
+
+        if ($next !== null) {
+            $request->session()->put('join_next', $next);
         }
     }
 

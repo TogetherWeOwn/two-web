@@ -9,8 +9,11 @@
 <div class="flex flex-col gap-2">
     @guest
         {{-- Not a disabled RSVP button. A guest's next action is to log in, and
-             saying so is shorter than explaining why the button is grey. --}}
-        <a href="{{ route('login') }}"
+             saying so is shorter than explaining why the button is grey.
+             `?next=` returns them to this page after Discord (TOG-9254);
+             `$returnTo` is the page path captured at render, null for a bare
+             link. --}}
+        <a href="{{ route('login', $returnTo ? ['next' => $returnTo] : []) }}"
            class="inline-flex items-center justify-center gap-2 min-h-11 px-5 rounded-md
                   bg-transparent text-ink border border-line-strong
                   hover:bg-raised hover:border-ink-muted active:bg-surface
@@ -80,9 +83,12 @@
             </p>
 
             @if ($seatOpenForWaitlist)
-                {{-- A seat freed while in line. The waitlist never auto-promotes
-                     — that claim would be its own race — so the member takes it
-                     through the same locked write as everybody else. --}}
+                {{-- A seat reads free while the member is still in line — only
+                     possible mid-flight before their promotion renders, or when
+                     a promotion never fired. A withdraw (or a raised cap) deals
+                     freed seats to the head of the line in the same locked
+                     write (TOG-8394); this control takes the seat through the
+                     same locked write for whatever gap remains. --}}
                 <button type="button"
                         wire:click="rsvp('{{ \App\Enums\RsvpStatus::Going->value }}')"
                         wire:loading.attr="disabled"
@@ -124,6 +130,10 @@
                 <span class="font-medium">You're in</span>
             </p>
 
+            {{-- Same loading contract as the "I'm in" button below: the box is
+                 reserved up front (CLS budget 0.1), the control disables while
+                 the answer is in flight, and the spinner + copy swap in with
+                 aria-busy so the wait is announced (TOG-5416). --}}
             <button type="button"
                     wire:click="withdraw"
                     wire:loading.attr="disabled"
@@ -175,6 +185,14 @@
             <p class="text-xs text-ink-muted" role="status" data-testid="rsvp-syncing">
                 Saved. Syncing to Discord.
             </p>
+        @elseif ($syncFailed && $going)
+            {{-- TOG-6990: the third state. The bot refused the mirror terminally,
+                 so this will not retry until somebody changes something — but
+                 the answer is saved and counts. role="status", not alert: there
+                 is nothing to act on and nobody did anything wrong. --}}
+            <p class="text-xs text-ink-muted" role="status" data-testid="rsvp-sync-failed">
+                Saved. Discord sync didn't go through — your spot is still held.
+            </p>
         @elseif ($going)
             <p class="text-xs text-ink-muted" role="status" data-testid="rsvp-synced">
                 Synced to Discord.
@@ -221,7 +239,7 @@
             </svg>
             <span>
                 <span class="font-medium text-ink">Your session expired.</span>
-                <a href="{{ route('login') }}" class="font-semibold underline underline-offset-4 hover:text-ink">Log in with Discord</a>
+                <a href="{{ route('login', $returnTo ? ['next' => $returnTo] : []) }}" class="font-semibold underline underline-offset-4 hover:text-ink">Log in with Discord</a>
                 and try again.
             </span>
         </p>

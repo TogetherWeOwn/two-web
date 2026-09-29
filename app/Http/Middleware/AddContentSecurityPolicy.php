@@ -73,6 +73,13 @@ use Symfony\Component\HttpFoundation\Response;
  * `upgrade-insecure-requests` is emitted on https requests only. HSTS already
  * forces https on staging/production, so nothing is lost there.
  *
+ * Report-only mode (TOG-8403): `CSP_REPORT_ONLY=true` swaps the enforcing
+ * header for `Content-Security-Policy-Report-Only` with the same policy plus
+ * `report-uri /csp-reports`, so violations are logged (see
+ * CspReportController) without blocking. Enforcement behaviour with the flag
+ * off is byte-identical to before — the toggle only changes the header name
+ * and appends the report directive.
+ *
  * Registered on the `web` group and on the Filament admin stack (which does
  * not use `web`), so every HTML page in both stacks carries it. Anything that
  * is not HTML — redirects, JSON, the ICS feed, Livewire's own JS route — is
@@ -86,11 +93,22 @@ class AddContentSecurityPolicy
         $response = $next($request);
 
         // Never double-set: an inner layer that already spoke wins.
-        if ($response->headers->has('Content-Security-Policy')) {
+        if ($response->headers->has('Content-Security-Policy')
+            || $response->headers->has('Content-Security-Policy-Report-Only')) {
             return $response;
         }
 
         if (! str_contains((string) $response->headers->get('Content-Type', ''), 'text/html')) {
+            return $response;
+        }
+
+        // Report-only mode (TOG-8403): same policy, non-enforcing header, plus
+        // the report directive so violations land in POST /csp-reports.
+        // `config()` reads env with no session/cache/database, so this stays
+        // safe on the funnel's dependency-free routes.
+        if ((bool) config('csp.report_only', false)) {
+            $response->headers->set('Content-Security-Policy-Report-Only', $this->policy($request).'; report-uri /csp-reports');
+
             return $response;
         }
 

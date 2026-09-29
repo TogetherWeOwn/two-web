@@ -11,6 +11,7 @@ use App\Models\Rsvp;
 use App\Models\User;
 use App\Services\EventService;
 use App\Support\RsvpRateLimit;
+use App\Support\SafeRedirect;
 use Illuminate\Http\Exceptions\ThrottleRequestsException;
 use Illuminate\View\View;
 use Livewire\Attributes\Locked;
@@ -40,6 +41,11 @@ use Throwable;
  *    and the session died underneath it. Saying "try once more" would be a lie
  *    — no retry can succeed without logging in first — so the click names the
  *    expired session and points at the way back in instead.
+ *
+ *  - **A terminal Discord refusal is a mirror failure, never an RSVP failure.**
+ *    The bot answered no (`discord_sync_failed_at` is stamped), so "Syncing…"
+ *    would be a lie — nothing is on its way — but so would the error banner:
+ *    the answer is committed and counts. The member is told exactly that.
  */
 class RsvpButton extends Component
 {
@@ -77,9 +83,22 @@ class RsvpButton extends Component
      */
     public bool $sessionExpired = false;
 
+    /**
+     * Where the guest login links send the member back to after Discord.
+     *
+     * Captured once in mount, when the real page request is in hand. A
+     * Livewire re-render answers a `/livewire/update` request, so reading the
+     * path in the blade would point `?next=` at the update endpoint after the
+     * first morph — a persisted prop keeps the page path across updates, and
+     * keeps the expired-session re-render pointing at the page too. Null when
+     * the path fails the open-redirect guard, and the links stay bare.
+     */
+    public ?string $returnTo = null;
+
     public function mount(Event $event): void
     {
         $this->event = $event;
+        $this->returnTo = SafeRedirect::safe(request()->getPathInfo());
     }
 
     public function rsvp(string $status, EventService $events): void
@@ -111,6 +130,11 @@ class RsvpButton extends Component
         try {
             RsvpRateLimit::hit($user);
             $events->rsvp($this->event, $user, $answer);
+            // TOG-6990: a re-arming write clears the terminal stamp on the
+            // service's own row instance. Re-read so this render sees the
+            // cleared stamp — otherwise the banner shows "failed" for an
+            // attempt that is already back to "syncing".
+            $this->event = $this->event->fresh() ?? $this->event;
             // TOG-6956: a successful write swaps the focused button for the
             // confirmation, which drops keyboard focus to <body>. The
             // self-dispatch fires after Livewire has morphed the new state in,
@@ -244,18 +268,34 @@ class RsvpButton extends Component
             // for one), and they must still be able to stand down or
             // leave the line. Trapping them at the refusal is the bug.
             'atCapacity' => ! $going && ! $waitlisted && $this->isAtCapacity(),
-            // A freed seat while in line: the waitlist does not auto-promote
-            // (that is a race of its own), so the member claims it themselves
-            // through the same locked write as everybody else.
+            // True only in the gap the auto-promote cannot cover: the row this
+            // render read says a seat is free while the member is still in
+            // line — a state that can only exist mid-flight (their promotion
+            // has not rendered yet) or when promotion was never reached. The
+            // write takes the seat through the same locked path as everybody
+            // else, first-come first-served against the line.
             'seatOpenForWaitlist' => $waitlisted && $this->event->status === EventStatus::Published && ! $this->event->hasEnded() && ! $this->isAtCapacity(),
             // One-based place in line, only when it will be shown.
             'waitlistPosition' => $waitlisted ? $this->waitlistPosition() : null,
             // Committed here, not yet in Discord. A true state, not an error.
-            'syncing' => $rsvp !== null && $rsvp->synced_to_discord_at === null,
+            // A terminally-refused row is never "syncing": the bot answered no
+            // (TOG-6990), so that copy would be a lie. It reads as failed below.
+            'syncing' => $rsvp !== null && $rsvp->synced_to_discord_at === null
+                && $this->event->discord_sync_failed_at === null,
+            // The third state (TOG-6990): saved here, refused over there. The
+            // answer counts — this is never the error banner — but no retry is
+            // coming until somebody changes something, so it must not read as
+            // pending either.
+            'syncFailed' => $rsvp !== null && $rsvp->synced_to_discord_at === null
+                && $this->event->discord_sync_failed_at !== null,
             // TOG-7976: the announced throttle wait, or null when the last
             // attempt was not throttled. The blade node stays beside the
             // control with the button enabled, like rsvp-failed.
             'rateLimitedMessage' => $this->rateLimitedMessage(),
+            // TOG-9254: the guest links' return-to page, or null for bare
+            // links. Read from the persisted prop, never from the request —
+            // see $returnTo.
+            'returnTo' => $this->returnTo,
         ]);
     }
 

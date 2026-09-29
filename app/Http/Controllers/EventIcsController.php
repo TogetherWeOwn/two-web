@@ -4,6 +4,7 @@ namespace App\Http\Controllers;
 
 use App\Models\Event;
 use App\Support\EventIcs;
+use Illuminate\Http\Request;
 use Illuminate\Http\Response;
 use Illuminate\Support\Facades\Gate;
 
@@ -25,17 +26,27 @@ use Illuminate\Support\Facades\Gate;
  */
 final class EventIcsController
 {
-    public function __invoke(Event $event): Response
+    public function __invoke(Request $request, Event $event): Response
     {
         Gate::authorize('view', $event);
 
         // `<event_key>.ics`, not `event.ics`: the filename is what a calendar
         // client names the subscription or download, and the key is stable and
         // unique where the title is neither.
-        return response(EventIcs::for($event), 200, [
+        $response = response(EventIcs::for($event), 200, [
             'Content-Type' => 'text/calendar; charset=utf-8',
             'Content-Disposition' => 'attachment; filename="'.$event->event_key.'.ics"',
             'Cache-Control' => 'private, max-age=300',
         ]);
+
+        // Same strong-validator-over-bytes pattern as the RSS feed (`TOG-7330`):
+        // `DTSTAMP` rides the content clock (`EventIcs` stamps the row's
+        // `updated_at`), so unchanged content is byte-identical and a repeat
+        // poll with `If-None-Match` answers 304 with no body.
+        $content = $response->getContent();
+        $response->setEtag(hash('sha256', $content === false ? '' : $content));
+        $response->isNotModified($request);
+
+        return $response;
     }
 }

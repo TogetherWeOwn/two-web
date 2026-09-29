@@ -124,6 +124,33 @@ Read-only Postgres role the bot grants us for its published views (TWO-23).
 | `BOT_DB_USERNAME` / `BOT_DB_PASSWORD` (**secret**) | Optional, **leave blank locally** until the views exist | Blank | Read-only credentials provisioned by the bot side | Blank = bot-sourced views unavailable (degraded, by design). Wrong = connection errors on the views that need them. |
 | `BOT_DB_TIMEOUT` | Optional, not in `.env.example` (default 2s) | Unset | Unset | Too high: pages depending on bot views hang on bot-DB outages instead of degrading fast. |
 
+## 8b. Join funnel and agent replay-store retention
+
+`join_attempts` grows by one row per join attempt and
+`agent_event_idempotency_keys` by one row per agent operation; both are pruned
+daily by `model:prune` on their `prunable()` scopes (`routes/console.php`),
+which can only ever match rows older than the configured window. The admin
+funnel widget counts the table it sees — the retention window, not all time.
+
+| Key | Required? | Local | Staging / Production | What breaks if wrong |
+| --- | --- | --- | --- | --- |
+| `JOIN_ATTEMPT_RETENTION_DAYS` | Optional (default 90) | `90` | `90` | Narrows or widens the funnel window the admin widget shows; same window as the access log on purpose. |
+| `AGENT_EVENTS_IDEMPOTENCY_RETENTION_DAYS` | Optional (default 90) | `90` | `90` | Well past any retry horizon (job backoffs top out at hours). A retry arriving after its row was pruned re-executes; the quota and optimistic-concurrency guards make that duplicate-safe. |
+
+## 8c. Event search-log retention
+
+`event_search_logs` grows by one row per rendered `/events` search and is
+pruned daily by `model:prune` on its `prunable()` scope
+(`routes/console.php`), which can only ever match rows older than the
+configured window. The dashboard's missed-searches widget shows the
+retention window, not all time. What guests searched for must not become a
+permanent index — normalized queries only, no user id, no session, no IP,
+no raw input.
+
+| Key | Required? | Local | Staging / Production | What breaks if wrong |
+| --- | --- | --- | --- | --- |
+| `EVENT_SEARCH_LOG_RETENTION_DAYS` | Optional (default 90) | `90` | `90` | Narrows or widens the missed-searches window the admin widget shows; same window as the access log on purpose. |
+
 ## 9. Member-data access log
 
 Reads of member data through the admin panel are logged (who, when, which
@@ -140,6 +167,36 @@ configuring the moderator roles (section 6) narrowly.
 | Key | Required? | Local | Staging / Production | What breaks if wrong |
 | --- | --- | --- | --- | --- |
 | `TWO_WEB_STAGING_QA_AUTH_TOKEN` | Staging only — **unset everywhere else** | Unset | Provisioned through Paperclip/Coolify secret controls; accepted only in the `X-TWO-QA-Auth` header | Set in prod: an extra auth bypass exists where it should not. Leaked (URL, body, log, screenshot, repo): rotate via secret controls. Never put it in a URL, request body, log, screenshot, or repository file. |
+
+### QA credential hygiene (TOG-9251)
+
+The `/auth/qa/{identity}` seam (`routes/web.php`, `qa.login`) signs in one of
+two deterministic fixtures — `qa-member` and `qa-moderator`
+(`app/Http/Controllers/Auth/StagingQaLoginController.php`) — with a single
+shared token. The route is registered only when `APP_ENV=staging` and the
+controller re-checks the environment and fails closed on a blank token, but
+token age and rotation need an owner regardless.
+
+- **Owner:** CISO. Day-to-day rotation is executed by DevOps through
+  Coolify secret controls; the CISO owns the age limit and confirms each
+  rotation is recorded.
+- **Who may hold QA identities:** only the staging test automation and named
+  QA engineers behind Cloudflare Access (the outer gate). The token is sent
+  only in the `X-TWO-QA-Auth` header — never in a URL, body, log, screenshot,
+  or repo file — and is never shared outside the staging QA group.
+- **Max credential age:** 90 days. Rotate sooner on any suspected leak, on
+  QA-team membership change, or if `bin/env-parity.sh` ever reports
+  `PROD-HAS-STAGING-ONLY TWO_WEB_STAGING_QA_AUTH_TOKEN`.
+- **Rotation steps:**
+  1. Generate: `php -r 'echo bin2hex(random_bytes(32)), PHP_EOL;'`
+  2. Set the new value as `TWO_WEB_STAGING_QA_AUTH_TOKEN` in Coolify
+     (staging) secret controls and redeploy/restart staging.
+  3. Verify the old token fails closed (`404`) and the new token signs in a
+     fixture (`204`):
+     `curl -i -H "X-TWO-QA-Auth: <new-token>" https://<staging-host>/auth/qa/qa-member`
+     must return `204`; the same request with the old token must return `404`.
+  4. Record the rotation date where the next due date (rotation date + 90
+     days) is visible to the QA group.
 
 ## 11. Paperclip (restart-card / operator integration)
 
@@ -174,6 +231,26 @@ restart-card/operator calls fail.
 | --- | --- | --- | --- | --- |
 | `VITE_APP_NAME` | Optional | `"${APP_NAME}"` (interpolates at build time) | Same | Only the display name baked into built assets. Note the quoting: it references `APP_NAME`, so renaming means rebuilding frontend assets. |
 
+## 14. Community pages
+
+| Key | Required? | Local | Staging / Production | What breaks if wrong |
+| --- | --- | --- | --- | --- |
+| `RULES_LAST_UPDATED` | Optional — **leave blank** unless bumping the stamp (default lives in `config/community.php`) | Blank | Set to the last review date (YYYY-MM-DD) whenever the house rules change | Shown as the "Last updated" stamp on `/rules`. Empty or unparseable: the stamp is hidden and a warning is logged — the page stays 200, so a typo degrades, never breaks. Wrong-but-parseable: the stamp shows the wrong date; bump it with the rules change. |
+
+## 15. CSP report-only mode
+
+`AddContentSecurityPolicy` enforces by default. Setting `CSP_REPORT_ONLY`
+swaps the enforcing `Content-Security-Policy` header for
+`Content-Security-Policy-Report-Only` (same policy, plus
+`report-uri /csp-reports`) so violations are logged, not blocked. Flip it on
+to tune the policy against real traffic, then flip it back — it is an
+observe-then-revert switch, not a steady state. Neither key is a secret.
+
+| Key | Required? | Local | Staging / Production | What breaks if wrong |
+| --- | --- | --- | --- | --- |
+| `CSP_REPORT_ONLY` | Optional (default `false`) | `false` (enforce) | `false`; `true` briefly to tune against real traffic | `true` left on: nothing is blocked, violations only log via `POST /csp-reports`. |
+| `CSP_REPORT_SAMPLE_RATE` | Optional (default `1.0`) | `1.0` | `1.0`; lower if report volume outweighs the signal | `0.0`: valid reports are parsed but never logged (blind). Values `>= 1.0` log everything, `<= 0.0` log nothing. Flood control for the unauthenticated sink, alongside the controller's 8 KB body cap. |
+
 ## Quick checklists
 
 **New developer:** copy example → `key:generate` → fill `DISCORD_CLIENT_ID` /
@@ -193,3 +270,28 @@ controls) → `SESSION_DOMAIN=null` → `TWO_WEB_STAGING_QA_AUTH_TOKEN` staging-
 `TWO_INTERNAL_KEYS` → set `BOT_KEY_ID` + `BOT_SHARED_SECRET` here → verify a
 bot action → retire the old pair. `unauthorized` after a change means either
 the id or the secret is wrong — check both, the error will not say which.
+
+## 14. Staging-to-prod parity (`bin/env-parity.sh`)
+
+`bin/env-parity.sh STAGING_ENV PROD_ENV` diffs the **key names** present in
+two dotenv-format snapshots against the required set (`.env.example` plus the
+documented-but-not-in-example keys from §§ 1–13). It prints key names and
+categories only — **never values**. A snapshot full of live secrets produces
+the same output as one full of placeholders, because values are dropped in
+the extraction pipeline before they touch a variable. Values are also never
+compared: `APP_KEY`, `DB_PASSWORD`, `APP_URL` and friends are *expected* to
+differ per environment, so comparing them would cry wolf on every run.
+
+Snapshots are files you create outside the repo from the Coolify dashboard
+(or env export) and never commit. Exit `0` = parity, `1` = drift (see below),
+`2` = called wrongly. `bin/env-parity.sh --selftest` exercises the contract
+offline, including a check that fixture secret values never reach the output.
+
+Drift categories and what to do about each:
+
+| Report line | Meaning | Fix |
+| --- | --- | --- |
+| `MISSING staging/prod: KEY` | Required key absent on that side | Add it via secret controls (secret) or env config (non-secret). If the key is genuinely not needed there, the decision belongs in `.env.example` / this doc, not in a quieter env — update the source of truth, don't silence the check. |
+| `PROD-HAS-STAGING-ONLY TWO_WEB_STAGING_QA_AUTH_TOKEN` | The staging QA seam exists in prod | Remove it from prod, then **rotate** it: it existed where it must not (§10). |
+| `FORBIDDEN …: DUSK_TEST_SEAMS` / `DUSK_DISCORD_PROVIDER_URL` | A test seam left the test suite | Unset it immediately on that environment; `true` outside tests lets anyone sign in as anyone (§12). |
+| `UNKNOWN …: KEY` | In an env but in neither `.env.example` nor this doc | Either document it here (with required/secret/staging-vs-prod columns) and add it to the example if it belongs there, or remove it from the env. Unknown keys are how quiet `.env` changes become launch-day surprises. |
