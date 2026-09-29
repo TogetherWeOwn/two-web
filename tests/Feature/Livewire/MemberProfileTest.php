@@ -201,6 +201,57 @@ it('keeps the form open when the profile write fails and does not leak the reaso
     }
 });
 
+it('shows the validation summary, not a stale save failure, after a write failure', function () {
+    // TOG-9856: a write failure set saveFailed=true, and a later invalid save
+    // returned via the per-game addError branches before the flag was cleared,
+    // so the alert kept saying "That profile did not save." save() recomputes
+    // the flag per attempt, so the validation summary wins.
+    $member = User::factory()->create();
+    MemberProfile::$profileWriter = static fn () => throw new RuntimeException('boom');
+
+    try {
+        $gamesText = implode("\n", array_map(fn (int $i) => "Game {$i}", range(1, 21)));
+
+        Livewire::actingAs($member)
+            ->test(MemberProfile::class, ['member' => $member, 'stats' => profileStats($member->discord_id)])
+            ->call('edit')
+            ->tap(fn () => pausePastFillFloor())
+            ->set('bio', 'Still here.')
+            ->call('save')
+            ->assertSet('saveFailed', true)
+            ->assertSee('That profile did not save.')
+            ->set('gamesText', $gamesText)
+            ->call('save')
+            ->assertSet('saveFailed', false)
+            ->assertHasErrors(['gamesText'])
+            ->assertSee('Check the highlighted fields and try again.')
+            ->assertDontSee('That profile did not save.');
+    } finally {
+        MemberProfile::$profileWriter = null;
+    }
+});
+
+it('clears a stale save failure on cancel', function () {
+    // TOG-9856: cancel() reset validation but left saveFailed=true.
+    $member = User::factory()->create();
+    MemberProfile::$profileWriter = static fn () => throw new RuntimeException('boom');
+
+    try {
+        Livewire::actingAs($member)
+            ->test(MemberProfile::class, ['member' => $member, 'stats' => profileStats($member->discord_id)])
+            ->call('edit')
+            ->tap(fn () => pausePastFillFloor())
+            ->set('bio', 'Still here.')
+            ->call('save')
+            ->assertSet('saveFailed', true)
+            ->call('cancel')
+            ->assertSet('saveFailed', false)
+            ->assertSet('editing', false);
+    } finally {
+        MemberProfile::$profileWriter = null;
+    }
+});
+
 it('keeps the form open and identifies fields when an edit fails validation', function () {
     $member = User::factory()->create();
 

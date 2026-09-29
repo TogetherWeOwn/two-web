@@ -142,6 +142,7 @@ class MemberProfile extends Component
 
         Gate::authorize('updateProfile', $this->member);
 
+        $this->saveFailed = false;
         $this->resetValidation();
         $this->editing = false;
         $this->sessionExpired = false;
@@ -166,6 +167,11 @@ class MemberProfile extends Component
         }
 
         Gate::authorize('updateProfile', $this->member);
+
+        // TOG-9856: recomputed per attempt — a prior write failure must not
+        // linger through a later validation failure (validate() throws and
+        // the per-game addError branches return before the write path).
+        $this->saveFailed = false;
 
         // TOG-6957: dispatched BEFORE validation on purpose. A failed
         // `$this->validate()` throws ValidationException, which aborts this
