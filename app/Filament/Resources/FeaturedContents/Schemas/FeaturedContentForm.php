@@ -2,6 +2,7 @@
 
 namespace App\Filament\Resources\FeaturedContents\Schemas;
 
+use App\Rules\HttpsImageUrl;
 use Filament\Forms\Components\DateTimePicker;
 use Filament\Forms\Components\Textarea;
 use Filament\Forms\Components\TextInput;
@@ -43,10 +44,15 @@ class FeaturedContentForm
                             ->maxLength(255),
                         TextInput::make('image_url')
                             ->url()
+                            // TOG-7473: `url()` alone accepts ftp:// and any
+                            // https:// host, including .svg and tracking
+                            // pixels, rendered to every visitor. HttpsImageUrl
+                            // narrows it to https still-photo URLs.
+                            ->rule(new HttpsImageUrl)
                             ->live()
                             ->label('Image URL')
                             ->placeholder('https://example.org/photo.jpg')
-                            ->helperText('Optional. A direct link to a real community photo — never stock or generated imagery. Shown full-width below the text.')
+                            ->helperText('Optional. An https link to a real community photo (jpg, png, webp, gif, avif) — never stock or generated imagery. Shown full-width below the text.')
                             ->maxLength(255),
                         TextInput::make('image_alt')
                             ->live()
