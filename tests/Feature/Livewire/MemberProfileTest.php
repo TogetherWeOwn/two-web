@@ -163,6 +163,23 @@ it('saves member-owned fields and returns to the profile', function () {
         ->timezone->toBe('Europe/London');
 });
 
+it('round-trips a bio of exactly "0" instead of storing null', function () {
+    // TOG-9855: trim("0") is "0" but "0" ?: null is null in PHP, which
+    // swallowed a bio of exactly "0" into NULL on save.
+    $member = User::factory()->create();
+
+    Livewire::actingAs($member)
+        ->test(MemberProfile::class, ['member' => $member, 'stats' => profileStats($member->discord_id)])
+        ->call('edit')
+        ->tap(fn () => pausePastFillFloor())
+        ->set('bio', '0')
+        ->call('save')
+        ->assertSet('editing', false)
+        ->assertSee('Profile saved.');
+
+    expect($member->profile()->first())->bio->toBe('0');
+});
+
 it('keeps the form open when the profile write fails and does not leak the reason', function () {
     $member = User::factory()->create();
     MemberProfile::$profileWriter = static fn () => throw new RuntimeException('host=10.0.0.4');
