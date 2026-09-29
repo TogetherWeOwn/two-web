@@ -46,7 +46,10 @@ final class JoinController
     public function redirect(Request $request): RedirectResponse
     {
         if (! $this->botConfigured()) {
-            $this->recordAttempt(JoinOutcome::Degraded, null, null, null);
+            $this->rememberSource($request);
+            $degradedSource = $request->session()->pull('join_source');
+
+            $this->recordAttempt(JoinOutcome::Degraded, is_string($degradedSource) ? $degradedSource : null, null, null);
 
             return $this->done('unavailable');
         }

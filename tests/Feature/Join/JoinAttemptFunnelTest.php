@@ -189,14 +189,27 @@ it('records Degraded when the bot refuses', function () {
 it('records Degraded on the redirect when the bot is not configured', function () {
     config(['services.bot.secret' => '']);
 
-    $this->get(route('join.redirect'))
+    $this->get(route('join.redirect', ['source' => 'web:homepage']))
         ->assertRedirect(route('join'))
-        ->assertSessionHas('join_result', 'unavailable');
+        ->assertSessionHas('join_result', 'unavailable')
+        ->assertSessionMissing('join_source');
 
     $attempt = JoinAttempt::query()->sole();
-    expect($attempt->outcome)->toBe(JoinOutcome::Degraded);
+    expect($attempt->outcome)->toBe(JoinOutcome::Degraded)
+        ->and($attempt->source)->toBe('web:homepage');
 
     Http::assertNothingSent();
+});
+
+it('consumes a stale join_source on the unconfigured redirect', function () {
+    config(['services.bot.secret' => '']);
+
+    $this->withSession(['join_source' => 'web:stale'])
+        ->get(route('join.redirect'))
+        ->assertRedirect(route('join'))
+        ->assertSessionMissing('join_source');
+
+    expect(JoinAttempt::query()->sole()->source)->toBe('web:stale');
 });
 
 it('carries the source onto the success row', function () {
