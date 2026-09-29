@@ -1,6 +1,7 @@
 <?php
 
 use App\Enums\EventStatus;
+use App\Http\Controllers\Auth\AuthStatusController;
 use App\Http\Controllers\Auth\DiscordLoginController;
 use App\Http\Controllers\Auth\StagingQaLoginController;
 use App\Http\Controllers\DesignLab\HallmarkController;
@@ -163,6 +164,15 @@ Route::get('/auth/discord/redirect', [DiscordLoginController::class, 'redirect']
 Route::get('/auth/discord/callback', [DiscordLoginController::class, 'callback'])
     ->middleware('throttle:10,1')
     ->name('login.callback');
+
+// TOG-8136: the cross-tab sign-out probe the layout's tab-sync script asks on
+// visibility/focus. Public on purpose — a logged-out tab must get
+// `{"authenticated":false}`, not the `auth`-group 302 — and throttled like the
+// neighbouring auth reads: visibility transitions are user-driven and rare,
+// and the throttle is the backstop against a stuck script looping the probe.
+Route::get('/auth/status', AuthStatusController::class)
+    ->middleware('throttle:60,1')
+    ->name('auth.status');
 
 // Staging's QA route is deliberately absent from every other environment. The
 // controller repeats the environment check so a cached or manually registered
