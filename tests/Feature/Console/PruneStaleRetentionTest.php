@@ -36,11 +36,14 @@ function backdateRow(string $model, int $id, int $daysAgo): void
     $model::query()->whereKey($id)->update(['created_at' => now()->subDays($daysAgo)]);
 }
 
+// Random UUIDs per grant: no real agent or company id may appear in this
+// file (pre-flip scrub TOG-9031). The prune path never reads caller identity,
+// so no env-only caller provisioning is needed here.
 function pruneGrant(): AgentEventGrant
 {
     return AgentEventGrant::query()->create([
-        'agent_id' => 'c1f22b2f-d85f-41e1-9c16-9ca24ac06a11',
-        'company_id' => 'ef993a7e-5ea7-445f-ba88-27a6a2690c3a',
+        'agent_id' => (string) Str::uuid(),
+        'company_id' => (string) Str::uuid(),
         'guild_id' => '1545644954272137297',
         'verifier_hash' => AgentEventGrant::verifierFor('prune-test-credential'),
         'max_events' => 1,
