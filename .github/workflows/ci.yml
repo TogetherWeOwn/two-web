@@ -30,15 +30,17 @@ jobs:
   # ---------------------------------------------------------------------------
   static:
     name: static
-    runs-on: [self-hosted, two-selfhosted]
+    runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
 
       # Where did this job actually run? `runs-on:` asks; only the job can
-      # answer. Fails on a GitHub-hosted runner (which bills) and publishes its
-      # runner_name as an annotation. First, so a misrouted job burns seconds
-      # rather than a full suite. See ci/attest-runner.sh (TOG-2847).
+      # answer. Fails on a non-hosted runner (the private group cannot serve
+      # this public repo, so a misrouted job would queue forever) and publishes
+      # its runner_name as an annotation. First, so a misrouted job burns
+      # seconds rather than a full suite. See ci/attest-runner.sh (TOG-8909;
+      # the pre-flip self-hosted gate was TOG-2847).
       - name: Attest the runner
         run: ./ci/attest-runner.sh
 
@@ -54,7 +56,7 @@ jobs:
       # And the attestation itself, which is the one check in this repository that
       # cannot be proved by the run it is part of: on a correctly-routed job it
       # passes, and so does a version that returns 0 unconditionally. This drives
-      # it through a synthetic hosted runner, a spoofed name and an unaudited host
+      # it through a synthetic hosted runner, a spoofed name and a private host
       # and pins the exit code and reason for each, then asserts every job in every
       # workflow still carries the step. Under a second, no network.
       - name: Runner attestation self-test
@@ -347,7 +349,7 @@ jobs:
   # ---------------------------------------------------------------------------
   pest:
     name: pest
-    runs-on: [self-hosted, two-selfhosted]
+    runs-on: ubuntu-latest
     timeout-minutes: 15
 
     services:
@@ -371,7 +373,7 @@ jobs:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
 
       # See the note in `static`. Every job attests; a job that does not could be
-      # moved onto a billable runner with nothing going red (TOG-2847).
+      # moved onto a misrouted runner with nothing going red (TOG-8909; pre-flip gate TOG-2847).
       - name: Attest the runner
         run: ./ci/attest-runner.sh
 
@@ -457,7 +459,7 @@ jobs:
   # ---------------------------------------------------------------------------
   dusk:
     name: dusk
-    runs-on: [self-hosted, two-selfhosted]
+    runs-on: ubuntu-latest
     timeout-minutes: 20
 
     # The persistent self-hosted hosts run Chrome as an unprivileged user,
@@ -493,7 +495,7 @@ jobs:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
 
       # See the note in `static`. Every job attests; a job that does not could be
-      # moved onto a billable runner with nothing going red (TOG-2847).
+      # moved onto a misrouted runner with nothing going red (TOG-8909; pre-flip gate TOG-2847).
       - name: Attest the runner
         run: ./ci/attest-runner.sh
 
@@ -672,7 +674,7 @@ jobs:
   # ---------------------------------------------------------------------------
   budgets:
     name: budgets
-    runs-on: [self-hosted, two-selfhosted]
+    runs-on: ubuntu-latest
     timeout-minutes: 20
 
     services:
@@ -696,7 +698,7 @@ jobs:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
 
       # See the note in `static`. Every job attests; a job that does not could be
-      # moved onto a billable runner with nothing going red (TOG-2847).
+      # moved onto a misrouted runner with nothing going red (TOG-8909; pre-flip gate TOG-2847).
       - name: Attest the runner
         run: ./ci/attest-runner.sh
 
@@ -1028,13 +1030,14 @@ jobs:
   # ---------------------------------------------------------------------------
   deps-audit:
     name: deps-audit
-    runs-on: [self-hosted, two-selfhosted]
+    runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
 
       # See the note in `static`. Every job attests; a job that does not could be
-      # moved onto a billable runner with nothing going red (TOG-2847).
+      # moved onto a billable runner with nothing going red
+      # (TOG-8909; pre-flip gate TOG-2847).
       - name: Attest the runner
         run: ./ci/attest-runner.sh
 
@@ -1085,14 +1088,14 @@ jobs:
   # ---------------------------------------------------------------------------
   tests:
     name: tests
-    runs-on: [self-hosted, two-selfhosted]
+    runs-on: ubuntu-latest
     timeout-minutes: 5
     if: always()
     needs: [static, pest, dusk, budgets, deps-audit]
     steps:
       # This job had no checkout: it only reads `needs` results. It needs one now
-      # so it can attest its own runner — the aggregate bills like any other job,
-      # and being cheap is not the same as being free (TOG-2847).
+      # so it can attest its own runner — a job that does not attest could be
+      # misrouted with nothing going red (TOG-8909).
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
 
       - name: Attest the runner
