@@ -3,7 +3,7 @@
 For moderators running the TWO site week to week — publishing events,
 featuring content on the homepage, and answering members when something
 breaks. No engineering needed. If a step below asks you to deploy, edit
-code, or touch production, stop: that step is not yours (see §5).
+code, or touch production, stop: that step is not yours (see §6).
 
 Companion pages: [`docs/troubleshooting-join.md`](troubleshooting-join.md)
 (member can't get into Discord), [`docs/runbook.md`](runbook.md) and
@@ -84,7 +84,7 @@ nothing to do by hand).
 1. Go to `<staging>/admin/featured-contents` and choose **Create**.
 2. **Content section:** headline (required), one or two sentences under
    it (optional — leave empty for a headline-only row), a link for the
-   headline (optional), an image link (optional — see §4 for sizing).
+   headline (optional), an image link (optional — see §5 for sizing).
 3. **Visibility section:**
    - **Published off = staged.** Visible to you in the panel, invisible
      on the site. This is how you draft.
@@ -101,7 +101,19 @@ nothing to do by hand).
 Unlike events, a featured row *can* be deleted from its row menu when it
 is truly dead — but unpublishing is usually enough.
 
-## 4. Cover images: what fits where
+## 4. Missed searches: what guests looked for and missed
+
+The admin dashboard shows **Top searches with no results** — what guests
+typed into the `/events` search box and found nothing for, ordered by how
+often it was missed. A repeat miss here is a game night nobody posted yet:
+if "helldivers" keeps showing up with no results, post a Helldivers night.
+
+What you see is only the search words and how often they missed — never
+who searched. The log keeps no names, accounts, or addresses, so there is
+nothing here that identifies a guest. Entries older than 90 days are pruned
+automatically; the widget shows the window, not all time.
+
+## 5. Cover images: what fits where
 
 The short version: **events have no cover image.** There is no upload
 button, no image field, no sizing rule — if you are looking for one,
@@ -126,7 +138,7 @@ How it displays: full-width at **16:9**, cropped automatically to fill
 - Check the form's Preview box, then the staging homepage, before you
   call it done.
 
-## 5. Incident FAQ: what to tell members
+## 6. Incident FAQ: what to tell members
 
 You cannot change any of the messages below from the panel — they are
 part of the site, changed only by a deploy (an engineer + reviewer job).
