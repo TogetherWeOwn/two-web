@@ -5,6 +5,7 @@ namespace Database\Seeders;
 use App\Enums\EventStatus;
 use App\Enums\RsvpStatus;
 use App\Models\Event;
+use App\Models\Profile;
 use App\Models\Rsvp;
 use App\Models\User;
 use Illuminate\Database\Seeder;
@@ -28,9 +29,13 @@ use RuntimeException;
  * install `--no-dev`, which would make a factory-based seeder die in the only
  * place it is meant to run. Everything here is deterministic literals.
  *
- * SAFETY: refuses to run with `APP_ENV=production`. It fabricates members,
- * events and RSVPs — that is a plausible demo anywhere else and a data
+ * SAFETY: refuses to run with `APP_ENV=production`, and refuses to run when
+ * `APP_URL` points at the production host. It fabricates members, events,
+ * profiles and RSVPs — that is a plausible demo anywhere else and a data
  * integrity incident in production, so the guard throws rather than warns.
+ * The production host is never a literal here: it comes from the
+ * `PRODUCTION_APP_URL` environment value via `config('app.production_url')`,
+ * parsed at runtime, so `NoHardcodedHostnamesTest` stays green.
  */
 class StagingCalendarSeeder extends Seeder
 {
@@ -112,16 +117,58 @@ class StagingCalendarSeeder extends Seeder
         27 => 5,
     ];
 
+    /**
+     * Waitlisted seats behind each full event: the Going count stays exactly at
+     * capacity, and these members queue behind it so the waitlist position
+     * renders. Two fits every full event: the largest capacity is 8, and there
+     * are 12 seeded members, so Going plus waitlisted never reuse a member on
+     * the same event (the RSVP unique key is event + user).
+     */
+    private const WAITLIST_SEATS = 2;
+
+    /**
+     * Deterministic bio lines, cycled across the 13 seeded users. Plain ASCII
+     * literals well inside the 1000-character profile limit.
+     *
+     * @var list<string>
+     */
+    private const PROFILE_BIOS = [
+        'Staging demo member - here for the Friday night ops and the casual lobbies.',
+        'Staging demo member - grinding ranked ladders, welcoming new players.',
+        'Staging demo member - weekend marathons and late-night sessions.',
+        'Staging demo member - tournament practice, then a casual wind-down.',
+        'Staging demo member - new-player welcome crew, usually on voice.',
+        'Staging demo member - community game nights are the whole point.',
+    ];
+
     public function run(): void
     {
         if (app()->environment('production')) {
             throw new RuntimeException(
-                'StagingCalendarSeeder refuses to run in production: it fabricates members, events and RSVPs.'
+                'StagingCalendarSeeder refuses to run in production: it fabricates members, events, profiles and RSVPs.'
+            );
+        }
+
+        // A box is production when its APP_URL says so, whatever APP_ENV claims:
+        // a staging deploy mislabelled with the production URL must not be seeded
+        // either. Both hosts are parsed from config at runtime — no hostname
+        // literal anywhere, per NoHardcodedHostnamesTest. Comparison is on the
+        // host only, so a trailing slash or path on either URL cannot dodge it.
+        // Unset production URL means no production host is known, and only the
+        // APP_ENV guard above applies.
+        $productionHost = $this->urlHost((string) config('app.production_url'));
+
+        if ($productionHost !== null
+            && $this->urlHost((string) config('app.url')) === $productionHost
+        ) {
+            throw new RuntimeException(
+                'StagingCalendarSeeder refuses to run with a production APP_URL: it fabricates members, events, profiles and RSVPs.'
             );
         }
 
         $organiser = $this->seedOrganiser();
         $members = $this->seedMembers();
+        $this->seedProfiles($organiser, $members);
 
         // Instants, never wall-clock readings: a wall time picked in one of
         // these zones can fall in a DST gap that never occurred, and the event
@@ -167,6 +214,54 @@ class StagingCalendarSeeder extends Seeder
         // No `$this->command->info()` summary here on purpose: `$command` is
         // only set when running under `db:seed`, and a direct `->run()` (as in
         // tests) would fatal on it. `db:seed` prints its own completion line.
+    }
+
+    /**
+     * Host part of a URL, lowercased for comparison. Null when there is no
+     * host to compare (unset config, unparsable value): an absent production
+     * URL disables the APP_URL guard rather than blocking every seed run.
+     */
+    private function urlHost(string $url): ?string
+    {
+        if (trim($url) === '') {
+            return null;
+        }
+
+        $host = parse_url($url, PHP_URL_HOST);
+
+        if (! is_string($host) || $host === '') {
+            return null;
+        }
+
+        return strtolower($host);
+    }
+
+    /**
+     * Deterministic profile rows for the organiser and all 12 members: bio
+     * from the cycled literals, games from the seeded games list, timezone
+     * matching one of the seeded zones. `updateOrCreate` on `user_id` keeps
+     * the re-run idempotent, and a reviewer's hand-edited profile on a seeded
+     * user is re-seeded — same ownership rule as the users themselves.
+     *
+     * @param  list<User>  $members
+     */
+    private function seedProfiles(User $organiser, array $members): void
+    {
+        $users = [$organiser, ...$members];
+
+        foreach ($users as $i => $user) {
+            Profile::updateOrCreate(
+                ['user_id' => $user->getKey()],
+                [
+                    'bio' => self::PROFILE_BIOS[$i % count(self::PROFILE_BIOS)],
+                    'games' => [
+                        self::GAMES[$i % count(self::GAMES)],
+                        self::GAMES[($i + 3) % count(self::GAMES)],
+                    ],
+                    'timezone' => self::TIMEZONES[$i % count(self::TIMEZONES)],
+                ],
+            );
+        }
     }
 
     private function seedOrganiser(): User
@@ -371,6 +466,22 @@ class StagingCalendarSeeder extends Seeder
                 // in the "Discord does not know about this yet" state.
                 ['status' => $status, 'synced_to_discord_at' => null],
             );
+        }
+
+        // Behind every full event, a deterministic queue: the Going count stays
+        // exactly at capacity, and the next members in rotation waitlist behind
+        // it so `waitlistCount()` and `waitlistPositionFor()` render. Members
+        // continue the rotation past the Going block, so the waitlisted rows
+        // never collide with a Going row on the same event.
+        if ($full) {
+            foreach (range(0, self::WAITLIST_SEATS - 1) as $k) {
+                $member = $members[($index * 3 + $spec['rsvps'] + $k) % count($members)];
+
+                Rsvp::updateOrCreate(
+                    ['event_id' => $event->getKey(), 'user_id' => $member->getKey()],
+                    ['status' => RsvpStatus::Waitlisted, 'synced_to_discord_at' => null],
+                );
+            }
         }
     }
 }

@@ -14,6 +14,7 @@ use App\Support\Events\DiscordEventsSource;
 use App\Support\MemberDataAccess\AccessRecorder;
 use App\Support\Profiles\MemberStatsReader;
 use App\Support\Profiles\MemberStatsSource;
+use App\Support\RsvpRateLimit;
 use Illuminate\Cache\RateLimiting\Limit;
 use Illuminate\Contracts\Foundation\Application;
 use Illuminate\Http\Request;
@@ -109,6 +110,13 @@ class AppServiceProvider extends ServiceProvider
         // machine callers sit behind shared egress. `route:cache` serialises
         // provider boot, so registration lives here, not in a closure route file.
         RateLimiter::for('agent-events', fn (Request $request): Limit => AgentEventRateLimit::routeLimit($request));
+
+        // The RSVP write shield (TOG-8824): a named limiter with its own
+        // `rsvp:{member id}` bucket. The bare `throttle:12,1` it replaces
+        // shares sha1(user id) with every `throttle:10,1` route, so RSVP
+        // hammering could 429 a member's join/login redirect and vice versa.
+        // Registered here for the same `route:cache` reason as above.
+        RateLimiter::for('rsvp-writes', fn (Request $request): Limit => RsvpRateLimit::routeLimit($request));
 
         // Livewire injects its runtime as a plain <script src> with no defer, which
         // puts 162 KB in the critical path of every Livewire page. On the budget

@@ -1,6 +1,8 @@
 <?php
 
+use App\Http\Controllers\CspReportController;
 use App\Http\Controllers\DiscordInviteController;
+use App\Http\Controllers\HealthCheckController;
 use App\Http\Middleware\AddContentSecurityPolicy;
 use Illuminate\Support\Facades\Route;
 
@@ -30,10 +32,23 @@ use Illuminate\Support\Facades\Route;
 | for neatness fails the build instead of failing a member.
 |
 | Nothing else belongs in this file. Anything that needs a session, a member, or
-| the database goes in routes/web.php where it can have them.
+| the database goes in routes/web.php where it can have them. The one exception
+| is `GET /up` below: the deploys' health check must keep answering through an
+| app-DB outage (the failure it reports on would otherwise also be the failure
+| that silences it), so it shares this file's empty middleware stack instead of
+| the `web` group — and its queue read fails into `unknown` rather than 500ing.
 */
 
 Route::get('/discord', DiscordInviteController::class)->name('discord');
+
+// CSP violation sink (TOG-8403). Empty middleware stack like everything else
+// here, on purpose: the browser fires this session-free from any page, and it
+// must keep answering during an app-DB outage — a report is logged, never
+// stored, so there is nothing to query. Deliberately no `throttle` middleware
+// either (it reads the cache store, which is the database everywhere shipped).
+// Flood control lives in CspReportController instead: 8 KB body cap, a fixed
+// logged key set (never the raw body), sampling, and always-204.
+Route::post('/csp-reports', CspReportController::class)->name('csp-reports');
 
 // Static about page (TOG-5310, TOG-6853). Dependency-free leaf: no controller,
 // no database, no Livewire — Route::view only, so it renders even when the
@@ -55,3 +70,17 @@ Route::view('/about', 'about')->middleware(AddContentSecurityPolicy::class)->nam
 // middleware is attached to the route alone for the same reason: it answers
 // with an HTML document and reads no session, cache or database.
 Route::view('/faq', 'faq')->middleware(AddContentSecurityPolicy::class)->name('faq');
+
+// The deploy and uptime signal (TOG-8414). Replaces the framework's closure
+// `/up` from bootstrap/app.php `health: '/up'`: routes register into one
+// keyed collection (`RouteCollection::addToCollections`), so this later
+// `GET /up` wins the lookup and the framework closure never answers. Same
+// URI, so the deploy poll (`curl -f …/up` in .github/workflows/deploy.yml)
+// and the `GET|HEAD up` allowlist line in
+// tests/Unit/ProductionRouteAllowlistTest.php keep reading the same path —
+// only the payload grows. Empty middleware stack like everything else here:
+// `web` would open Postgres in StartSession before the controller runs, and
+// a route that 500s when the database is down is not a health check. The
+// controller touches no session, cache or auth — only the queue tables, which
+// fail into `queue.status: unknown` rather than into a 500.
+Route::get('/up', HealthCheckController::class)->name('up');

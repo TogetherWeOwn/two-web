@@ -56,6 +56,22 @@ return [
 
     /*
     |--------------------------------------------------------------------------
+    | Production URL
+    |--------------------------------------------------------------------------
+    |
+    | The canonical URL of the production deployment, used only for safety
+    | comparisons — never for link generation. `StagingCalendarSeeder` refuses
+    | to run when `APP_URL` points at this host, so a staging box mislabelled
+    | with a production URL cannot be seeded. Unset means no production host
+    | is known and only the APP_ENV guard applies. No hostname literal lives
+    | here or anywhere else in config: the value arrives via the environment.
+    |
+    */
+
+    'production_url' => env('PRODUCTION_APP_URL'),
+
+    /*
+    |--------------------------------------------------------------------------
     | Application Timezone
     |--------------------------------------------------------------------------
     |

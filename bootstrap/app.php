@@ -4,7 +4,9 @@ use App\Http\Middleware\AddContentSecurityPolicy;
 use App\Http\Middleware\AddSecurityHeaders;
 use App\Http\Middleware\CompressStaticAssets;
 use App\Http\Middleware\RecordMemberDataAccess;
+use App\Support\ExpiredSessionEnvelope;
 use App\Support\ThrottleEnvelope;
+use Illuminate\Auth\AuthenticationException;
 use Illuminate\Foundation\Application;
 use Illuminate\Foundation\Configuration\Exceptions;
 use Illuminate\Foundation\Configuration\Middleware;
@@ -100,5 +102,15 @@ return Application::configure(basePath: dirname(__DIR__))
         // unbranded page. ThrottleEnvelope normalises both.
         $exceptions->render(
             fn (ThrottleRequestsException $exception, Request $request) => ThrottleEnvelope::render($request, $exception)
+        );
+        // An expired session mid-write (TOG-8560): the `auth` middleware throws
+        // before any controller runs, so nothing downstream can flash a reason.
+        // Unsafe browser submits keep the login redirect but carry
+        // `auth_error=expired` (the home banner's key) plus the input, so the
+        // message lands and the words survive re-login. Returning null falls
+        // through to the framework's default — JSON keeps its 401 (TOG-6944),
+        // guest GETs keep the silent handoff.
+        $exceptions->render(
+            fn (AuthenticationException $exception, Request $request) => ExpiredSessionEnvelope::render($request, $exception)
         );
     })->create();
