@@ -74,6 +74,7 @@ function expectedProductionRoutes(): array
 {
     return [
         'DELETE events/{event}/rsvp',
+        'GET|HEAD .well-known/security.txt',
         'GET|HEAD /',
         'GET|HEAD about',
         'GET|HEAD admin',
