@@ -10,6 +10,7 @@ use App\Http\Controllers\EventIcsController;
 use App\Http\Controllers\EventPageController;
 use App\Http\Controllers\EventRssController;
 use App\Http\Controllers\EventStatusController;
+use App\Http\Controllers\FaqVoteController;
 use App\Http\Controllers\HomeController;
 use App\Http\Controllers\JoinController;
 use App\Http\Controllers\ProfileController;
@@ -89,6 +90,26 @@ Route::get('/robots.txt', function () {
 // database, no Livewire — Route::view only, so it renders even when the bot's
 // database is down.
 Route::view('/rules', 'rules')->name('rules');
+
+// Was-this-helpful votes for the static FAQ page (TOG-8863). These live in
+// the `web` group on purpose, not in routes/funnel.php: `/faq` itself is a
+// session-free, database-free leaf that must stay 200 during an app-DB
+// outage, while voting needs a session (CSRF), a voter cookie, and the
+// database. The static page renders identically without JS and calls these
+// as progressive enhancement.
+//
+// Public, not in the `auth` group: signed-out visitors vote too, keyed by
+// the random first-party `faq_voter` cookie (signed-in members are keyed by
+// account instead, with no cookie at all). The PUT carries `throttle:12,1` in
+// front of FaqVoteRateLimit's in-controller limiter — the RSVP pattern
+// (TOG-7301): the middleware refuses a hammering run before validation and
+// the database run, same 12/min budget so the two agree. The GET is read-only
+// and deliberately unthrottled: it mints nothing and only reads the caller's
+// own votes.
+Route::get('/faq/votes', [FaqVoteController::class, 'index'])->name('faq.votes.index');
+Route::put('/faq/votes/{entry}', [FaqVoteController::class, 'update'])
+    ->middleware('throttle:12,1')
+    ->name('faq.votes.update');
 
 // One-click join needs the web session for OAuth state and for signing the new
 // member in after Discord adds them. `/discord` remains the database-free invite

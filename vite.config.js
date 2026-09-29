@@ -13,6 +13,9 @@ export default defineConfig({
                 // global bundle stays import-free (see AssetCompressionTest) and
                 // only event pages download it.
                 'resources/js/event-copy-link.js',
+                // TOG-8863: was-this-helpful votes on the FAQ page. Same deal:
+                // its own entry, downloaded only by /faq.
+                'resources/js/faq-votes.js',
                 'resources/css/filament/admin/theme.css',
             ],
             refresh: true,
