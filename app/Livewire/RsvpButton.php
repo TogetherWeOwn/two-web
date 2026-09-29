@@ -11,6 +11,7 @@ use App\Models\Rsvp;
 use App\Models\User;
 use App\Services\EventService;
 use App\Support\RsvpRateLimit;
+use App\Support\SafeRedirect;
 use Illuminate\Http\Exceptions\ThrottleRequestsException;
 use Illuminate\View\View;
 use Livewire\Attributes\Locked;
@@ -82,9 +83,22 @@ class RsvpButton extends Component
      */
     public bool $sessionExpired = false;
 
+    /**
+     * Where the guest login links send the member back to after Discord.
+     *
+     * Captured once in mount, when the real page request is in hand. A
+     * Livewire re-render answers a `/livewire/update` request, so reading the
+     * path in the blade would point `?next=` at the update endpoint after the
+     * first morph — a persisted prop keeps the page path across updates, and
+     * keeps the expired-session re-render pointing at the page too. Null when
+     * the path fails the open-redirect guard, and the links stay bare.
+     */
+    public ?string $returnTo = null;
+
     public function mount(Event $event): void
     {
         $this->event = $event;
+        $this->returnTo = SafeRedirect::safe(request()->getPathInfo());
     }
 
     public function rsvp(string $status, EventService $events): void
@@ -278,6 +292,10 @@ class RsvpButton extends Component
             // attempt was not throttled. The blade node stays beside the
             // control with the button enabled, like rsvp-failed.
             'rateLimitedMessage' => $this->rateLimitedMessage(),
+            // TOG-9254: the guest links' return-to page, or null for bare
+            // links. Read from the persisted prop, never from the request —
+            // see $returnTo.
+            'returnTo' => $this->returnTo,
         ]);
     }
 

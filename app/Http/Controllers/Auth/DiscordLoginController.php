@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\Auth;
 
 use App\Models\User;
+use App\Support\SafeRedirect;
 use App\Support\Testing\DiscordProvider as TestingDiscordProvider;
 use Illuminate\Contracts\View\View;
 use Illuminate\Http\RedirectResponse;
@@ -43,8 +44,17 @@ class DiscordLoginController
     private const SCOPES = ['identify', 'guilds.members.read'];
 
     /** Send the member to Discord to approve us. */
-    public function redirect(): RedirectResponse
+    public function redirect(Request $request): RedirectResponse
     {
+        // Carry the guest's return-to page across the OAuth round trip, or
+        // nothing. Only a value that survives the open-redirect guard reaches
+        // the session — hostile values leave no trace.
+        $next = SafeRedirect::safe($request->query('next'));
+
+        if ($next !== null) {
+            $request->session()->put('login_next', $next);
+        }
+
         // setScopes, not scopes: scopes() *merges* with the driver's defaults, and
         // the Discord driver defaults to asking for `email`. We have no feature
         // that uses an email address, so we must not ask for one.
@@ -115,6 +125,18 @@ class DiscordLoginController
         // If sessions ever feel too short, raise SESSION_LIFETIME. That keeps one
         // way in; a remember cookie adds a second one that cannot re-read roles.
         Auth::login($user);
+
+        // Back to the page the guest came from, when they came from one and
+        // the value survives the open-redirect guard. First in line: an
+        // explicit `?next=` beats the `auth` middleware's stored intended URL.
+        // Anything else keeps the old profile landing.
+        $next = SafeRedirect::safe($request->session()->pull('login_next'));
+
+        if ($next !== null) {
+            $request->session()->forget('url.intended');
+
+            return redirect()->to($next);
+        }
 
         return redirect()->intended(route('profile'));
     }
