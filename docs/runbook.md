@@ -284,6 +284,41 @@ its credentials, its own rotation) is DevOps-owned box config, not this
 page. No paid service, no new credential: `cp` to a mount the box already
 has. Local dev leaves `BACKUP_COPY_DEST` unset and keeps one copy.
 
+### Log rotation + disk watch (TOG-8728)
+
+Staging and production run `LOG_STACK=daily` with `LOG_DAILY_DAYS=14`
+(see `docs/env.md` §2): Laravel writes `storage/logs/laravel-Y-m-d.log`
+and deletes files older than 14 days on each day rollover
+(`config/logging.php`, `daily` channel). Rotation is the guarantee; what
+follows is the backstop for volumes rotation cannot absorb — a `debug`
+level left on, a log line per request at launch traffic.
+
+**Disk alert threshold: 80% used on the app volume warns, 90% pages.**
+Both are cron on the box, owned by DevOps (same box and same ownership as
+the backup cron above), using only `df` — no paid service, no new vendor:
+
+```cron
+MAILTO=devops@example.com
+0 * * * * df -h /var/www | awk 'NR==2 { gsub(/%/, "", $5); if ($5+0 >= 90) { print "DISK PAGE: " $0; exit 1 } else if ($5+0 >= 80) { print "DISK WARN: " $0; exit 1 } }'
+```
+
+(Use the real on-call address for `MAILTO`, set in the cron environment on
+the box — never in the repo. Adjust `/var/www` to the real checkout path.)
+
+- **80% (warn):** investigate before the next deploy — check which of
+  `storage/logs/`, `backups/`, or the database volume grew, and whether
+  `LOG_LEVEL` is still `debug` somewhere it should not be.
+- **90% (page):** treat as an outage in progress — a full disk stops
+  Postgres and PHP-FPM alike. Free space first (oldest rotated logs beyond
+  the 14-day window are the safe cut), diagnose second.
+- Stock cron mails on *any* job output regardless of exit code, so the
+  `awk` prints only when a threshold trips — silence is healthy, same rule
+  as the error watcher below.
+
+**Proving rotation:** `ls -la storage/logs/` shows dated files and no file
+older than `LOG_DAILY_DAYS`; after any logging change, confirm on staging
+that a new day's file appears and the oldest is pruned.
+
 ---
 
 ## Uptime ping (TOG-8727)

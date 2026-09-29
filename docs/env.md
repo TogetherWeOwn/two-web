@@ -34,10 +34,18 @@ leave everything marked "leave blank/unset" alone.
 
 | Key | Required? | Local | Staging / Production | What breaks if wrong |
 | --- | --- | --- | --- | --- |
-| `LOG_CHANNEL` | Optional (default `stack`) | `stack` | `stack` (or whatever the deploy target reads) | Wrong channel name: Laravel throws on first log write. |
-| `LOG_STACK` | Optional (default `single`) | `single` | `single` (or `daily` if log rotation is wanted) | Comma-separated channel list. A typo'd channel inside the stack fails the same way. |
+| `LOG_CHANNEL` | Optional (default `stack`) | `stack` | `stack` | Wrong channel name: Laravel throws on first log write. |
+| `LOG_STACK` | Optional (default `single`) | `single` | **`daily`** — staging and production rotate, they never run the unbounded file | `single` on staging/prod means `storage/logs/laravel.log` grows without bound until the disk fills; only local dev keeps `single`. Comma-separated channel list. A typo'd channel inside the stack fails the same way. |
 | `LOG_LEVEL` | Optional (default `debug`) | `debug` | `warning` or `error` | `debug` in prod is noisy and can log sensitive payloads; too-high a level hides the context needed for a post-mortem. |
-| `LOG_DAILY_DAYS`, `LOG_DEPRECATIONS_CHANNEL`, `LOG_DEPRECATIONS_TRACE`, `LOG_SLACK_WEBHOOK_URL`, `LOG_SLACK_USERNAME`, `LOG_SLACK_EMOJI`, `LOG_PAPERTRAIL_HANDLER`, `PAPERTRAIL_URL`, `PAPERTRAIL_PORT`, `LOG_STDERR_FORMATTER`, `LOG_SYSLOG_FACILITY` | Optional, not in `.env.example` | Unset | Set only the sink in use (e.g. `LOG_SLACK_WEBHOOK_URL` **secret** if logging to Slack) | Each only matters when its channel is in the stack. A Slack webhook URL is a secret: anyone with it can post to the channel. |
+| `LOG_DAILY_DAYS` | Optional (default `14`) | Unset (code default applies) | **`14`** — explicit, even though it matches the code default, so a future default change cannot silently extend or shrink retention | Fewer days means less post-mortem context; more days means more disk per deploy. See the disk-watch threshold in the runbook. |
+| `LOG_DEPRECATIONS_CHANNEL`, `LOG_DEPRECATIONS_TRACE`, `LOG_SLACK_WEBHOOK_URL`, `LOG_SLACK_USERNAME`, `LOG_SLACK_EMOJI`, `LOG_PAPERTRAIL_HANDLER`, `PAPERTRAIL_URL`, `PAPERTRAIL_PORT`, `LOG_STDERR_FORMATTER`, `LOG_SYSLOG_FACILITY` | Optional, not in `.env.example` | Unset | Set only the sink in use (e.g. `LOG_SLACK_WEBHOOK_URL` **secret** if logging to Slack) | Each only matters when its channel is in the stack. A Slack webhook URL is a secret: anyone with it can post to the channel. |
+
+Rotation guarantee: with `LOG_STACK=daily`, Laravel writes
+`storage/logs/laravel-Y-m-d.log` and deletes files older than
+`LOG_DAILY_DAYS` on each new day rollover (`config/logging.php`, `daily`
+channel). That is the whole retention mechanism — there is no second
+pruner, so the runbook's disk-watch threshold is the backstop, not an
+embellishment.
 
 ## 3. Database (app)
 
