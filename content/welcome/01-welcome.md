@@ -1,12 +1,5 @@
 # Welcome to TWO (new-member welcome, post 1 of 3)
 
-> DRAFT ONLY — copy proposals. No site change, no bot change, no post, no DM, no schedule.
-> For Code Reviewer docs pass (copy + links); render/publish is a separate engineering slice.
-> Part of [TOG-5230](/TOG/issues/TOG-5230). No live-guild action in this slice.
-> Related: [TOG-4935](/TOG/issues/TOG-4935) (welcome-sequence pack, draft),
-> [TOG-5135](/TOG/issues/TOG-5135) (contributor drip — different audience: contributors,
-> human-posted in Discord; this sequence is new members, website).
-
 | | |
 |---|---|
 | Intended audience | New TWO members (just joined or about to join), reading on the website |

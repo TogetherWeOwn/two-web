@@ -3,6 +3,7 @@
 use App\Models\AgentEventGrant;
 use App\Models\User;
 use Illuminate\Support\Facades\Gate;
+use Illuminate\Support\Str;
 
 // The grant-inventory rule: a grant row names the admitted machine caller,
 // company and guild, so reading it is moderator-only. Writing one is denied
@@ -14,8 +15,8 @@ beforeEach(function () {
     $this->moderator = User::factory()->create(['is_moderator' => true]);
     $this->member = User::factory()->create(['is_moderator' => false]);
     $this->grant = AgentEventGrant::query()->create([
-        'agent_id' => 'c1f22b2f-d85f-41e1-9c16-9ca24ac06a11',
-        'company_id' => 'ef993a7e-5ea7-445f-ba88-27a6a2690c3a',
+        'agent_id' => (string) Str::uuid(),
+        'company_id' => (string) Str::uuid(),
         'guild_id' => '1545644954272137297',
         'verifier_hash' => AgentEventGrant::verifierFor('policy-test-credential'),
     ]);

@@ -35,8 +35,8 @@ const TAGS = ['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa', 'wcag22a', 'wcag22aa']
 
 // Rules knowingly accepted, each with a reason and an issue that will remove it.
 // An entry with no issue number is not an exception, it is an untracked bug.
-// Empty is the correct state. Adding to it needs QA sign-off in the PR, not a
-// commit that slips through with a feature.
+// Empty is the correct state. Adding to it needs maintainer approval in the PR,
+// not a commit that slips through with a feature.
 //
 //   { rule: 'color-contrast', issue: 'TWO-00', why: '...' }
 const ALLOWED_VIOLATIONS = [];
