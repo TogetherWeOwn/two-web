@@ -87,6 +87,7 @@ function expectedProductionRoutes(): array
         'GET|HEAD admin/join-attempts/{record}',
         'GET|HEAD auth/discord/callback',
         'GET|HEAD auth/discord/redirect',
+        'GET|HEAD auth/status',
         'GET|HEAD discord',
         'GET|HEAD e/{event}',
         'GET|HEAD events',

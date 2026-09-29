@@ -42,9 +42,13 @@ test('a second tab re-renders to the guest pitch after sign-out elsewhere', func
         $eventUrl = route('events.page', $event);
 
         // Tab A: signed in, looking at the event with its RSVP control.
+        // The tab-sync marker is a `script` element: never displayed, so
+        // `waitFor()` (which requires visibility) can never match it — wait
+        // on the visible RSVP control and assert the script by presence.
         $browser->loginAs($member)
             ->visit($eventUrl)
-            ->waitFor('[data-testid="auth-tab-sync"]')
+            ->waitFor('[data-testid="rsvp-going"]')
+            ->assertPresent('[data-testid="auth-tab-sync"]')
             ->assertVisible('[data-testid="rsvp-going"]');
 
         $tabA = $browser->driver->getWindowHandle();
@@ -55,7 +59,8 @@ test('a second tab re-renders to the guest pitch after sign-out elsewhere', func
         $browser->driver->switchTo()->newWindow(WebDriverTargetLocator::WINDOW_TYPE_TAB);
         $tabB = $browser->driver->getWindowHandle();
         $browser->visit($eventUrl)
-            ->waitFor('[data-testid="auth-tab-sync"]')
+            ->waitFor('[data-testid="rsvp-going"]')
+            ->assertPresent('[data-testid="auth-tab-sync"]')
             ->assertVisible('[data-testid="rsvp-going"]');
 
         // Sign out in tab B, through the real profile form.
