@@ -51,7 +51,14 @@ class PastEvents extends Component
         // under page 1 — otherwise every archive page competes with the
         // first. Page 1 keeps the bare route: `?page=1` is the same page
         // with noise appended.
+        //
+        // TOG-9012: an out-of-range page (`?page=999` past `lastPage`) is a
+        // 200 soft-404 rendering the TOG-7989 "doesn't exist" state. Letting
+        // it self-canonicalize makes every `?page=N` a distinct indexable
+        // page of miss content — unbounded crawl space. Point it at the bare
+        // archive URL instead, the same as page 1.
         $page = $events->currentPage();
+        $outOfRange = $events->isEmpty() && $events->total() > 0;
 
         return view('livewire.past-events', [
             'events' => $events,
@@ -59,7 +66,7 @@ class PastEvents extends Component
             // merges into the `#[Layout]` params, and `route()` builds from
             // APP_URL, never a hardcoded hostname.
         ])->layoutData([
-            'canonical' => $page > 1
+            'canonical' => ($page > 1 && ! $outOfRange)
                 ? route('events.past', ['page' => $page])
                 : route('events.past'),
             'shareDescription' => 'Game nights and tournaments that already happened, most recent first.',

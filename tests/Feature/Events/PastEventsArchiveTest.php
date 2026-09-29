@@ -237,6 +237,25 @@ it('keeps the bare archive URL as the canonical for page one', function () {
     expect(substr_count($html, 'rel="canonical"'))->toBe(1);
 });
 
+it('canonicalizes an out-of-range page to the bare archive URL', function () {
+    // TOG-9012: `?page=999` past `lastPage` is a 200 soft-404 rendering the
+    // TOG-7989 miss state. Self-canonicalizing it makes every `?page=N` a
+    // distinct indexable page of miss content — unbounded crawl space.
+    foreach (range(1, 5) as $i) {
+        archivePastEvent([
+            'title' => "Night {$i}",
+            'starts_at' => now()->subDays($i),
+            'ends_at' => now()->subDays($i)->addHours(2),
+        ]);
+    }
+
+    $html = (string) $this->get(route('events.past').'?page=999')->assertOk()->getContent();
+
+    expect($html)->toContain('data-testid="past-events-out-of-range"');
+    expect($html)->toContain('<link rel="canonical" href="'.route('events.past').'">');
+    expect(substr_count($html, 'rel="canonical"'))->toBe(1);
+});
+
 it('is linked from the events page', function () {
     $this->get(route('events.index'))
         ->assertOk()
