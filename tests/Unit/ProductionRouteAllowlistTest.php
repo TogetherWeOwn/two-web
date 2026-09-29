@@ -117,6 +117,8 @@ function expectedProductionRoutes(): array
         // GET-only plus the shared POST livewire/update endpoint below.
         'POST admin/logout',
         'POST api/agent-events',
+        // TOG-8403: the session-free CSP violation sink in routes/funnel.php.
+        'POST csp-reports',
         'POST events',
         'POST events/{event}/cancel',
         'POST events/{event}/publish',

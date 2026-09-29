@@ -1,5 +1,6 @@
 <?php
 
+use App\Http\Controllers\CspReportController;
 use App\Http\Controllers\DiscordInviteController;
 use App\Http\Controllers\PrivacyController;
 use App\Http\Middleware\AddContentSecurityPolicy;
@@ -38,6 +39,15 @@ use Illuminate\Support\Facades\Route;
 */
 
 Route::get('/discord', DiscordInviteController::class)->name('discord');
+
+// CSP violation sink (TOG-8403). Empty middleware stack like everything else
+// here, on purpose: the browser fires this session-free from any page, and it
+// must keep answering during an app-DB outage — a report is logged, never
+// stored, so there is nothing to query. Deliberately no `throttle` middleware
+// either (it reads the cache store, which is the database everywhere shipped).
+// Flood control lives in CspReportController instead: 8 KB body cap, a fixed
+// logged key set (never the raw body), sampling, and always-204.
+Route::post('/csp-reports', CspReportController::class)->name('csp-reports');
 
 // Static about page (TOG-5310, TOG-6853). Dependency-free leaf: no controller,
 // no database, no Livewire — Route::view only, so it renders even when the
