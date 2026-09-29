@@ -38,13 +38,21 @@ it('treats a blank decoy as human and any content as bot', function () {
 });
 
 it('calls an instant save too fast and a patient one human', function () {
-    expect(SpamTrap::tooFast(now()->getTimestamp()))->toBeTrue()
-        ->and(SpamTrap::tooFast(now()->getTimestamp() - SpamTrap::MIN_FILL_SECONDS))->toBeFalse()
-        ->and(SpamTrap::tooFast(now()->getTimestamp() - 3600))->toBeFalse()
+    expect(SpamTrap::tooFast(now()->getTimestampMs()))->toBeTrue()
+        ->and(SpamTrap::tooFast(now()->getTimestampMs() - SpamTrap::MIN_FILL_MS))->toBeFalse()
+        ->and(SpamTrap::tooFast(now()->getTimestampMs() - 3_600_000))->toBeFalse()
         // A stamp from the future reads as instant: fail closed, never open.
-        ->and(SpamTrap::tooFast(now()->getTimestamp() + 3600))->toBeTrue()
+        ->and(SpamTrap::tooFast(now()->getTimestampMs() + 3_600_000))->toBeTrue()
         // A zero stamp (save without opening the form) reads as instant too.
         ->and(SpamTrap::tooFast(0))->toBeTrue();
+});
+
+it('measures the fill gap in milliseconds, not wall seconds (PR #497)', function () {
+    // Second-resolution regression: a genuine ~0.5s browser fill is a
+    // wall-clock lottery — same wall second reads as 0 elapsed and swallows
+    // the save. Millisecond stamps must measure the real gap.
+    expect(SpamTrap::tooFast(now()->getTimestampMs() - 500))->toBeTrue()
+        ->and(SpamTrap::tooFast(now()->getTimestampMs() - SpamTrap::MIN_FILL_MS - 1))->toBeFalse();
 });
 
 /* ---------------------------------------------------------------------------
@@ -116,7 +124,7 @@ it('saves a patient profile edit exactly as before', function () {
     // A human fill takes longer than the floor: move the clock past it
     // between opening the form and saving. (The stamp is Locked, so the only
     // honest way to age it is elapsed time — same as a real member.)
-    $this->travel(SpamTrap::MIN_FILL_SECONDS + 1)->seconds(); // @phpstan-ignore method.notFound
+    $this->travel(SpamTrap::MIN_FILL_MS + 1000)->milliseconds(); // @phpstan-ignore method.notFound
 
     $edit->call('save')
         ->assertSet('editing', false)

@@ -62,10 +62,10 @@ class MemberProfile extends Component
     public string $website = '';
 
     /**
-     * Unix timestamp of when the edit form was opened (TOG-8715). Locked, so
-     * only the server sets it — a client-supplied backdate cannot bypass the
-     * minimum-fill-time floor. Refreshed on every edit() because a stale
-     * mount stamp would exempt a bot that idles on the closed page.
+     * Millisecond timestamp of when the edit form was opened (TOG-8715).
+     * Locked, so only the server sets it — a client-supplied backdate cannot
+     * bypass the minimum-fill-time floor. Refreshed on every edit() because
+     * a stale mount stamp would exempt a bot that idles on the closed page.
      */
     #[Locked]
     public int $formOpenedAt = 0;
@@ -116,7 +116,7 @@ class MemberProfile extends Component
         $this->sessionExpired = false;
         $this->editing = true;
         $this->website = '';
-        $this->formOpenedAt = now()->getTimestamp();
+        $this->formOpenedAt = now()->getTimestampMs();
         $this->fillForm();
         // TOG-6957: opening the form unmounts the focused trigger, dropping
         // keyboard focus to <body>. The self-dispatch fires after Livewire

@@ -32,13 +32,17 @@ final class SpamTrap
     public const HONEY_FIELD = 'website';
 
     /**
-     * Floor between the form opening and an accepted save, in seconds. One:
-     * Dusk drives the real form (open, type three fields, save) in ~2s
-     * (TOG-9361), so anything above that swallows genuine members; sub-second
-     * scripted submits still trip it. A patient bot still passes — this is one
-     * cheap layer, not a wall.
+     * Floor between the form opening and an accepted save, in milliseconds.
+     * One second: genuine members take seconds to fill three fields
+     * (TOG-9361), while sub-second scripted submits still trip it. A patient
+     * bot still passes — this is one cheap layer, not a wall.
+     *
+     * Millisecond precision is load-bearing, not cosmetic: with
+     * second-resolution stamps a genuine ~0.5s browser fill is a wall-clock
+     * lottery (same wall second reads as 0 elapsed and swallows the save —
+     * PR #497 Dusk evidence), while millisecond stamps measure the real gap.
      */
-    public const MIN_FILL_SECONDS = 1;
+    public const MIN_FILL_MS = 1000;
 
     /** A non-blank decoy value means a bot filled it. Whitespace is blank. */
     public static function honeypotFilled(mixed $value): bool
@@ -56,20 +60,20 @@ final class SpamTrap
 
     /**
      * True when the save lands sooner after the form opened than a human
-     * plausibly manages. Fail-closed: a zero stamp (a save without opening
-     * the form, reachable only by forging the request) and a stamp from the
-     * future (clock weirdness, forged payload on an unlocked field) both read
-     * as instant.
+     * plausibly manages. Millisecond stamps (see MIN_FILL_MS): fail-closed on
+     * a zero stamp (a save without opening the form, reachable only by
+     * forging the request) and on a stamp from the future (clock weirdness,
+     * forged payload on an unlocked field) — both read as instant.
      */
-    public static function tooFast(int $formOpenedAt): bool
+    public static function tooFast(int $formOpenedAtMs): bool
     {
-        if ($formOpenedAt <= 0) {
+        if ($formOpenedAtMs <= 0) {
             return true;
         }
 
-        // getTimestamp() is typed int upstream (InternalActionClient ships the
-        // same call) — the magic ->timestamp accessor is not, which is what
-        // phpstan flags.
-        return now()->getTimestamp() - $formOpenedAt < self::MIN_FILL_SECONDS;
+        // getTimestampMs() is typed int upstream (InternalActionClient ships
+        // the same call) — the magic ->timestamp accessor is not, which is
+        // what phpstan flags.
+        return now()->getTimestampMs() - $formOpenedAtMs < self::MIN_FILL_MS;
     }
 }

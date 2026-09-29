@@ -37,7 +37,7 @@ function pausePastFillFloor(): void
     // (Carbon::setTestNow() is reset by the framework after each test; the
     // RsvpButtonTest throttle test uses the same freeze/travel pair.)
     test()->freezeTime(); // @phpstan-ignore method.notFound
-    test()->travel(SpamTrap::MIN_FILL_SECONDS + 1)->seconds(); // @phpstan-ignore method.notFound
+    test()->travel(SpamTrap::MIN_FILL_MS + 1000)->milliseconds(); // @phpstan-ignore method.notFound
 }
 
 function profileStats(string $discordId): MemberStats
