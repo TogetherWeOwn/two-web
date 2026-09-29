@@ -67,7 +67,9 @@
         <h2 class="sr-only">Past events, most recent first</h2>
         <ul class="mt-8 flex flex-col gap-4" role="list" data-testid="past-events-list">
             @foreach ($events as $event)
-                <li>@include('partials.event-card', ['event' => $event, 'isPast' => true])</li>
+                {{-- TOG-9277: archive cards carry no RSVP control either way, but
+                     the guest fragment cache still skips their per-card render. --}}
+                <li>{!! \App\Support\Events\AnonymousEventCard::render($event, true, $returnTo ?? null) !!}</li>
             @endforeach
         </ul>
 
