@@ -3,6 +3,9 @@
 use App\Support\Counts\CountsFreshness;
 use App\Support\Counts\CountsReader;
 use App\Support\Counts\CountsSource;
+use App\Support\Counts\LiveCounts;
+use Illuminate\Support\Carbon;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Config;
 use Illuminate\Support\Facades\Log;
 
@@ -102,6 +105,58 @@ it('logs the failure for us without leaking the connection details', function ()
         ->and($record->context['exception'] ?? null)->toBeString()
         ->and($record->message)->not->toContain('SQLSTATE')
         ->and(json_encode($record->context))->not->toContain('nope');
+});
+
+// ---------------------------------------------------------------------------
+// The short-TTL cache pin (TOG-8416)
+// ---------------------------------------------------------------------------
+//
+// `CountsReader` caches a successful read for 60 seconds. That cache is the
+// pin this page hangs on when the bot's database drops mid-day: inside the
+// TTL the page serves the number it already knows instead of re-reading, and
+// only past the TTL does it fall back to the degraded pitch above.
+//
+// These seed the cache directly (the key mirrors the reader's private
+// `MEMBER_COUNT_KEY`) rather than standing up a bot database, because what is
+// being pinned is the TTL boundary — serve stale inside it, degrade past
+// it — not the read itself.
+
+it('serves the cached count when the bot database drops inside the TTL', function () {
+    Cache::put('counts.live', LiveCounts::fromRow(
+        memberCount: 84,
+        onlineCount: null,
+        countsUpdatedAt: Carbon::now(),
+    ), 60);
+
+    breakBotConnection();
+
+    $response = $this->get('/')->assertOk();
+
+    // The numeral, in its element (mirroring the no-bare-zero assertion's
+    // shape so a stray "84" elsewhere in the copy cannot satisfy this).
+    $response->assertSee('members');
+    expect($response->getContent())->toMatch('/>\s*84\s*</');
+});
+
+it('renders the degraded pitch once the cached count is past its TTL', function () {
+    Cache::put('counts.live', LiveCounts::fromRow(
+        memberCount: 84,
+        onlineCount: null,
+        countsUpdatedAt: Carbon::now(),
+    ), 60);
+
+    // 61 seconds: one past the reader's 60-second TTL, so the pinned entry is
+    // expired and the page must re-read — against a database that is gone.
+    $this->travel(61)->seconds();
+
+    breakBotConnection();
+
+    $response = $this->get('/')->assertOk();
+
+    $response->assertSee('The lobby is open.')
+        ->assertDontSee('members');
+
+    expect($response->getContent())->not->toMatch('/>\s*84\s*</');
 });
 
 it('is bound to the real reader by default', function () {
