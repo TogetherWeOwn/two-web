@@ -168,6 +168,36 @@ configuring the moderator roles (section 6) narrowly.
 | --- | --- | --- | --- | --- |
 | `TWO_WEB_STAGING_QA_AUTH_TOKEN` | Staging only — **unset everywhere else** | Unset | Provisioned through Paperclip/Coolify secret controls; accepted only in the `X-TWO-QA-Auth` header | Set in prod: an extra auth bypass exists where it should not. Leaked (URL, body, log, screenshot, repo): rotate via secret controls. Never put it in a URL, request body, log, screenshot, or repository file. |
 
+### QA credential hygiene (TOG-9251)
+
+The `/auth/qa/{identity}` seam (`routes/web.php`, `qa.login`) signs in one of
+two deterministic fixtures — `qa-member` and `qa-moderator`
+(`app/Http/Controllers/Auth/StagingQaLoginController.php`) — with a single
+shared token. The route is registered only when `APP_ENV=staging` and the
+controller re-checks the environment and fails closed on a blank token, but
+token age and rotation need an owner regardless.
+
+- **Owner:** CISO. Day-to-day rotation is executed by DevOps through
+  Coolify secret controls; the CISO owns the age limit and confirms each
+  rotation is recorded.
+- **Who may hold QA identities:** only the staging test automation and named
+  QA engineers behind Cloudflare Access (the outer gate). The token is sent
+  only in the `X-TWO-QA-Auth` header — never in a URL, body, log, screenshot,
+  or repo file — and is never shared outside the staging QA group.
+- **Max credential age:** 90 days. Rotate sooner on any suspected leak, on
+  QA-team membership change, or if `bin/env-parity.sh` ever reports
+  `PROD-HAS-STAGING-ONLY TWO_WEB_STAGING_QA_AUTH_TOKEN`.
+- **Rotation steps:**
+  1. Generate: `php -r 'echo bin2hex(random_bytes(32)), PHP_EOL;'`
+  2. Set the new value as `TWO_WEB_STAGING_QA_AUTH_TOKEN` in Coolify
+     (staging) secret controls and redeploy/restart staging.
+  3. Verify the old token fails closed (`404`) and the new token signs in a
+     fixture (`204`):
+     `curl -i -H "X-TWO-QA-Auth: <new-token>" https://<staging-host>/auth/qa/qa-member`
+     must return `204`; the same request with the old token must return `404`.
+  4. Record the rotation date where the next due date (rotation date + 90
+     days) is visible to the QA group.
+
 ## 11. Paperclip (restart-card / operator integration)
 
 Used by `RestartCardClient` (`config/services.php` `paperclip.*`). The client
