@@ -188,10 +188,15 @@ class MemberProfile extends Component
 
         $this->saveFailed = false;
 
+        // TOG-9855: strict '' comparison — trim("0") is "0" but "0" ?: null
+        // is null in PHP, which swallowed a bio of exactly "0" into NULL.
+        $bio = trim($validated['bio'] ?? '');
+        $timezoneRaw = $validated['timezone'] ?? null;
+
         $attributes = [
-            'bio' => trim($validated['bio'] ?? '') ?: null,
+            'bio' => $bio === '' ? null : $bio,
             'games' => $games,
-            'timezone' => $validated['timezone'] ?: null,
+            'timezone' => $timezoneRaw === '' ? null : $timezoneRaw,
         ];
 
         try {
