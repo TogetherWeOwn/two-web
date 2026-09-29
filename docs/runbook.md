@@ -23,7 +23,7 @@ Related pages: [`docs/ci.md`](ci.md) (CI gate, release checklist, staging
 | DevOps | the VM, nginx/PHP-FPM/systemd config, Postgres, backups, Coolify targets, this page |
 | QA & Release | the release checklist sign-off (`docs/ci.md`) — nothing reaches production without it |
 | Deployer | the person holding the hosting-dashboard login — triggers the production deploy, and *is* the approval gate (there is no GitHub environment gate on our plan; see `docs/ci.md`) |
-| CEO | deadline-vs-checklist trade-offs in writing, spend decisions (GitHub Team, extra infra) |
+| Maintainers | deadline-vs-checklist trade-offs in writing, spend decisions (GitHub Team, extra infra) |
 
 One rule: the person who wrote the release does not sign it off, and the
 person who signs it off watches it after it goes out (`docs/ci.md` checklist).
@@ -201,7 +201,7 @@ Rules:
   secret, bot shared secret and the QA auth token live in the box `.env` /
   secret controls, never in Postgres. A restore does not rotate them and does
   not leak them. If the incident *is* a credential leak, rotation is a
-  separate procedure owned by the CISO, not this page.
+  separate procedure owned by the maintainers, not this page.
 - After any restore: note the dump file, the SHA served, and the data-loss
   window (writes between the dump and the stop) on the incident card. The
   window is why step 1 stops the writers first.
@@ -315,7 +315,7 @@ inner one. Source of truth for rotation and hygiene is
 [`docs/env.md` §10](env.md#10-staging-qa-seam).
 
 **Who may use it.** Named QA engineers behind Cloudflare Access, plus the
-staging test automation — nobody else. Owner: CISO; day-to-day rotation is
+staging test automation — nobody else. Owner: maintainers; day-to-day rotation is
 executed by DevOps through Coolify secret controls; max credential age 90
 days (rotate sooner on suspected leak, QA-team change, or an env-parity
 `PROD-HAS-STAGING-ONLY` hit). Never demo credentials, never prod debugging,
