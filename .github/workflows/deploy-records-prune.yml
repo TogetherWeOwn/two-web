@@ -1,0 +1,50 @@
+name: deploy-records-prune
+
+# Every merge to `main` creates a GitHub Deployment record (the `environment:`
+# keys in deploy.yml); nothing deleted them — 148 at the TOG-7649 readback, +1
+# per deploy after. The Shipping KPI reads these records, so the fix is
+# retention: keep the newest 30 per environment, delete the rest, weekly
+# (TOG-9273). The gap list calls this out explicitly as NOT TOG-8728, which is
+# log rotation on a different store.
+#
+# Never on `pull_request`: this job's id is not a required check, and a
+# required check that never reports blocks every PR forever (the `ci` lesson in
+# ci/verify-pipeline.sh). Schedule plus dispatch only.
+
+on:
+  schedule:
+    # Sundays, 06:17 UTC. Off the hour on purpose, like codeowners.yml: GitHub
+    # drops scheduled runs under load at popular times, and a prune that
+    # silently does not run is unbounded growth wearing a schedule.
+    - cron: '17 6 * * 0'
+  workflow_dispatch:
+
+permissions:
+  # Deployments write is the only scope this job holds: list, retire
+  # (inactive status), delete. No contents, no secrets — minted per run by
+  # GitHub, never stored, which is why there is no box-side token for this.
+  deployments: write
+
+jobs:
+  prune:
+    name: prune
+    runs-on: [self-hosted, two-selfhosted]
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+
+      # Every job attests where it ran. See ci/attest-runner.sh (TOG-2847).
+      - name: Attest the runner
+        run: ./ci/attest-runner.sh
+
+      # The checker's own ability to fail, re-proved before it is trusted.
+      # Offline, no credential: every case runs against a stub `gh`.
+      # A prune nobody has watched fail is a prune nobody knows works.
+      - name: Self-test the pruner
+        run: ./ci/prune-deployments-selftest.sh
+
+      - name: Prune deployment records, keeping the newest 30 per environment
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: ./ci/prune-deployments.sh --keep 30 --env staging,production --apply
