@@ -732,10 +732,15 @@ it('spends no shared bucket across credentials on the outer shield', function ()
     $first = ['Authorization' => 'Bearer '.AGENT_CREDENTIAL];
     $second = ['Authorization' => 'Bearer '.$otherCredential];
 
-    agentGrant();
+    // The second grant reuses the first grant's agent id: the service
+    // admits only the provisioned `caller_agent_id` (wrong_caller 403
+    // otherwise), while the per-credential shield buckets key on the
+    // verifier hash, so a shared agent id keeps both grants admitted.
+    // company_id stays random; no real id may appear in this file.
+    $firstGrant = agentGrant();
     AgentEventGrant::query()->create([
-        'agent_id' => 'c1f22b2f-d85f-41e1-9c16-9ca24ac06a11',
-        'company_id' => 'ef993a7e-5ea7-445f-ba88-27a6a2690c3a',
+        'agent_id' => $firstGrant->agent_id,
+        'company_id' => (string) Str::uuid(),
         'guild_id' => AGENT_STAGING_GUILD,
         'verifier_hash' => AgentEventGrant::verifierFor($otherCredential),
         'max_events' => 1,
