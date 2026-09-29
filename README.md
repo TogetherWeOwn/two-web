@@ -1,5 +1,8 @@
 # TWO — the Together We Own website
 
+> **Maintenance mode (2026-09-29, TOG-9788):** bug and security fixes only — new
+> development continues in two-web-next.
+
 The community website for TWO. It exists to do one thing: get more people to join
 the Discord and stay active. Every feature here should plausibly move that number.
 
