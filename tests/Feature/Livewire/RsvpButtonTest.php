@@ -548,10 +548,15 @@ it('gives the withdraw control the same in-flight treatment as the RSVP', functi
         ->test(RsvpButton::class, ['event' => $this->event])
         ->html();
 
+    // The wait copy itself, hidden up front (TOG-6351) and busy while shown.
+    // Not a bare `aria-busy` check: the button's static `aria-busy="false"`
+    // would pass that without any loading copy at all. Main landed this
+    // contract first as "Removing…"; this slice's duplicate spinner and its
+    // separate copy are gone, and this test pins the contract that survived.
     expect($html)
         ->toContain('wire:target="withdraw"')
-        ->toContain('Removing…')
-        ->toContain('aria-busy');
+        ->toContain('<span wire:loading wire:target="withdraw" aria-busy="true" style="display: none">Removing…</span>')
+        ->toContain("Can't make it");
 });
 
 /* ---------------------------------------------------------------------------

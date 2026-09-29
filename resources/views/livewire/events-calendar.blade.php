@@ -29,6 +29,8 @@
                 @foreach (['list' => 'List', 'calendar' => 'Calendar'] as $key => $label)
                     <button type="button"
                             wire:click="setView('{{ $key }}')"
+                            wire:loading.attr="disabled"
+                            wire:target="setView"
                             aria-pressed="{{ $view === $key ? 'true' : 'false' }}"
                             data-testid="events-view-{{ $key }}"
                             @class([
@@ -90,6 +92,8 @@
         @if ($searching)
             <button type="button"
                     wire:click="clearSearch"
+                    wire:loading.attr="disabled"
+                    wire:target="clearSearch"
                     data-testid="events-search-clear"
                     class="inline-flex shrink-0 items-center justify-center min-h-11 px-4 rounded-md
                            bg-transparent text-ink border border-line-strong
@@ -122,6 +126,8 @@
                 <div class="mt-5">
                     <button type="button"
                             wire:click="clearSearch"
+                            wire:loading.attr="disabled"
+                            wire:target="clearSearch"
                             data-testid="events-search-clear-empty"
                             class="inline-flex items-center justify-center gap-2 min-h-11 px-5 rounded-md
                                    bg-transparent text-ink border border-line-strong
@@ -139,6 +145,66 @@
          never-scheduled and the gap states are invitations; the error state
          is the only one that reads as broken, because it is.
          ------------------------------------------------------------------ --}}
+
+    {{-- ------------------------------------------------------------------
+         Loading state (TOG-5416). Member-started re-renders — view toggle,
+         month steps, the past drawer, clearing a search — show this skeleton
+         while the round trip is in flight. Hidden up front: Livewire only
+         toggles loading elements during a request and never at init
+         (TOG-6351), so without the inline hide every page load flashes the
+         skeleton beside the list. `wire:loading.flex` restores the flex
+         layout when shown; the bare directive would force inline-block and
+         collapse the cards. `retryLoad` is the error-state retry below —
+         targeted here so the error markup gets the same wait state.
+         Typing in the search box is deliberately NOT targeted: a skeleton
+         flash on every debounced keystroke is worse than the wait, and the
+         aria-live search status above already names that change.
+         ------------------------------------------------------------------ --}}
+    {{-- ------------------------------------------------------------------
+         Live regions (TOG-7332) for changes inside the content wrapper below.
+         They sit OUTSIDE it on purpose (TOG-5416): the wrapper goes
+         `display: none` mid-request, and a region that is hidden, or swapped in
+         while it was hidden, is not reliably announced. Always rendered, so
+         each region exists before its text changes.
+
+         Past drawer: empty until asked, so initial load stays silent.
+         $showingPast, not $showPast: a search also reveals past matches, and
+         that change is already named by the search status above.
+
+         Month: the visible label in the calendar bar is not live; this mirror
+         is, so a screen reader user stepping months is not moving blind
+         through the grid.
+         ------------------------------------------------------------------ --}}
+    <p class="sr-only" role="status" data-testid="events-past-status">@if ($showingPast && $past->isNotEmpty())Showing past events.@endif</p>
+    <p class="sr-only" role="status" data-testid="calendar-month-status">@if ($view === 'calendar'){{ $monthLabel }}@endif</p>
+
+    <div wire:loading.flex
+         wire:target="setView, previousMonth, nextMonth, showPast, clearSearch, retryLoad"
+         role="status"
+         data-testid="events-loading"
+         style="display: none"
+         class="mt-8 flex flex-col gap-4">
+        {{-- Announced; the blocks below are aria-hidden decoration. --}}
+        <p class="sr-only">Loading events…</p>
+        <div aria-hidden="true" class="flex flex-col gap-4">
+            @for ($i = 0; $i < 3; $i++)
+                <div class="rounded-lg bg-surface border border-line p-5">
+                    <div class="h-5 w-2/3 rounded-sm bg-raised animate-pulse"></div>
+                    <div class="mt-3 h-4 w-1/3 rounded-sm bg-raised animate-pulse"></div>
+                    <div class="mt-3 h-4 w-full rounded-sm bg-raised animate-pulse"></div>
+                </div>
+            @endfor
+        </div>
+    </div>
+
+    {{-- The live content hides while the skeleton above shows — same targets,
+         so the two can never co-render. `.block` restores the block layout
+         when the request ends; the bare directive would leave
+         `display: inline-block` on this wrapper and shrink-wrap the page.
+         Tokens only; no new markup beyond this wrapper. --}}
+    <div wire:loading.remove.block
+         wire:target="setView, previousMonth, nextMonth, showPast, clearSearch, retryLoad"
+         data-testid="events-content">
     @if ($emptyState === 'never')
         <div class="u-hatch mt-8 rounded-lg border border-line p-8 text-center"
              data-testid="events-empty-never">
@@ -202,8 +268,14 @@
                 The Discord always has the latest — come ask there.
             </p>
             <div class="mt-5 flex items-center justify-center gap-3">
+                {{-- Disabled mid-request like every other member-started
+                     control on this page (TOG-5416): the skeleton shows while
+                     the re-read is in flight, and a second click would only
+                     stack another read. --}}
                 <button type="button"
                         wire:click="retryLoad"
+                        wire:loading.attr="disabled"
+                        wire:target="retryLoad"
                         data-testid="events-retry"
                         class="inline-flex items-center justify-center gap-2 min-h-11 px-6 rounded-md
                                bg-brand text-on-brand font-semibold
@@ -252,12 +324,6 @@
             </ul>
         @endif
 
-        {{-- TOG-7332: the "See past events" drawer reveals the list below
-             without reloading. role="status" announces the reveal politely;
-             empty until asked so initial load stays silent. $showingPast, not
-             $showPast: a search also reveals past matches, and that change is
-             already named by the search status above. --}}
-        <p class="sr-only" role="status" data-testid="events-past-status">@if ($showingPast && $past->isNotEmpty())Showing past events.@endif</p>
 
     {{-- ------------------------------------------------------------------
          Calendar view. A real table, because a month grid is tabular data and
@@ -271,6 +337,8 @@
         <div class="mt-8 flex items-center justify-between gap-4">
             <button type="button"
                     wire:click="previousMonth"
+                    wire:loading.attr="disabled"
+                    wire:target="previousMonth"
                     aria-label="Previous month"
                     class="u-tap inline-flex items-center justify-center min-h-11 px-3 rounded-md
                            text-ink-muted hover:text-ink hover:bg-raised
@@ -280,15 +348,16 @@
                 </svg>
             </button>
 
-            {{-- aria-live: the month changes without the page reloading, so the
-                 change has to be announced or a screen reader user is moving
-                 blind through the grid. --}}
-            <p class="text-lg font-semibold text-ink" aria-live="polite" data-testid="calendar-month">
+            {{-- Announced by `calendar-month-status` above the content wrapper
+                 (TOG-5416), not here: this label is hidden mid-request. --}}
+            <p class="text-lg font-semibold text-ink" data-testid="calendar-month">
                 {{ $monthLabel }}
             </p>
 
             <button type="button"
                     wire:click="nextMonth"
+                    wire:loading.attr="disabled"
+                    wire:target="nextMonth"
                     aria-label="Next month"
                     class="u-tap inline-flex items-center justify-center min-h-11 px-3 rounded-md
                            text-ink-muted hover:text-ink hover:bg-raised
@@ -360,4 +429,5 @@
             </table>
         </div>
     @endif
+    </div>{{-- /events-content --}}
 </div>

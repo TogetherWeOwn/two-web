@@ -21,11 +21,12 @@ use Livewire\Component;
 /**
  * The events page: a list and a month grid over the same rows.
  *
- * Server-rendered in one pass. There is deliberately no loading state on this
- * component and no fetch after paint — the LCP budget is 2.0s and the page's
- * largest element is the first event card, so anything that arrives in a second
- * round trip has already lost. The only loading state on this screen belongs to
- * the RSVP control, which is a thing the member started.
+ * Server-rendered in one pass. There is no fetch after paint — the LCP budget
+ * is 2.0s and the page's largest element is the first event card, so anything
+ * that arrives in a second round trip has already lost. Member-started
+ * re-renders (view toggle, month steps, the past drawer, clearing a search)
+ * show a skeleton while the round trip is in flight (TOG-5416); the RSVP
+ * control carries its own loading state, which is a thing the member started.
  *
  * The two views are one query rendered twice, not two components. A month grid
  * that asks its own question would disagree with the list beside it on the day an
