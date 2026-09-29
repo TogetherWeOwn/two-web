@@ -67,3 +67,19 @@ Route::view('/faq', 'faq')->middleware(AddContentSecurityPolicy::class)->name('f
 // 200 during an app-DB outage. The CSP middleware is attached to the route
 // alone for the same reason: it answers with an HTML document.
 Route::get('/privacy', PrivacyController::class)->middleware(AddContentSecurityPolicy::class)->name('privacy');
+
+// RFC 9116 security.txt (TOG-8724). Same session-free funnel placement as
+// `/privacy` above: a static contact file that must stay 200 during an app-DB
+// outage, when a reporter most needs it. A route, not a static file in
+// `public/.well-known/`: nginx `try_files` serves a static file before
+// Laravel ever runs (the TOG-7071 robots.txt lesson), and a route keeps the
+// Expires date generated instead of rotting in a file. Contact is GitHub
+// private vulnerability reporting per SECURITY.md — no email address to
+// harvest, no mailbox to monitor. No CSP middleware: this answers text/plain,
+// not an HTML document, so there is no document policy to attach.
+Route::get('/.well-known/security.txt', function () {
+    $body = 'Contact: https://github.com/TogetherWeOwn/two-web/security/advisories/new'."\n"
+        .'Expires: '.now()->addYear()->utc()->format('Y-m-d\TH:i:s\Z')."\n";
+
+    return response($body)->header('Content-Type', 'text/plain; charset=UTF-8');
+})->name('security-txt');
