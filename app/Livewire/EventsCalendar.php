@@ -7,6 +7,7 @@ use App\Enums\RsvpStatus;
 use App\Models\Event;
 use App\Support\Events\DiscordEventsSource;
 use App\Support\Events\EventSearchLogger;
+use App\Support\SafeRedirect;
 use Carbon\CarbonImmutable;
 use Carbon\Exceptions\InvalidFormatException;
 use DateTimeZone;
@@ -59,7 +60,25 @@ class EventsCalendar extends Component
     #[Url(as: 'q', except: '')]
     public string $search = '';
 
+    /**
+     * Where the guest login links send the member back to after Discord.
+     *
+     * Same contract as `RsvpButton::$returnTo` (TOG-9254): captured once in
+     * mount, when the real page request is in hand. Reading the path in the
+     * card loop's blade would point `?next=` at the Livewire update endpoint
+     * after the first morph — and worse, would fork the fragment cache key
+     * per render. A persisted prop keeps the page path across updates, and
+     * the anon fragment cache keys on it. Null when the path fails the
+     * open-redirect guard, and the links stay bare.
+     */
+    public ?string $returnTo = null;
+
     private const VIEWS = ['list', 'calendar'];
+
+    public function mount(): void
+    {
+        $this->returnTo = SafeRedirect::safe(request()->getPathInfo());
+    }
 
     public function setView(string $view): void
     {
@@ -165,6 +184,9 @@ class EventsCalendar extends Component
         return view('livewire.events-calendar', [
             'upcoming' => $upcoming,
             'past' => $past,
+            // TOG-9277: the guest card fragments key on this, so every card on
+            // the page shares one return-to value (see $returnTo).
+            'returnTo' => $this->returnTo,
             'weeks' => $this->weeks($upcoming->concat($past)),
             'monthLabel' => $this->monthStart()->format('F Y'),
             // Failed reads take precedence over an empty result, including search.

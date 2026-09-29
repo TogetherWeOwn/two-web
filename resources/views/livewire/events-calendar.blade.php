@@ -310,7 +310,9 @@
             <h2 class="sr-only">Upcoming events</h2>
             <ul class="mt-8 flex flex-col gap-4" role="list" data-testid="events-list">
                 @foreach ($upcoming as $event)
-                    <li>@include('partials.event-card', ['event' => $event, 'isPast' => false])</li>
+                    {{-- TOG-9277: guests get the cached static twin; members the
+                         live partial with working RSVP controls. --}}
+                    <li>{!! \App\Support\Events\AnonymousEventCard::render($event, false, $returnTo ?? null) !!}</li>
                 @endforeach
             </ul>
         @endif
@@ -319,7 +321,7 @@
             <h2 class="mt-12 text-2xl text-ink">Past events</h2>
             <ul class="mt-4 flex flex-col gap-4" role="list" data-testid="events-past-list">
                 @foreach ($past as $event)
-                    <li>@include('partials.event-card', ['event' => $event, 'isPast' => true])</li>
+                    <li>{!! \App\Support\Events\AnonymousEventCard::render($event, true, $returnTo ?? null) !!}</li>
                 @endforeach
             </ul>
         @endif
