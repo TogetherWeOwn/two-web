@@ -136,9 +136,11 @@ class FeaturedContentForm
             }
             if ($imageUrl !== '') {
                 // Same contract as the public cards: written alt wins, the
-                // headline stands in while the moderator is still typing.
+                // headline stands in while the moderator is still typing, and
+                // the 16:9 ratio box reserves layout (TOG-7331) — moderator
+                // URLs carry no dimensions, same as the home/taste cards.
                 $previewAlt = $imageAlt !== '' ? $imageAlt : $title;
-                $html .= '<img src="'.e($imageUrl).'" alt="'.e($previewAlt).'" loading="lazy" decoding="async" style="margin-top:0.75rem;max-width:100%;">';
+                $html .= '<img src="'.e($imageUrl).'" alt="'.e($previewAlt).'" loading="lazy" decoding="async" style="margin-top:0.75rem;width:100%;aspect-ratio:16/9;object-fit:cover;">';
             }
         }
 
