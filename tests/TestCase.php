@@ -4,6 +4,8 @@ namespace Tests;
 
 use Illuminate\Foundation\Testing\TestCase as BaseTestCase;
 use Illuminate\Http\Request;
+use Tests\Support\TestDatabaseGuard;
+use Tests\Support\TestDatabaseRefusedException;
 
 abstract class TestCase extends BaseTestCase
 {
@@ -38,6 +40,36 @@ abstract class TestCase extends BaseTestCase
         parent::setUp();
 
         $this->withoutVite();
+    }
+
+    /**
+     * Refuse to touch the wrong database before any migration runs (TOG-9649).
+     *
+     * Ordering: `setUpTheTestEnvironment()` boots the application (so config is
+     * final — `.env`, real environment and `phpunit.xml` merged) and then calls
+     * `setUpTraits()`, inside which `RefreshDatabase` runs `migrate:fresh`. The
+     * guard therefore sees the database the suite would actually migrate, and
+     * throws before the first migration runs. The exception fails the test as an
+     * error — never a skip, so a mispointed suite reads as red, not green.
+     */
+    protected function setUpTraits()
+    {
+        $connection = config('database.default');
+
+        if (! is_string($connection) || $connection === '') {
+            throw new TestDatabaseRefusedException('Refusing to run tests: no default database connection is configured (TOG-9649).');
+        }
+
+        $database = config("database.connections.{$connection}.database");
+        $username = config("database.connections.{$connection}.username");
+
+        if (! is_string($database) || $database === '') {
+            throw new TestDatabaseRefusedException('Refusing to run tests: the default database connection has no database name configured (TOG-9649).');
+        }
+
+        TestDatabaseGuard::check($connection, $database, is_string($username) ? $username : null);
+
+        return parent::setUpTraits();
     }
 
     protected function tearDown(): void
