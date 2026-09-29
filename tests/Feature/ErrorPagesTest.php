@@ -1,5 +1,6 @@
 <?php
 
+use App\Models\User;
 use Illuminate\Support\Facades\Route;
 
 /*
@@ -49,6 +50,29 @@ it('renders the branded 503 with the invite CTA during maintenance mode', functi
     } finally {
         $this->artisan('up')->assertSuccessful();
     }
+});
+
+it('renders the branded 405 with sign-out guidance on GET /logout', function () {
+    // Logout is POST-only by design (routes/web.php) so an <img> tag can
+    // never sign a member out — TOG-8562. A stale GET link must land on a
+    // branded page naming the rule with a link to /profile, where the real
+    // Sign out POST form lives, not on the framework-default 405.
+    config(['app.debug' => false]);
+
+    // Guest and member take the identical MethodNotAllowed path — /logout
+    // sits outside the `auth` group, so no login wall runs first.
+    $this->get('/logout')
+        ->assertStatus(405)
+        ->assertSee(__('errors.method_not_allowed_title'), escape: false)
+        ->assertSee(__('errors.method_not_allowed_body'), escape: false)
+        ->assertSee('data-testid="error-profile"', escape: false)
+        ->assertSee(route('profile'), escape: false);
+
+    $this->actingAs(User::factory()->create())
+        ->get('/logout')
+        ->assertStatus(405)
+        ->assertSee(__('errors.method_not_allowed_title'), escape: false)
+        ->assertSee('data-testid="error-profile"', escape: false);
 });
 
 it('marks every error page noindex', function () {
