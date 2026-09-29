@@ -10,6 +10,18 @@
                :canonical="route('events.page', $event)"
                :shareDescription="$event->description ?: 'An event at Together We Own.'">
     <div class="mx-auto w-full max-w-3xl px-4 py-10 md:px-6 lg:px-8">
+        {{--
+            The expired-session notice (TOG-8560). A dead-session RSVP write
+            bounces through OAuth and lands back here via url.intended, with
+            `auth_error=expired` reflashed by the login callback — so this
+            page reads the same banner partial as home and profile, or the
+            sentence never renders.
+        --}}
+        @if (session('auth_error'))
+            <div class="mb-6">
+                @include('partials.auth-error')
+            </div>
+        @endif
         <a href="{{ route('events.index') }}"
            class="text-sm text-ink-muted hover:text-ink transition-colors duration-fast ease-out-quick">
             ← All events
