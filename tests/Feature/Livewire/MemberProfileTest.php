@@ -680,6 +680,64 @@ it('rejects control bytes in a gamesText line instead of throwing a 500', functi
     'DEL' => ["a\x7fb"],
 ]);
 
+it('rejects bidi overrides and zero-width chars in bio and gamesText', function (string $payload) {
+    // TOG-9858: NoControlCharacters only rejected Cc, so directional
+    // overrides and zero-width format chars (Cf) passed validation. Bidi
+    // overrides spoof display order; ZWSP makes visually-identical but
+    // distinct game names that defeat the dedup display.
+    $member = User::factory()->create();
+    $profile = Profile::factory()->for($member)->create([
+        'bio' => 'Before',
+        'games' => ['Minecraft'],
+    ]);
+
+    Livewire::actingAs($member)
+        ->test(MemberProfile::class, ['member' => $member, 'stats' => profileStats($member->discord_id)])
+        ->call('edit')
+        ->tap(fn () => pausePastFillFloor())
+        ->set('bio', 'abc'.$payload.'def')
+        ->set('gamesText', 'Minecraft'.$payload."\nHelldivers 2")
+        ->call('save')
+        ->assertSet('editing', true)
+        ->assertHasErrors(['bio', 'gamesText']);
+
+    expect($profile->fresh())
+        ->bio->toBe('Before')
+        ->games->toBe(['Minecraft']);
+})->with([
+    'right-to-left override U+202E' => ["\u{202E}"],
+    'left-to-right embedding U+202A' => ["\u{202A}"],
+    'isolate U+2066' => ["\u{2066}"],
+    'zero-width space U+200B' => ["\u{200B}"],
+    'zero-width non-joiner U+200C' => ["\u{200C}"],
+    'BOM U+FEFF' => ["\u{FEFF}"],
+    // U+200D (ZWJ) is blocked when it is not joining emoji: inside a word
+    // it is the visually-identical-but-distinct attack. Genuine emoji ZWJ
+    // sequences are carved out — pinned in the acceptance test below.
+    'zero-width joiner U+200D in a word' => ["\u{200D}"],
+]);
+
+it('still accepts emoji, accents and CJK in bio and games', function () {
+    // TOG-9858: the Cf block is a targeted bidi/zero-width subset, so
+    // legitimate marks keep working — accents, CJK, and genuine emoji ZWJ
+    // sequences (family, profession) where U+200D only joins pictographs.
+    $member = User::factory()->create();
+
+    Livewire::actingAs($member)
+        ->test(MemberProfile::class, ['member' => $member, 'stats' => profileStats($member->discord_id)])
+        ->call('edit')
+        ->tap(fn () => pausePastFillFloor())
+        ->set('bio', "Café 🎮 日本語でよろしく 👨\u{200D}👩\u{200D}👧")
+        ->set('gamesText', "Minecraft\nポケモン")
+        ->call('save')
+        ->assertSet('editing', false)
+        ->assertSee('Profile saved.');
+
+    expect($member->profile()->first())
+        ->bio->toBe("Café 🎮 日本語でよろしく 👨\u{200D}👩\u{200D}👧")
+        ->games->toBe(['Minecraft', 'ポケモン']);
+});
+
 it('still accepts tabs and newlines in a multiline bio', function () {
     // Tab, LF and CR are the controls a bio legitimately needs; the rule
     // allows exactly those and rejects everything else in Cc.
