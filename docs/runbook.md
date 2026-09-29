@@ -284,6 +284,157 @@ has. Local dev leaves `BACKUP_COPY_DEST` unset and keeps one copy.
 
 ---
 
+## Staging QA sign-in seam (staging only)
+
+**What it is.** `GET /auth/qa/{identity}` (route `qa.login`) signs in one
+of two deterministic fixtures with no Discord round-trip, so staging QA can
+exercise the real session and Filament authorisation paths. It returns `204`
+with an empty body and a session cookie — no redirect, no token in the
+response. The only valid identities are `qa-member` (plain member) and
+`qa-moderator` (holds `SySOp` `508654771276873729`, so `/admin` allows them).
+Anything else — including `qa-unknown` — is a `404`.
+
+Two gates, both fail closed with an identical `404` that reveals nothing:
+
+1. **Route gate** (`routes/web.php`): the route registers only when
+   `APP_ENV=staging`. Production never registers it
+   (`tests/Unit/ProductionRouteAllowlistTest.php` pins the absence), and the
+   controller re-checks the environment so a cached or hand-registered route
+   still `404`s outside staging.
+2. **Token gate**
+   (`app/Http/Controllers/Auth/StagingQaLoginController.php`): the request
+   must carry the staging-only secret in the `X-TWO-QA-Auth` **header**.
+   The controller strips the header before anything can throw or log, then
+   hash-compares it against `TWO_WEB_STAGING_QA_AUTH_TOKEN`
+   (`config/services.php` `staging_qa_auth.token`). Blank configured token,
+   missing header, or wrong token all `404` — byte-identical to an unknown
+   identity, so neither the secret nor the fixture list leaks.
+
+Cloudflare Access in front of staging stays the outer gate; this token is the
+inner one. Source of truth for rotation and hygiene is
+[`docs/env.md` §10](env.md#10-staging-qa-seam).
+
+**Who may use it.** Named QA engineers behind Cloudflare Access, plus the
+staging test automation — nobody else. Owner: CISO; day-to-day rotation is
+executed by DevOps through Coolify secret controls; max credential age 90
+days (rotate sooner on suspected leak, QA-team change, or an env-parity
+`PROD-HAS-STAGING-ONLY` hit). Never demo credentials, never prod debugging,
+never shared outside the staging QA group.
+
+**Staging-vs-prod tell (no secret needed).** On the box, the route list is
+the tell:
+
+```bash
+php artisan route:list --name=qa.login
+```
+
+- **Staging:** lists `GET|HEAD auth/qa/{identity}`.
+- **Production:** lists nothing. Any `GET /auth/qa/<anything>` there is a
+  `404`, with or without the header — that is the seam correctly absent, not
+  an outage.
+
+**Use it on staging, verbatim.** The token comes from Coolify secret
+controls (staging), never from chat, logs, or the repo. Header only — never
+in a URL, body, screenshot, or file.
+
+```bash
+STAGING=https://<staging-host>   # e.g. the STAGING_URL from docs/ci.md
+
+# 1. Sign in as the member fixture. Expect HTTP 204, empty body.
+curl -i -H "X-TWO-QA-Auth: <token>" "$STAGING/auth/qa/qa-member"
+# HTTP/2 204
+# (a Set-Cookie session header; no Location header, no body)
+
+# 2. Keep the session in a cookie jar for the next checks.
+curl -s -c /tmp/qa-jar.txt -o /dev/null -w "%{http_code}\n" \
+  -H "X-TWO-QA-Auth: <token>" "$STAGING/auth/qa/qa-member"
+# 204
+
+# 3. Member authorisation: profile opens, admin refuses.
+curl -s -b /tmp/qa-jar.txt -o /dev/null -w "profile:%{http_code}\n" "$STAGING/profile"
+# profile:200
+curl -s -b /tmp/qa-jar.txt -o /dev/null -w "admin:%{http_code}\n" "$STAGING/admin"
+# admin:403
+
+# 4. Moderator authorisation (fresh jar so the sessions do not mix).
+curl -s -c /tmp/qa-mod-jar.txt -o /dev/null -w "%{http_code}\n" \
+  -H "X-TWO-QA-Auth: <token>" "$STAGING/auth/qa/qa-moderator"
+# 204
+curl -s -b /tmp/qa-mod-jar.txt -o /dev/null -w "admin:%{http_code}\n" "$STAGING/admin"
+# admin:200
+
+rm -f /tmp/qa-jar.txt /tmp/qa-mod-jar.txt
+```
+
+Negative checks (same host, still no questions to ask anyone):
+
+```bash
+# Wrong token and unknown identity are the same 404 as a missing token.
+curl -s -o /dev/null -w "%{http_code}\n" \
+  -H "X-TWO-QA-Auth: wrong-token" "$STAGING/auth/qa/qa-member"
+# 404
+curl -s -o /dev/null -w "%{http_code}\n" \
+  -H "X-TWO-QA-Auth: <token>" "$STAGING/auth/qa/qa-unknown"
+# 404
+```
+
+Rules: throttled to 10/min per IP (`throttle:10,1`) — a `429` means slow
+down, not a broken seam. If the correct token returns `404` on staging,
+check `APP_ENV=staging` on the box and that the token in Coolify matches
+what you sent; if `/auth/qa/*` returns `404` on prod, that is correct —
+stop and use real Discord login there.
+
+---
+
+## Staging-to-prod env parity (`bin/env-parity.sh`)
+
+**What it is.** A key-names-only diff of staging-vs-prod against the
+required set (`.env.example` plus the documented-but-not-in-example keys in
+`docs/env.md` §§ 1–13). It prints key names and categories — **never
+values**: values are cut in the extraction pipeline before they touch a
+variable, so a snapshot of live secrets prints the same output as one of
+placeholders. Values are also never *compared* (`APP_KEY`, `DB_PASSWORD`,
+`APP_URL` and friends are expected to differ — see `EXPECTED_DIFFER` at the
+top of the script). Full category reference is
+[`docs/env.md` §14](env.md#14-staging-to-prod-parity-binenv-paritysh).
+
+**Run it, verbatim.** Snapshots are files you create outside the repo from
+the Coolify dashboard (or env export) and never commit. Replace the two
+paths with wherever you saved them.
+
+```bash
+# 1. Prove the tool itself first (offline, fake secrets, ~1s).
+bin/env-parity.sh --selftest
+# SELFTEST PASS
+
+# 2. Run the real check. Filenames appear in the output; values never do.
+bin/env-parity.sh /tmp/staging.env /tmp/prod.env
+# env-parity staging=/tmp/staging.env prod=/tmp/prod.env example=.env.example
+# checked <N> required keys against /tmp/staging.env and /tmp/prod.env
+# PARITY OK — values never compared (expected to differ: ...)   # exit 0
+#   -- or --
+# MISSING prod: SOME_KEY
+# PARITY DRIFT — resolve per docs/env.md §14 (no values shown above, by design)  # exit 1
+
+# 3. Delete the snapshots when done (they held live secrets).
+rm -f /tmp/staging.env /tmp/prod.env
+```
+
+Exit codes: `0` parity, `1` drift (the lines below), `2` called wrongly
+(missing/unreadable file, bad flag — the usage line says so).
+
+**Read the diff.** Each line names a key and a category; fix per
+`docs/env.md` §14:
+
+| Report line | Meaning | Fix (via Coolify env config / secret controls, never the repo) |
+|---|---|---|
+| `MISSING staging/prod: KEY` | Required key absent on that side | Add it. If it is genuinely unneeded there, the decision belongs in `.env.example` / `docs/env.md` — update the source of truth, do not silence the check. |
+| `PROD-HAS-STAGING-ONLY TWO_WEB_STAGING_QA_AUTH_TOKEN` | The staging QA seam exists in prod | Remove it from prod, then **rotate** it per `docs/env.md` §10 — it existed where it must not. |
+| `FORBIDDEN …: DUSK_TEST_SEAMS` / `DUSK_DISCORD_PROVIDER_URL` | A test seam left the test suite | Unset it immediately on that environment; `true` outside tests lets anyone sign in as anyone. |
+| `UNKNOWN …: KEY` | In an env but in neither `.env.example` nor `docs/env.md` | Document it (with required/secret/staging-vs-prod columns) and add it to the example if it belongs there — or remove it from the env. |
+
+---
+
 ## Quick-reference: "it is down, what do I do"
 
 1. `curl -sSI https://togetherweown.com/up` — is the app answering at all?
