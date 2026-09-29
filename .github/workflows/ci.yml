@@ -283,6 +283,14 @@ jobs:
       - name: Postgres backup self-test
         run: ./ci/pg-backup-selftest.sh
 
+      # The log watcher's offline half (TOG-8730): fixture logs through the
+      # real script — quiet stays silent, alert lines page, the offset
+      # advances, rotation re-reads, a missing log pages. Same pattern as the
+      # backup self-test above. No network, no log file, no database; the
+      # script is POSIX sh with no dependencies beyond grep/tail/wc.
+      - name: Error log watch self-test
+        run: ./bin/error-log-watch.sh --selftest
+
       - uses: shivammathur/setup-php@f3e473d116dcccaddc5834248c87452386958240 # v2
         with:
           php-version: ${{ env.PHP_VERSION }}
