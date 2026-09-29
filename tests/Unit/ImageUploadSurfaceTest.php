@@ -1,7 +1,6 @@
 <?php
 
 use App\Http\Requests\StoreEventRequest;
-use App\Http\Requests\UpdateEventRequest;
 use App\Livewire\MemberProfile;
 use App\Models\Event;
 use App\Models\Profile;
@@ -116,8 +115,10 @@ it('accepts no image or file input on the profile write path', function () {
 it('accepts no image or file input on the event write path', function () {
     $forbidden = ['avatar', 'image', 'cover', 'file', 'photo', 'picture', 'upload'];
 
+    // TOG-9270: UpdateEventRequest is deleted with PATCH /events/{event} — the
+    // Filament panel (EditEvent) is the only event editor, via EventService.
+    // StoreEventRequest remains the sole HTTP event writer.
     expect(array_intersect(array_keys((new StoreEventRequest)->rules()), $forbidden))->toBe([]);
-    expect(array_intersect(array_keys((new UpdateEventRequest)->rules()), $forbidden))->toBe([]);
     expect(array_intersect((new Event)->getFillable(), $forbidden))->toBe([]);
 });
 

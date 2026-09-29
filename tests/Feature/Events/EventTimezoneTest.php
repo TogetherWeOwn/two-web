@@ -6,6 +6,7 @@ use App\Services\EventService;
 use App\Support\EventInput;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\DB;
+use Symfony\Component\Routing\Exception\RouteNotFoundException;
 
 // "8pm London" is 19:00Z in July and 20:00Z in December. A naive local timestamp
 // gets exactly one of those two wrong, and only for half the year — which is why
@@ -126,23 +127,35 @@ it('rejects a create whose wall time carries its own offset', function (string $
     'named zone' => '2026-07-15 20:00 Europe/London',
 ]);
 
-it('rejects an update whose wall time carries its own offset', function () {
+/* ---------------------------------------------------------------------------
+   Single writer (TOG-9270, per the TOG-8440 profile precedent). PATCH
+   /events/{event} (`events.update`) is deleted: EventController@update and
+   UpdateEventRequest are gone, and the Filament panel (EditEvent, via
+   EventService::update) is the only event editor. The offset and gap
+   rejections the HTTP writer used to carry are pinned on the surviving
+   create path plus the EventInput domain edge below — HTTP-wall coverage
+   survives on one writer instead of a dead second one.
+   --------------------------------------------------------------------------- */
+
+it('has no PATCH event route: events.update is gone', function () {
+    // GET /events/{event} still exists, so the framework answers a PATCH on
+    // the same URI with 405, not 404 (same shape as the deleted PATCH
+    // /members/{user} in MemberProfileTest). Either way the writer is gone:
+    // nothing is written.
     $host = User::factory()->create(['is_moderator' => true]);
     $event = Event::factory()->create(['timezone' => 'Europe/London']);
     $original = $event->starts_at->utc()->format('Y-m-d H:i:s');
-    $this->actingAs($host);
 
-    $response = $this->patchJson(route('events.update', $event), [
-        'title' => $event->title,
-        'starts_at' => '2026-07-15T20:00:00+02:00',
-        'ends_at' => '2026-07-15 22:00',
-        'timezone' => 'Europe/London',
-        'location' => $event->location ?? 'Voice: General',
-    ]);
-
-    $response->assertStatus(422)->assertJsonValidationErrors('starts_at');
+    $this->actingAs($host)
+        ->patchJson("/events/{$event->getRouteKey()}", ['title' => 'smuggled'])
+        ->assertMethodNotAllowed();
 
     expect($event->fresh()?->starts_at->utc()->format('Y-m-d H:i:s'))->toBe($original);
+});
+
+it('has no events.update route name to generate', function () {
+    expect(fn () => route('events.update', 1))
+        ->toThrow(RouteNotFoundException::class);
 });
 
 it('refuses an offset-bearing wall time at the domain edge, not just in HTTP validation', function () {
@@ -266,23 +279,30 @@ it('accepts the gap shoulders and the wall time that used to collide silently', 
     'minute after the gap wall' => ['2026-03-29 03:00', '2026-03-29 02:00:00'],
 ]);
 
-it('rejects an update whose wall time never occurred in the spring-forward gap', function () {
-    $host = User::factory()->create(['is_moderator' => true]);
-    $event = Event::factory()->create(['timezone' => 'Europe/London']);
-    $original = $event->starts_at->utc()->format('Y-m-d H:i:s');
-    $this->actingAs($host);
+it('refuses an offset-bearing wall time on the surviving edit path, not just the create path', function () {
+    // TOG-9270: the deleted HTTP update carried the only edit-side pin for
+    // the TOG-6804 offset trap. The Filament editor (EditEvent) builds its
+    // input through EventInput::fromValidated, so the same trap is refused at
+    // the domain edge the surviving writer actually passes through.
+    expect(fn () => EventInput::fromValidated([
+        'title' => 'Offset trap',
+        'starts_at' => '2026-07-15T20:00:00+02:00',
+        'ends_at' => '2026-07-15 22:00',
+        'timezone' => 'Europe/London',
+        'location' => 'Voice: General',
+    ]))->toThrow(InvalidArgumentException::class);
+});
 
-    $response = $this->patchJson(route('events.update', $event), [
-        'title' => $event->title,
+it('refuses a spring-gap wall time on the surviving edit path, not just the create path', function () {
+    // TOG-9270: same port as above for the TOG-6803 spring gap — the deleted
+    // HTTP update's gap pin now lives on the EditEvent writer's input edge.
+    expect(fn () => EventInput::fromValidated([
+        'title' => 'Gap trap',
         'starts_at' => '2026-03-29 01:30',
         'ends_at' => '2026-03-29 03:30',
         'timezone' => 'Europe/London',
-        'location' => $event->location ?? 'Voice: General',
-    ]);
-
-    $response->assertStatus(422)->assertJsonValidationErrors('starts_at');
-
-    expect($event->fresh()?->starts_at->utc()->format('Y-m-d H:i:s'))->toBe($original);
+        'location' => 'Voice: General',
+    ]))->toThrow(InvalidArgumentException::class);
 });
 
 it('refuses a spring-gap wall time at the domain edge, not just in HTTP validation', function () {

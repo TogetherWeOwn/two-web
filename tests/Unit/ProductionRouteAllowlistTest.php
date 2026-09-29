@@ -111,10 +111,12 @@ function expectedProductionRoutes(): array
         'GET|HEAD sitemap_index.xml',
         'GET|HEAD storage/{path}',
         'GET|HEAD up',
-        'PATCH events/{event}',
         // TOG-8440 deleted PATCH members/{user} (`profiles.update`): the
         // Livewire form is the single profile writer, so the member surface is
         // GET-only plus the shared POST livewire/update endpoint below.
+        // TOG-9270 deleted PATCH events/{event} (`events.update`): no UI
+        // caller exists — moderators edit through the Filament panel, which
+        // calls EventService directly — so it leaves this list too.
         'POST admin/logout',
         'POST api/agent-events',
         // TOG-8403: the session-free CSP violation sink in routes/funnel.php.

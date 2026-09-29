@@ -204,8 +204,9 @@ Route::middleware('auth')->group(function () {
     Route::post('/events', [EventController::class, 'store'])
         ->middleware('throttle:30,1')->name('events.store');
     Route::get('/events/{event}', [EventController::class, 'show'])->name('events.show');
-    Route::patch('/events/{event}', [EventController::class, 'update'])
-        ->middleware('throttle:30,1')->name('events.update');
+    // TOG-9270: PATCH /events/{event} (`events.update`) deleted — no UI caller
+    // exists. Moderators edit through the Filament panel (EditEvent), which
+    // calls EventService directly; the HTTP writer was dead surface.
     Route::post('/events/{event}/publish', [EventStatusController::class, 'publish'])
         ->middleware('throttle:30,1')->name('events.publish');
     Route::post('/events/{event}/cancel', [EventStatusController::class, 'cancel'])

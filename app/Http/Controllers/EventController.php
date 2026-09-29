@@ -5,7 +5,6 @@ namespace App\Http\Controllers;
 use App\Enums\EventStatus;
 use App\Enums\RsvpStatus;
 use App\Http\Requests\StoreEventRequest;
-use App\Http\Requests\UpdateEventRequest;
 use App\Http\Resources\EventResource;
 use App\Models\Event;
 use App\Services\EventService;
@@ -102,10 +101,5 @@ class EventController
         $event = $this->events->create($request->actor(), $request->toInput());
 
         return (new EventResource($event))->response()->setStatusCode(201);
-    }
-
-    public function update(UpdateEventRequest $request, Event $event): JsonResponse
-    {
-        return (new EventResource($this->events->update($event, $request->toInput())))->response();
     }
 }
