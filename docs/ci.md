@@ -657,6 +657,21 @@ monitor is wired to a host that does not exist yet.
 Pinned by `tests/Unit/HealthMonitoringRunbookTest.php`, which asserts this
 section still names each poller, the gap, and the bound.
 
+### Error drill: prove a 500 pages (TOG-8730)
+
+The queue drill proves dead jobs surface. This proves 500s do too — same
+shape, different half: `php artisan error-alert:probe --json` throws a marker
+exception through the `report` listener in `bootstrap/app.php` and reports
+whether the `Unhandled exception.` alert fired and the repeat was muted (the
+`ErrorAlertRateLimit` noise guard: one alert per exception class + route per
+5 minutes). Then tail the log for the line. The cron watcher
+(`bin/error-log-watch.sh`, every 5 minutes — docs/runbook.md "Error
+alerting") scans the delta for that line and `Queue job failed.` and mails
+on either, so a 500 in staging produces an operator-visible alert within the
+documented path. The chain is pinned by
+`tests/Feature/Console/ErrorAlertProbeTest.php`. No Sentry, no Flare, no
+Bugsnag — none installed, none allowed.
+
 ### Production deploys are dispatch-only, behind a required reviewer
 
 Production ships from GitHub Actions, and only ever that way: `workflow_dispatch`

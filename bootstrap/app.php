@@ -4,12 +4,14 @@ use App\Http\Middleware\AddContentSecurityPolicy;
 use App\Http\Middleware\AddSecurityHeaders;
 use App\Http\Middleware\CompressStaticAssets;
 use App\Http\Middleware\RecordMemberDataAccess;
+use App\Support\ErrorAlertRateLimit;
 use App\Support\ThrottleEnvelope;
 use Illuminate\Foundation\Application;
 use Illuminate\Foundation\Configuration\Exceptions;
 use Illuminate\Foundation\Configuration\Middleware;
 use Illuminate\Http\Exceptions\ThrottleRequestsException;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Route;
 
 return Application::configure(basePath: dirname(__DIR__))
@@ -101,4 +103,39 @@ return Application::configure(basePath: dirname(__DIR__))
         $exceptions->render(
             fn (ThrottleRequestsException $exception, Request $request) => ThrottleEnvelope::render($request, $exception)
         );
+
+        // The log-based error alert (TOG-8730). The framework already logs
+        // every reported exception through its own channel; what is missing
+        // is the surfacing — a 500 on staging reads as silence until a member
+        // reports it. This listener is the alert: one operator-greppable
+        // critical line per distinct failure, with the class, route and
+        // exception message as structured context, so whatever tails the log
+        // on the box sees it — the same tradition as the `Queue::failing`
+        // listener in AppServiceProvider (TOG-6948). No paid service, no
+        // webhook, no credential: the log line is the channel, and
+        // `bin/error-log-watch.sh` is the pager on the box side.
+        //
+        // `report` runs after the framework decides the exception is worth
+        // reporting — the internal dont-report list (404s, 403s, validation,
+        // throttles) never reaches us, so ordinary client errors stay quiet
+        // and only genuine 500s alert. ErrorAlertRateLimit then mutes repeats
+        // of the same fingerprint (one alert per 5 minutes per class+route),
+        // so a crashing deploy produces one line, not thousands.
+        $exceptions->report(function (Throwable $exception): void {
+            $route = app('router')->current()?->getName()
+                ?? request()->route()?->getName()
+                ?? request()->path();
+
+            $fingerprint = ErrorAlertRateLimit::fingerprint($exception, $route);
+
+            if (! ErrorAlertRateLimit::shouldAlert($fingerprint)) {
+                return;
+            }
+
+            Log::critical('Unhandled exception.', [
+                'exception' => get_class($exception),
+                'route' => $route,
+                'message' => $exception->getMessage(),
+            ]);
+        });
     })->create();
