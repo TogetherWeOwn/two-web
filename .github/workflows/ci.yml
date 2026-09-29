@@ -1030,13 +1030,14 @@ jobs:
   # ---------------------------------------------------------------------------
   deps-audit:
     name: deps-audit
-    runs-on: [self-hosted, two-selfhosted]
+    runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
 
       # See the note in `static`. Every job attests; a job that does not could be
-      # moved onto a billable runner with nothing going red (TOG-2847).
+      # moved onto a billable runner with nothing going red
+      # (TOG-8909; pre-flip gate TOG-2847).
       - name: Attest the runner
         run: ./ci/attest-runner.sh
 
