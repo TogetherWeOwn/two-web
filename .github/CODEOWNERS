@@ -7,10 +7,10 @@
 # the path rules below are already split along those lines, so that change is one
 # handle per line and nothing else.
 #
-# This file is advisory. The org is on the free plan and this repo is private, so
-# branch protection and rulesets are unavailable and GitHub cannot *require* a
-# code owner's approval here. What it still does, and the reason to keep it
-# accurate, is auto-request the owner as a reviewer when a PR opens.
+# This file auto-requests the owner as a reviewer when a PR opens. Keep it
+# accurate so the right reviewer is asked. Whether that review is additionally
+# *required* to merge is set by the branch protection rule on `main` — see
+# `docs/ci.md` for the required-checks list.
 #
 # A rule naming an account without write access to this repo is silently dropped
 # by GitHub — no warning, no reviewer. That is exactly how this file broke: it

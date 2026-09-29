@@ -185,14 +185,14 @@ release sign-off.
 
 ## The budgets
 
-Set by the CEO. Enforced as **failures, not warnings**.
+Set by the maintainers. Enforced as **failures, not warnings**.
 
 - **LCP < 2.0s** on a mid-range phone profile — Moto G Power class, 4× CPU
   slowdown, simulated Slow 4G. Configured in `ci/lighthouserc.cjs`.
 - **CLS < 0.1**, same profile.
 - **WCAG 2.2 AA**, zero violations, in `ci/a11y.mjs`.
 
-One more assertion sits alongside them, and it is not a CEO budget:
+One more assertion sits alongside them, and it is not a maintainers' budget:
 
 - **Server response time < 600ms** for the main document.
 
@@ -245,7 +245,7 @@ is about LCP:
 | `slowserver` — three seconds of server think-time | `server-response-time`, for the reason above. **Not** `largest-contentful-paint`. |
 | `lcp` — a 1.6 MB uncompressed hero above the fold | `largest-contentful-paint`, and nothing else |
 
-The `lcp` case exists because without it the CEO's headline budget has no live proof
+The `lcp` case exists because without it the maintainers' headline budget has no live proof
 that it fires at all: `slowserver` is a server-side breach, so a broken
 `largest-contentful-paint` assertion would be invisible to every job in the pipeline.
 Measured on the settings in `ci/lighthouserc.cjs`, varying only the image:
@@ -269,7 +269,7 @@ Three Lighthouse runs per URL, median asserted — see the flake policy on why t
 is sampling and not a retry.
 
 **Nobody lowers a budget to unblock a release.** Not QA, not the Lead, not the
-Frontend Engineer. It is a CEO decision, made in writing on the issue, and then
+Frontend Engineer. It is a maintainers' decision, made in writing on the issue, and then
 landed here as its own commit that says so. A threshold quietly relaxed inside a
 feature PR is the specific thing this file exists to prevent.
 

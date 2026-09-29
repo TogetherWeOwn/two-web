@@ -423,11 +423,11 @@ lint() {
   #    every job in the pipeline. Each entry below must be present, at `error`, at
   #    exactly this number.
   #
-  #    LCP and CLS are the CEO's, in writing. Lowering one is their decision, and
+  #    LCP and CLS are the maintainers', in writing. Lowering one is their decision, and
   #    then it is changed here too, in the same commit that says so — that second
   #    edit is the point, not an obstacle.
   #
-  #    `server-response-time` is not a CEO budget and is not optional either: it is
+  #    `server-response-time` is not a maintainers' budget and is not optional either: it is
   #    the only thing in the pipeline that sees a slow server. Lighthouse runs with
   #    `throttlingMethod: 'simulate'`, and Lantern models one server response time
   #    per origin — the median over every request to it — so on a page that also
@@ -481,7 +481,7 @@ lint() {
     # load-bearing rather than decoration: that same file defaults the option to
     # `'optimistic'`, so deleting it is best-of-3 by another route.
     # Read through `assertMatrix` as well as a plain `assertions` block, because
-    # the budgets are now split by surface: the public pages keep the CEO's 2.0s
+    # the budgets are now split by surface: the public pages keep the maintainers' 2.0s
     # LCP and /admin has its own, looser ceiling (see ci/lighthouserc.cjs for why).
     #
     # What is checked here is the budget that applies to the PUBLIC pages, which is
@@ -1653,7 +1653,7 @@ break_secret() {
 break_lcp() {
   TOUCHED=(public/ci-verify-hero.bmp resources/views/home.blade.php)
   # An oversized hero image above the fold. This is the case that actually exercises
-  # the CEO's LCP < 2.0s budget, and it exists because `slowserver` above does not:
+  # the maintainers' LCP < 2.0s budget, and it exists because `slowserver` above does not:
   # what reddens `budgets` there is `server-response-time`. Without this case the
   # headline budget has no live proof that it fires at all, and a broken
   # `largest-contentful-paint` assertion would be invisible to every job in the

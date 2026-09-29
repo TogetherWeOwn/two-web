@@ -14,7 +14,7 @@ A member exists because they signed in with Discord. `users.discord_id` is
 ever learn another identity for a person, it hangs off that record. It is never
 the other way round.
 
-**No email addresses.** CEO decision, 19 August 2026 (TWO-41): the site stores
+**No email addresses.** Maintainers' decision, 19 August 2026 (TWO-41): the site stores
 no member email, ever. The only reason anyone proposed storing one was to match
 members against a legacy WordPress population, and that population does not
 exist. This is enforced in three places, so it cannot rot back in by accident:
@@ -25,7 +25,7 @@ exist. This is enforced in three places, so it cannot rot back in by accident:
 | `create_users_table` | No `email` column to write to |
 | `DiscordLoginTest` | "never stores an email, because we never ask for one" — feeds Socialite a member *with* an email and asserts it lands nowhere |
 
-Adding an email column is therefore a CEO conversation, not a migration.
+Adding an email column is therefore a maintainers' conversation, not a migration.
 
 **Two scopes on login, and the test asserts the exact set.** `guilds` came off
 alongside `email` on 19 August 2026: it unlocks "list every server this person is
@@ -67,7 +67,7 @@ the bot being up.
 
 ## Who can see a profile — decided
 
-**Decided 19 August 2026, and told to the CEO on TWO-29 the same day.** Not yet
+**Decided 19 August 2026, and told to the maintainers on TWO-29 the same day.** Not yet
 built — TWO-29 is blocked on TWO-23 and TWO-27 — but the call is made so nobody
 has to guess when it unblocks.
 
