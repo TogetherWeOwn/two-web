@@ -83,6 +83,8 @@ function expectedProductionRoutes(): array
         'GET|HEAD admin/featured-contents',
         'GET|HEAD admin/featured-contents/create',
         'GET|HEAD admin/featured-contents/{record}/edit',
+        'GET|HEAD admin/join-attempts',
+        'GET|HEAD admin/join-attempts/{record}',
         'GET|HEAD auth/discord/callback',
         'GET|HEAD auth/discord/redirect',
         // TOG-5632 removes these two lines when the design-lab gating merges.
