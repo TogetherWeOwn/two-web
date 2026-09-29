@@ -2,6 +2,7 @@
 
 namespace App\Providers\Filament;
 
+use App\Filament\Widgets\FaqHelpfulness;
 use App\Filament\Widgets\JoinFunnelStats;
 use App\Http\Middleware\AddContentSecurityPolicy;
 use App\Http\Middleware\RecordMemberDataAccess;
@@ -100,6 +101,7 @@ class AdminPanelProvider extends PanelProvider
             ->widgets([
                 AccountWidget::class,
                 JoinFunnelStats::class,
+                FaqHelpfulness::class,
             ])
             ->middleware([
                 EncryptCookies::class,
