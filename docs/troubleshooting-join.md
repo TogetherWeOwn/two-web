@@ -30,17 +30,67 @@ exactly against this table:
 
 ## Denied approvals (`denied`)
 
-The member pressed Cancel on Discord's consent screen. That is a no, not an
-error — no retry limit, no lockout, nothing to reset. They can approve again
-whenever they like, or skip one-click entirely and use `/discord`.
+The member pressed Cancel on Discord's consent screen (`access_denied`),
+or Discord answered the approval with an error instead of a code. That is
+a no, not an error — no retry limit, no lockout, nothing to reset.
+
+What the member actually sees is the deny/error **recovery page**
+(`resources/views/oauth/recovery.blade.php`, rendered by
+`JoinController::callback` for join and `DiscordLoginController::callback`
+for sign-in), not a `/join` banner:
+
+- Title "Join did not go through" with the exact sentence from the triage
+  table above (deny vs generic error are different sentences).
+- One retry button ("Try joining again" → `/join/redirect`) plus the
+  static invite fallback (`/discord`). Discord's own `error_description`
+  is never rendered.
+- Sign-in renders the same page shape with "Sign-in did not go through"
+  and a "Try signing in again" button (no invite link on that path).
+
+Member retry path (tell them exactly this):
+
+1. Press the retry button on the recovery page and approve on Discord.
+2. If the retry also fails, use the invite at `/discord` — it skips
+   one-click entirely and always works when the invite itself is alive.
+3. After they land in the server, they still need Discord's rules
+   screening before they can post (FAQ Q5) — a successful retry ends at
+   "You are in. Finish Discord's rules screening", not at posting.
+
+Moderator path: nothing to reset, no escalation for one member. Only
+escalate a deny pattern when many members hit the generic (non-deny)
+error sentence at once — that smells like a Discord-side refusal, not
+members pressing Cancel.
 
 ## Expired approvals (`expired`)
 
 The trip to Discord and back took too long, or the callback arrived stale or
-replayed (bad state token, refused code exchange). From the member's side
-every variant is the same answer: start again. One retry fixing it is the
-normal case; if the same member gets `expired` three times in a row, treat it
-as "still stuck" below rather than user error.
+replayed. Concretely that is one of: an `InvalidStateException` (lost or
+replayed OAuth state), or Discord's token endpoint answering `400
+invalid_grant` (the authorization code already expired) — see
+`JoinController::isExpiredApproval`. Sign-in folds the same failures into
+its `expired` banner ("That sign-in attempt took too long and expired").
+
+Unlike deny, expired shows as a **`/join` banner**, not the recovery page:
+"That Discord approval expired. Try again or use the invite."
+
+Member retry path (tell them exactly this):
+
+1. Press the one-click button on `/join` once more and approve promptly —
+   one retry fixing it is the normal case. Don't double-click or
+   back-button-replay the callback; a fresh `/join` → approve round trip
+   is the fix.
+2. If the second try also says expired, stop retrying one-click and use
+   the invite at `/discord` — it skips OAuth entirely.
+3. After they land in the server, same finish as always: Discord's rules
+   screening before they can post (FAQ Q5).
+
+Moderator path: one or two `expired` in a row is user-side timing, not a
+bug — no escalation, no reset. If the **same member gets `expired` three
+times in a row**, treat it as "still stuck" below (collect page, exact
+sentence, time + timezone, whether `/discord` worked) rather than user
+error: a stuck browser session, clock skew, or an extension eating the
+OAuth state cookie are the usual culprits — have them try a fresh
+private window once before escalating.
 
 ## Outages (`unavailable`) and the fallback invite
 
