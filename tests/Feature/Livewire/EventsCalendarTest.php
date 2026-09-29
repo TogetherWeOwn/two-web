@@ -465,6 +465,64 @@ it('moves between months', function () {
 });
 
 /* ---------------------------------------------------------------------------
+   Month deep-links. `?month=YYYY-MM` opens that month so months are linkable
+   and back-button safe; invalid values clamp to the current month.
+   --------------------------------------------------------------------------- */
+
+it('opens the linked month from ?month=', function () {
+    upcomingEvent(['starts_at' => now()->addMonths(2), 'ends_at' => now()->addMonths(2)->addHour()]);
+
+    Livewire::withQueryParams(['month' => now()->format('Y-m')])
+        ->test(EventsCalendar::class)
+        ->assertSet('month', now()->format('Y-m'))
+        ->call('setView', 'calendar')
+        ->assertSee(now()->format('F Y'));
+});
+
+it('keeps a linked month even when it has no events', function () {
+    // The no-param default jumps to the next event's month. A shared link to
+    // a quiet month must still open that month — otherwise the link lies.
+    upcomingEvent(['starts_at' => now()->addMonths(2), 'ends_at' => now()->addMonths(2)->addHour()]);
+    $quiet = now()->format('Y-m');
+
+    Livewire::withQueryParams(['month' => $quiet])
+        ->test(EventsCalendar::class)
+        ->assertSet('month', $quiet);
+});
+
+it('clamps a garbage ?month= to the current month', function () {
+    Livewire::withQueryParams(['month' => 'not-a-month'])
+        ->test(EventsCalendar::class)
+        ->assertOk()
+        ->assertSet('month', now()->format('Y-m'));
+});
+
+it('clamps month 13 instead of overflowing into next year', function () {
+    // Carbon overflows `2026-13` into January 2027 rather than failing, so a
+    // parse attempt is not enough — the clamp has to be an explicit check.
+    Livewire::withQueryParams(['month' => '2026-13'])
+        ->test(EventsCalendar::class)
+        ->assertSet('month', now()->format('Y-m'));
+});
+
+it('clamps a tampered month back to the current month', function () {
+    Livewire::test(EventsCalendar::class)
+        ->set('month', '1999-99')
+        ->assertSet('month', now()->format('Y-m'));
+});
+
+it('binds the month to the URL with push history so back/forward works', function () {
+    // The `use: push` entry is what tells Livewire's client to push a history
+    // entry per month change rather than replacing — that is the back button.
+    // (`?q=` is `replace` by contrast: a search is one state, months are steps.)
+    $effect = Livewire::test(EventsCalendar::class)->effects['url']['month'] ?? null;
+
+    expect($effect)->not->toBeNull()
+        ->and($effect['as'])->toBe('month')
+        ->and($effect['use'])->toBe('push');
+});
+
+/* ---------------------------------------------------------------------------
    Search. `?q=` narrows the same rows the list renders, over title and
    description. Descriptions are pinned explicitly here: the factory fills
    them with faker paragraphs, and a random paragraph containing the search

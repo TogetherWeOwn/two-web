@@ -40,7 +40,16 @@ class EventsCalendar extends Component
     /** `list` or `calendar`. The list is first because it is what works at 360px. */
     public string $view = 'list';
 
-    /** The month the grid is showing, as `Y-m`. */
+    /**
+     * The month the grid is showing, as `Y-m`.
+     *
+     * Bound to `?month=` so a month is a link a member can share, and so
+     * back/forward steps through months. `history: true` pushes a history
+     * entry per month change rather than replacing, which is what makes the
+     * back button work. There is no `except:` — the value is always a real
+     * month after the first render, so it is always worth sharing.
+     */
+    #[Url(as: 'month', history: true)]
     public string $month = '';
 
     /** Whether the member has asked to see events that have already happened. */
@@ -133,6 +142,29 @@ class EventsCalendar extends Component
         $this->month = $this->monthStart()->subMonth()->format('Y-m');
     }
 
+    /**
+     * A tampered `month` in the Livewire payload clamps to this month rather
+     * than throwing or rendering a silently wrong grid. `nextMonth` and
+     * `previousMonth` always produce valid months, so this only fires on
+     * hand-edited input — same rule as the first render above.
+     */
+    public function updatedMonth(): void
+    {
+        if (! self::isValidMonth($this->month)) {
+            $this->month = CarbonImmutable::now()->format('Y-m');
+        }
+    }
+
+    /**
+     * Strict `YYYY-MM` with a real month number. A regex, not a parse attempt:
+     * Carbon overflows `2026-13` into January 2027 instead of failing, and a
+     * link to "month 13" must not silently show the wrong year.
+     */
+    private static function isValidMonth(string $value): bool
+    {
+        return preg_match('/^\d{4}-(0[1-9]|1[0-2])$/', $value) === 1;
+    }
+
     public function render(): View
     {
         // One resolve per render: the source is bound transient, so each
@@ -154,9 +186,15 @@ class EventsCalendar extends Component
         $past = $this->past();
 
         // Open on the next event's month using the same read as the list,
-        // including Discord-only calendars. Later renders preserve navigation.
+        // including Discord-only calendars. A non-empty `$month` arrived in
+        // `?month=` (`#[Url]` hydrates before the first render), and a valid
+        // one wins — that is the deep link. Anything else clamps to this
+        // month: a wrong month is a page, a fatal or a silently wrong grid
+        // is not. Later renders preserve navigation.
         if ($this->month === '') {
             $this->month = ($upcoming->first()?->startsAtLocal() ?? CarbonImmutable::now())->format('Y-m');
+        } elseif (! self::isValidMonth($this->month)) {
+            $this->month = CarbonImmutable::now()->format('Y-m');
         }
         // A blank search is no search: spaces alone must not narrow the page to
         // nothing, and must not swap the empty states for the search one.
