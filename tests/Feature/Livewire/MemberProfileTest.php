@@ -168,6 +168,10 @@ it('keeps the form open and identifies fields when an edit fails validation', fu
         ->toContain('role="alert"')
         ->toContain('aria-invalid="true"')
         ->toContain('aria-describedby="bio-error"')
+        // TOG-8420: inline per-field errors announce through a polite live
+        // region so screen-reader users hear them after the summary.
+        ->toContain('id="bio-error"')
+        ->toContain('aria-live="polite"')
         ->toContain('wire:loading.attr="disabled"')
         ->toContain('Saving…');
 });
