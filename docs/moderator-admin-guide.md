@@ -75,6 +75,22 @@ drafts and published events — and confirm. Know before you confirm:
 clock passes its end time — you never set that by hand, and past events
 quietly leave listings and the calendar feed.
 
+## 2b. Pause RSVPs without unpublishing
+
+On the event's row (`/admin/events`), choose **Pause RSVPs** — available
+for published events that are still taking answers — and confirm. The
+event stays published and visible, but members see "RSVPs are paused for
+this event — check back soon" instead of the RSVP button. Use this when
+sign-ups need to stop but the event itself is still on (a heated thread,
+a cap you are about to raise, a detail you are confirming).
+
+- **Pausing is reversible.** Choose **Reopen RSVPs** on the same row to
+  take answers again. Cancelling (§2) is the permanent version.
+- Existing answers stay. Members who already RSVP'd keep their seats and
+  can still withdraw; members on the waitlist keep their places.
+- Seats freed while paused wait for the reopen: reopening hands them to
+  the head of the waitlist first, before any newcomer.
+
 ## 3. Feature content on the homepage
 
 The homepage has two parts: a **featured row** you control, and an

@@ -134,8 +134,9 @@ class RsvpButton extends Component
         } catch (EventAtCapacityException) {
             $this->full = true;
         } catch (EventNotOpenException) {
-            // Cancelled or already over while they were looking at it. Re-rendering
-            // against the fresh row is the honest answer; the reason shows there.
+            // Cancelled, already over, or paused while they were looking at
+            // it. Re-rendering against the fresh row is the honest answer;
+            // the reason shows there.
             $this->event = $this->event->fresh() ?? $this->event;
         } catch (ThrottleRequestsException $exception) {
             // TOG-7976: a thrown 429 never re-renders — Livewire's JS only morphs
@@ -231,14 +232,26 @@ class RsvpButton extends Component
         $going = $rsvp?->status === RsvpStatus::Going;
         $waitlisted = $rsvp?->status === RsvpStatus::Waitlisted;
 
+        // The clock counts, not just the status: a recently finished event is
+        // still Published until the reconcile pass flips it to Past, and
+        // offering a button for it would be a lie the write path refuses.
+        $live = $this->event->status === EventStatus::Published && ! $this->event->hasEnded();
+
+        // A moderator pause (TOG-8725): still Published, still visible, taking
+        // no new answers. Kept separate from `open`: a paused event must keep
+        // withdraw controls for members who already answered — folding pause
+        // into `open` would trap them behind the closed banner with no way to
+        // stand down. The blade shows the paused copy only to members with no
+        // stake; holders keep their confirmation and withdraw, and the line
+        // keeps its places and the way out of them.
+        $paused = $live && ! $this->event->isRsvpOpen();
+
         return view('livewire.rsvp-button', [
             'rsvp' => $rsvp,
             'going' => $going,
             'waitlisted' => $waitlisted,
-            // The clock counts, not just the status: a recently finished event is
-            // still Published until the reconcile pass flips it to Past, and
-            // offering a button for it would be a lie the write path refuses.
-            'open' => $this->event->status === EventStatus::Published && ! $this->event->hasEnded(),
+            'open' => $live,
+            'paused' => $paused,
             // Somebody already holding a seat — or a place in line — is never
             // shown a full event: they are the reason it is full (or waiting
             // for one), and they must still be able to stand down or
@@ -249,8 +262,10 @@ class RsvpButton extends Component
             // line — a state that can only exist mid-flight (their promotion
             // has not rendered yet) or when promotion was never reached. The
             // write takes the seat through the same locked path as everybody
-            // else, first-come first-served against the line.
-            'seatOpenForWaitlist' => $waitlisted && $this->event->status === EventStatus::Published && ! $this->event->hasEnded() && ! $this->isAtCapacity(),
+            // else, first-come first-served against the line. Never while
+            // paused (TOG-8725): claiming is a new answer, and the write path
+            // refuses it — offering the button would be the lie `open` avoids.
+            'seatOpenForWaitlist' => $waitlisted && $this->event->status === EventStatus::Published && ! $this->event->hasEnded() && $this->event->isRsvpOpen() && ! $this->isAtCapacity(),
             // One-based place in line, only when it will be shown.
             'waitlistPosition' => $waitlisted ? $this->waitlistPosition() : null,
             // Committed here, not yet in Discord. A true state, not an error.

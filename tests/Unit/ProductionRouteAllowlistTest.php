@@ -139,6 +139,8 @@ function expectedProductionRoutes(): array
         'POST events',
         'POST events/{event}/cancel',
         'POST events/{event}/publish',
+        'POST events/{event}/rsvp-pause',
+        'POST events/{event}/rsvp-reopen',
         'POST livewire/update',
         'POST livewire/upload-file',
         'POST logout',

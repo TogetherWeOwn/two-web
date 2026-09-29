@@ -241,6 +241,13 @@ Route::middleware('auth')->group(function () {
         ->middleware('throttle:30,1')->name('events.publish');
     Route::post('/events/{event}/cancel', [EventStatusController::class, 'cancel'])
         ->middleware('throttle:30,1')->name('events.cancel');
+    // Pause and reopen answers (TOG-8725). Same deliberate-verb shape as
+    // publish/cancel rather than a `status` field on the update — and the
+    // same `throttle:30,1` line, or the TOG-8709 coverage test fails.
+    Route::post('/events/{event}/rsvp-pause', [EventStatusController::class, 'pauseRsvps'])
+        ->middleware('throttle:30,1')->name('events.rsvp.pause');
+    Route::post('/events/{event}/rsvp-reopen', [EventStatusController::class, 'reopenRsvps'])
+        ->middleware('throttle:30,1')->name('events.rsvp.reopen');
 
     // One answer per member per event, so the RSVP is a singular sub-resource:
     // there is no collection to list and no id to hand back.

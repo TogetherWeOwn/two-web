@@ -27,6 +27,7 @@ use Spatie\Activitylog\Traits\LogsActivity;
  * @property string|null $location
  * @property int|null $capacity
  * @property EventStatus $status
+ * @property bool $rsvp_open
  * @property string|null $discord_event_id
  * @property int|null $created_by
  * @property string|null $agent_grant_id
@@ -73,6 +74,7 @@ class Event extends Model
         'location',
         'capacity',
         'status',
+        'rsvp_open',
         'discord_event_id',
         'created_by',
         'agent_grant_id',
@@ -90,6 +92,7 @@ class Event extends Model
             'ends_at' => 'immutable_datetime',
             'capacity' => 'integer',
             'status' => EventStatus::class,
+            'rsvp_open' => 'boolean',
             'agent_version' => 'integer',
         ];
     }
@@ -193,6 +196,21 @@ class Event extends Model
      * the clock's terms. A share page (or RSVP control) that reads status alone
      * offers a live button for an event that has already happened.
      */
+    /**
+     * Whether the event takes new answers (TOG-8725). A moderator pause: the
+     * event stays published and visible, but the RSVP gate refuses while it
+     * is closed — unpublishing to the same end would hide the event itself.
+     * Withdrawals are not gated: leaving is always allowed.
+     *
+     * `!== false` rather than `=== true`: only an explicit pause closes. An
+     * in-memory instance that never read the column (a Discord-native
+     * transient on the calendar) carries null, and null must read as open.
+     */
+    public function isRsvpOpen(): bool
+    {
+        return $this->rsvp_open !== false;
+    }
+
     public function hasEnded(): bool
     {
         if ($this->status === EventStatus::Past) {
