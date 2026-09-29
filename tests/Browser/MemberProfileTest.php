@@ -2,6 +2,7 @@
 
 use App\Models\Profile;
 use App\Models\User;
+use App\Support\SpamTrap;
 use Laravel\Dusk\Browser;
 
 it('lets a member edit their sparse profile with the keyboard-visible form', function () {
@@ -20,6 +21,10 @@ it('lets a member edit their sparse profile with the keyboard-visible form', fun
             ->type('bio', 'Usually on after work.')
             ->type('gamesText', "Minecraft\nHelldivers 2")
             ->type('timezone', 'Europe/London')
+            // TOG-8715: Dusk types instantaneously, but the fill-time trap
+            // only accepts saves past the floor — a real member takes seconds
+            // to fill three fields. Pause like a human before saving.
+            ->pause(SpamTrap::MIN_FILL_MS + 500)
             ->press('Save')
             ->waitFor('[data-testid="profile-saved"]')
             ->assertSee('Usually on after work.')
