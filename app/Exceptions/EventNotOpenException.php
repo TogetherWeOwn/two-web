@@ -17,9 +17,13 @@ use RuntimeException;
  */
 class EventNotOpenException extends RuntimeException
 {
-    public function __construct(public readonly Event $event, public readonly string $attempted)
-    {
-        parent::__construct(sprintf(
+    public function __construct(
+        public readonly Event $event,
+        public readonly string $attempted,
+        public readonly string $reason = 'event_not_open',
+        ?string $message = null,
+    ) {
+        parent::__construct($message ?? sprintf(
             'Cannot %s event %s while it is %s.',
             $attempted,
             $event->event_key,
@@ -32,6 +36,17 @@ class EventNotOpenException extends RuntimeException
         return new self($event, 'rsvp to');
     }
 
+    /**
+     * A moderator pause (TOG-8725), not a cancellation: the event is still
+     * Published, so "while it is published" would read as nonsense. Its own
+     * reason lets clients tell "paused" apart from "called off", and its own
+     * message is the member-facing copy in words rather than a state dump.
+     */
+    public static function forRsvpClosed(Event $event): self
+    {
+        return new self($event, 'rsvp to', 'rsvp_closed', 'RSVPs are paused for this event — check back soon.');
+    }
+
     public static function forTransition(Event $event, EventStatus $to): self
     {
         return new self($event, 'move to '.$to->value);
@@ -40,7 +55,7 @@ class EventNotOpenException extends RuntimeException
     public function render(Request $request): JsonResponse
     {
         return response()->json([
-            'reason' => 'event_not_open',
+            'reason' => $this->reason,
             'message' => $this->getMessage(),
             'event_key' => $this->event->event_key,
             'status' => $this->event->status->value,

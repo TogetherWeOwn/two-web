@@ -42,6 +42,25 @@ it('lets only a moderator cancel an event', function () {
         ->and(Gate::forUser($this->member)->allows('cancel', $event))->toBeFalse();
 });
 
+it('lets only a moderator pause or reopen answers', function () {
+    // TOG-8725: pausing keeps a published event visible while stopping new
+    // answers, so it must not be a member verb — like every other event
+    // state change.
+    $event = Event::factory()->create(['status' => EventStatus::Published]);
+
+    expect(Gate::forUser($this->moderator)->allows('toggleRsvp', $event))->toBeTrue()
+        ->and(Gate::forUser($this->member)->allows('toggleRsvp', $event))->toBeFalse();
+});
+
+it('refuses new answers on a paused event but keeps the event visible', function () {
+    // The pause closes the gate while leaving the event published: the page
+    // still renders, but nobody answers.
+    $event = Event::factory()->create(['status' => EventStatus::Published, 'rsvp_open' => false]);
+
+    expect(Gate::forUser($this->member)->allows('view', $event))->toBeTrue()
+        ->and(Gate::forUser($this->member)->allows('create', [Rsvp::class, $event, $this->member]))->toBeFalse();
+});
+
 it('hides a draft from members and shows it to moderators', function () {
     $draft = Event::factory()->create(['status' => EventStatus::Draft]);
     $published = Event::factory()->create(['status' => EventStatus::Published]);
