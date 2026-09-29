@@ -237,6 +237,20 @@ restart-card/operator calls fail.
 | --- | --- | --- | --- | --- |
 | `RULES_LAST_UPDATED` | Optional — **leave blank** unless bumping the stamp (default lives in `config/community.php`) | Blank | Set to the last review date (YYYY-MM-DD) whenever the house rules change | Shown as the "Last updated" stamp on `/rules`. Empty or unparseable: the stamp is hidden and a warning is logged — the page stays 200, so a typo degrades, never breaks. Wrong-but-parseable: the stamp shows the wrong date; bump it with the rules change. |
 
+## 15. CSP report-only mode
+
+`AddContentSecurityPolicy` enforces by default. Setting `CSP_REPORT_ONLY`
+swaps the enforcing `Content-Security-Policy` header for
+`Content-Security-Policy-Report-Only` (same policy, plus
+`report-uri /csp-reports`) so violations are logged, not blocked. Flip it on
+to tune the policy against real traffic, then flip it back — it is an
+observe-then-revert switch, not a steady state. Neither key is a secret.
+
+| Key | Required? | Local | Staging / Production | What breaks if wrong |
+| --- | --- | --- | --- | --- |
+| `CSP_REPORT_ONLY` | Optional (default `false`) | `false` (enforce) | `false`; `true` briefly to tune against real traffic | `true` left on: nothing is blocked, violations only log via `POST /csp-reports`. |
+| `CSP_REPORT_SAMPLE_RATE` | Optional (default `1.0`) | `1.0` | `1.0`; lower if report volume outweighs the signal | `0.0`: valid reports are parsed but never logged (blind). Values `>= 1.0` log everything, `<= 0.0` log nothing. Flood control for the unauthenticated sink, alongside the controller's 8 KB body cap. |
+
 ## Quick checklists
 
 **New developer:** copy example → `key:generate` → fill `DISCORD_CLIENT_ID` /
