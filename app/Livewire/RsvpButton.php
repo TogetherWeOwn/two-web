@@ -95,6 +95,14 @@ class RsvpButton extends Component
      */
     public ?string $returnTo = null;
 
+    /**
+     * Set when a waitlisted member clicked "a seat opened up" and the seat
+     * went to somebody else first (TOG-8820). Their place in line never
+     * moved, so the full refusal must not bury it: the waitlist view stays,
+     * with an honest note above it.
+     */
+    public bool $claimLost = false;
+
     public function mount(Event $event): void
     {
         $this->event = $event;
@@ -126,6 +134,7 @@ class RsvpButton extends Component
         $this->rateLimited = false;
         $this->retryAfterSeconds = null;
         $this->sessionExpired = false;
+        $this->claimLost = false;
 
         try {
             RsvpRateLimit::hit($user);
@@ -156,7 +165,16 @@ class RsvpButton extends Component
                 },
             );
         } catch (EventAtCapacityException) {
-            $this->full = true;
+            // TOG-8820: a waitlisted member who clicked "a seat opened up"
+            // and lost the race is still in line — nothing was written for
+            // them. Setting $full would bury their place behind the full
+            // refusal and offer "join the waitlist" as if they had none.
+            // Keep the line view with an honest note instead.
+            if ($this->currentRsvp()?->status === RsvpStatus::Waitlisted) {
+                $this->claimLost = true;
+            } else {
+                $this->full = true;
+            }
         } catch (EventNotOpenException) {
             // Cancelled, already over, or paused while they were looking at
             // it. Re-rendering against the fresh row is the honest answer;
@@ -190,6 +208,7 @@ class RsvpButton extends Component
         $this->rateLimited = false;
         $this->retryAfterSeconds = null;
         $this->sessionExpired = false;
+        $this->claimLost = false;
 
         try {
             RsvpRateLimit::hit($user);

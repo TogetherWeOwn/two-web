@@ -82,6 +82,20 @@
             </button>
 
         @elseif ($waitlisted)
+            @if ($claimLost)
+                {{-- TOG-8820: the member clicked "a seat opened up" and the seat
+                     went to somebody else first. Their place never moved, so the
+                     line view stays — with an honest note above it, not the full
+                     refusal. role="status": this lands after a click, so the swap
+                     announces politely (TOG-7332). --}}
+                <p class="flex items-start gap-1.5 text-sm text-ink" role="status" data-testid="waitlist-claim-lost">
+                    <span>
+                        <span class="font-medium">Someone just took that seat.</span>
+                        You're still in line — your place below hasn't moved.
+                    </span>
+                </p>
+            @endif
+
             {{-- tabindex="-1": same swap as the confirmation — joining replaces
                  the button with this, so keyboard focus moves here (TOG-6956).
                  The place is named in words and digits, never colour alone. --}}
