@@ -30,7 +30,10 @@ return [
 
     // The one admitted caller. Never accepted from the request: the credential
     // alone identifies the grant, and the grant carries this value for audit.
-    'caller_agent_id' => env('AGENT_EVENTS_CALLER_AGENT_ID') ?: 'c1f22b2f-d85f-41e1-9c16-9ca24ac06a11',
+    // Env-only with no default: an unconfigured caller denies every call
+    // (see AgentEventService), so no real agent id can leak into the repo
+    // through this default.
+    'caller_agent_id' => env('AGENT_EVENTS_CALLER_AGENT_ID'),
 
     // Gate 2 limits: 10 mutating and 30 reads per minute per grant, with a
     // service-level ceiling so one grant cannot spend the whole budget.
@@ -50,4 +53,10 @@ return [
      | routes/console.php.
      */
     'idempotency_retention_days' => (int) env('AGENT_EVENTS_IDEMPOTENCY_RETENTION_DAYS', 90),
+
+    // The outer route shield (TOG-8402): every hit per credential per minute,
+    // counted before auth, the grant lookup and the audit write. Sits above
+    // the inner budgets' sum on purpose — a flood guard, not the allowance —
+    // so the bot's normal burst never sees it.
+    'route_per_minute' => (int) env('AGENT_EVENTS_ROUTE_PER_MINUTE', 60),
 ];

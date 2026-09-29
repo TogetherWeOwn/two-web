@@ -24,48 +24,45 @@ a minute so you are not waiting on Dusk to be told about an unused import.
 
 Locally, `composer check` runs the first two.
 
-### Everything runs on our own runners
+### Everything runs on GitHub-hosted runners
 
-Every job in every workflow is `runs-on: [self-hosted, two-selfhosted]` — the
-org's own runners, on audited hosts only (TOG-2847): `coolify-vps-<n>` on the
-Coolify VPS, `ci-rbx1-<n>` in the LXD CI VM on the rbx1 host, and `ci-w2494-<n>`
-on worker host vps-2494bf63. `ci/attest-runner.sh` holds that prefix list; a job
-on any other runner fails its first step. There are no GitHub-hosted jobs in this repository and no
-`ubuntu-latest` fallback: Actions spend is not available to us, so a job that lands
-on a hosted runner does not cost a little extra, it fails before its first step.
+Every job in every workflow is `runs-on: ubuntu-latest` — GitHub-hosted runners
+(TOG-8909; the pre-flip self-hosted gate was TOG-2847). This repository is public,
+so hosted minutes are free, and the private `two-selfhosted` runner group cannot
+serve a public repo at all. `ci/attest-runner.sh` holds that contract; a job on
+any other runner fails its first step. There are no `self-hosted` jobs in this
+repository and no other fallback: a job that lands off the hosted runners does
+not cost a little extra, it is misrouted and fails before its first step.
 
 Three consequences you will actually run into:
 
-**The runners are persistent.** Same host, same checkout path, same ports, run after
-run. A process a job leaks outlives the job and breaks *the next* run on that
-runner — so anything you start, stop, with `if: always()`. `budgets` learned this
-the expensive way: it leaked `artisan serve`, and the next run's readiness probe was
-answered by the stale process, which was still holding the previous run's `APP_KEY`.
-The job then failed at the `/admin` session mint, several steps and one very
-misleading error message away from the actual cause. `ci/reclaim-ports.sh` now
-clears the block first and the job tears down after itself; do both for anything new
-that binds a port.
+**The runners are ephemeral.** Fresh VM per job: clean checkout, no ports in use,
+no processes left over from a previous run. A process a job leaks dies with the
+job instead of breaking the *next* run — but stop what you start with
+`if: always()` anyway, so the shutdown is visible in the logs when you need it.
 
-**They share one network namespace.** Five runners, one host, so fixed host ports
-collide between parallel jobs. `ci/runner-ports.sh` derives a stable ten-port block
-per runner — use it rather than hardcoding a port. For service containers, map with
-no host port (`ports: ["5432"]`) and read `${{ job.services.postgres.ports[5432] }}`.
+**Each job gets its own VM.** No shared network namespace, so parallel jobs never
+bind the same socket and fixed host ports cannot collide between them.
+`ci/runner-ports.sh` still derives the per-job port block — keep using it rather
+than hardcoding a port. For service containers, map with no host port
+(`ports: ["5432"]`) and read `${{ job.services.postgres.ports[5432] }}`.
 
 **Every job attests where it ran.** `ci/attest-runner.sh` runs as the first step of
-all nine jobs and fails on a hosted runner — `runs-on:` is only a request, and a
-label typo silently reroutes rather than erroring. It also emits the runner name as
-a `::notice`, which lands in the check-run *annotations* API. That is deliberate: it
-makes the per-job runner readable with `checks=read`, without the `actions:read`
-scope this repo's token broker does not issue.
+every job in every workflow and fails on a non-hosted runner — `runs-on:` is only
+a request, and a label typo silently reroutes rather than erroring. It also emits
+the runner name as a `::notice`, which lands in the check-run *annotations* API.
+That is deliberate: it makes the per-job runner readable with `checks=read`,
+without the `actions:read` scope this repo's token broker does not issue.
 
 ```
 GET /repos/TogetherWeOwn/two-web/check-runs/{id}/annotations
-notice  runner  job=budgets runner_name=coolify-vps-2 environment=self-hosted
+notice  runner  job=budgets runner_name=github-hosted-abc123 environment=github-hosted
 ```
 
-The runners are lean: php8.3, composer, node 22, go, the psql/mysql/redis clients,
-jq, shellcheck, git, curl, rootless docker. Anything else, install it in the job —
-`dusk` installs Chrome that way. `gha-runner` has passwordless sudo, so
+The hosted image ships a broad toolset (git, curl, docker, common languages);
+tool versions are pinned in the workflow (setup-php, setup-node), never assumed
+from the image. Anything else, install it in the job — `dusk` installs Chrome
+that way. The runner user has passwordless sudo, so
 `sudo apt-get install -y <pkg>` works.
 
 ### Job names are a contract
@@ -360,15 +357,16 @@ All six. A rejection cites the box by number.
 
 1. **Tests written first and passing.**
 2. **Dusk journey green** — the journey the change touches, not just the suite.
-3. **Design spec matched**, visually signed off by the Designer.
+3. **Design spec matched**, visually signed off by a maintainer against the
+   design-system specs.
 4. **Accessibility and performance budgets met** — the `budgets` job.
 5. **Deployed to staging.**
-6. **QA signed off.**
+6. **Maintainer signed off.**
 
 Boxes 1, 2 and 4 are machine-checked and are exactly what CI reports. Boxes 3, 5
-and 6 are human, and QA confirms 3 with the Designer before passing it.
+and 6 are human, and the reviewer confirms 3 before passing it.
 
-QA does not block on style preference. Only on the six boxes, and always by number.
+Review does not block on style preference. Only on the six boxes, and always by number.
 
 ---
 
@@ -622,13 +620,50 @@ Pinned by `tests/Unit/PreDeploySnapshotDocTest.php`, which asserts this section
 still names the schedule, the Backup Now rule, the bound — and that
 `deploy.yml` still carries no snapshot step of its own.
 
+### Who polls `/up`, and who gets paged (TOG-7327)
+
+`/up` is Laravel's health endpoint (`health: '/up'` in `bootstrap/app.php`,
+pinned by `tests/Feature/HealthCheckTest.php`). It answers 200 when the
+application boots far enough to serve. What polls it today, and what does
+not:
+
+- **Deploy time.** `deploy.yml` polls `${STAGING}/up` for up to ten minutes
+  after triggering the Coolify staging deploy — a queued deploy that never
+  answers fails the job. Then `bin/smoke-staging.sh` asserts `/up` → 200
+  again, alongside `/discord`, `/`, and `/events.json`. Green `staging`
+  means the new release answered, and nothing more.
+- **CI time.** The Dusk, budgets, and opcache jobs poll a local `/up` to
+  learn when the throwaway `artisan serve` under test is ready, and how fast
+  it answers. That proves the build boots; it says nothing about any
+  deployed host.
+- **Continuously, on any environment: nobody.** No cron, no scheduled
+  workflow, and no third-party pinger polls `/up` on a deployed host (this
+  repo uses no paid services) — the one scheduled workflow that does exist,
+  `codeowners.yml`'s weekly check, has nothing to do with `/up`. When
+  staging or production stops answering between deploys, nothing notices
+  until a human loads the page or the next deploy's poll fails. The release
+  checklist's "someone is available to watch it after it goes out" is,
+  today, the entire paging policy: the person who triggered the deploy
+  watches it by hand.
+
+The bound, stated plainly: every `/up` poll in this repo is attached to a
+deploy or a CI run. There is no standing watch, and this section must not be
+read as one. Adding one is a small, free step for the day production exists
+— a Coolify HTTP healthcheck on the app pointed at `/up`, or a scheduled
+workflow that curls the production URL and files an issue on failure — but
+that step is not taken here: no prod activation happens on this card, and no
+monitor is wired to a host that does not exist yet.
+
+Pinned by `tests/Unit/HealthMonitoringRunbookTest.php`, which asserts this
+section still names each poller, the gap, and the bound.
+
 ### Production deploys are dispatch-only, behind a required reviewer
 
 Production ships from GitHub Actions, and only ever that way: `workflow_dispatch`
 with `production` chosen, on `main`, behind the `production` environment's
 required reviewer. Reaching the deploy step already means a human asked and a
-reviewer approved. The checklist below is still the release sign-off — QA owns it
-— and the environment gate is its technical half.
+reviewer approved. The checklist below is still the release sign-off — a maintainer
+owns it — and the environment gate is its technical half.
 
 This used to say "manual, in the hosting dashboard", and that was right at the
 time. When this file was written, `two-web` was private on GitHub Free, and on
@@ -952,7 +987,7 @@ acceptance run. That exists because the wrong assertion here was only reachable 
 forty-minute live run, so it survived review and cost a full run to find.
 
 Run it when the repo lands, and again after any change to `ci.yml` that alters what
-fails. **QA does not sign off TWO-22 until this has passed once, for real.**
+fails. **Nobody signs off TWO-22 until this has passed once, for real.**
 
 ### One `--run` at a time
 
@@ -1042,7 +1077,7 @@ the end of its run is not — another reason `--run` refuses to use one it does 
 
 ## Release checklist
 
-QA signs this off. Nothing reaches production without it.
+A maintainer signs this off. Nothing reaches production without it.
 
 This checklist **is** the release sign-off. The `production` environment's required
 reviewer is its technical half on our plan (see *Production deploys are
@@ -1064,7 +1099,7 @@ Note the commit SHA you signed off, and deploy that SHA.
       counters fall back, queued actions retry, member sees a clear message
 - [ ] Manual accessibility pass — keyboard only, and a screen reader on the join path
 - [ ] Budgets met on staging, not only on the CI runner
-- [ ] Designer has signed off (box 3)
+- [ ] Design spec matched and signed off (box 3)
 - [ ] Migrations reviewed for a safe forward path, and a rollback that is understood
 - [ ] No secret in the diff, no secret in the history
 - [ ] Someone is available to watch it after it goes out
@@ -1074,7 +1109,6 @@ Note the commit SHA you signed off, and deploy that SHA.
       says TWO Web may go live.
 
 If a deadline would require shipping something that has not passed this, that goes
-to the CEO in writing. It is not QA's trade-off to make alone, and it is not the
-Lead's either.
+to a maintainer in writing. It is not one reviewer's trade-off to make alone.
 
 See also: [testing-strategy.md](testing-strategy.md), [flake-policy.md](flake-policy.md).

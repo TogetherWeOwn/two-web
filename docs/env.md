@@ -137,6 +137,20 @@ funnel widget counts the table it sees — the retention window, not all time.
 | `JOIN_ATTEMPT_RETENTION_DAYS` | Optional (default 90) | `90` | `90` | Narrows or widens the funnel window the admin widget shows; same window as the access log on purpose. |
 | `AGENT_EVENTS_IDEMPOTENCY_RETENTION_DAYS` | Optional (default 90) | `90` | `90` | Well past any retry horizon (job backoffs top out at hours). A retry arriving after its row was pruned re-executes; the quota and optimistic-concurrency guards make that duplicate-safe. |
 
+## 8c. Event search-log retention
+
+`event_search_logs` grows by one row per rendered `/events` search and is
+pruned daily by `model:prune` on its `prunable()` scope
+(`routes/console.php`), which can only ever match rows older than the
+configured window. The dashboard's missed-searches widget shows the
+retention window, not all time. What guests searched for must not become a
+permanent index — normalized queries only, no user id, no session, no IP,
+no raw input.
+
+| Key | Required? | Local | Staging / Production | What breaks if wrong |
+| --- | --- | --- | --- | --- |
+| `EVENT_SEARCH_LOG_RETENTION_DAYS` | Optional (default 90) | `90` | `90` | Narrows or widens the missed-searches window the admin widget shows; same window as the access log on purpose. |
+
 ## 9. Member-data access log
 
 Reads of member data through the admin panel are logged (who, when, which
@@ -222,6 +236,20 @@ restart-card/operator calls fail.
 | Key | Required? | Local | Staging / Production | What breaks if wrong |
 | --- | --- | --- | --- | --- |
 | `RULES_LAST_UPDATED` | Optional — **leave blank** unless bumping the stamp (default lives in `config/community.php`) | Blank | Set to the last review date (YYYY-MM-DD) whenever the house rules change | Shown as the "Last updated" stamp on `/rules`. Empty or unparseable: the stamp is hidden and a warning is logged — the page stays 200, so a typo degrades, never breaks. Wrong-but-parseable: the stamp shows the wrong date; bump it with the rules change. |
+
+## 15. CSP report-only mode
+
+`AddContentSecurityPolicy` enforces by default. Setting `CSP_REPORT_ONLY`
+swaps the enforcing `Content-Security-Policy` header for
+`Content-Security-Policy-Report-Only` (same policy, plus
+`report-uri /csp-reports`) so violations are logged, not blocked. Flip it on
+to tune the policy against real traffic, then flip it back — it is an
+observe-then-revert switch, not a steady state. Neither key is a secret.
+
+| Key | Required? | Local | Staging / Production | What breaks if wrong |
+| --- | --- | --- | --- | --- |
+| `CSP_REPORT_ONLY` | Optional (default `false`) | `false` (enforce) | `false`; `true` briefly to tune against real traffic | `true` left on: nothing is blocked, violations only log via `POST /csp-reports`. |
+| `CSP_REPORT_SAMPLE_RATE` | Optional (default `1.0`) | `1.0` | `1.0`; lower if report volume outweighs the signal | `0.0`: valid reports are parsed but never logged (blind). Values `>= 1.0` log everything, `<= 0.0` log nothing. Flood control for the unauthenticated sink, alongside the controller's 8 KB body cap. |
 
 ## Quick checklists
 

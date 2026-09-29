@@ -130,6 +130,10 @@
                 <span class="font-medium">You're in</span>
             </p>
 
+            {{-- Same loading contract as the "I'm in" button below: the box is
+                 reserved up front (CLS budget 0.1), the control disables while
+                 the answer is in flight, and the spinner + copy swap in with
+                 aria-busy so the wait is announced (TOG-5416). --}}
             <button type="button"
                     wire:click="withdraw"
                     wire:loading.attr="disabled"

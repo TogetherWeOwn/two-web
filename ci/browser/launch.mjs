@@ -16,12 +16,15 @@ import { existsSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import puppeteer from 'puppeteer-core';
 
-const DEFAULT_PREFIX = '/paperclip/.cache/chrome-deps';
+// Same fallback as install-chrome-deps.sh: $XDG_CACHE_HOME, else ~/.cache.
+const cacheHome = () => process.env.XDG_CACHE_HOME || `${process.env.HOME}/.cache`;
+
+const DEFAULT_PREFIX = `${cacheHome()}/chrome-deps`;
 
 export function findChrome() {
   if (process.env.CHROME_BIN && existsSync(process.env.CHROME_BIN)) return process.env.CHROME_BIN;
   // The puppeteer cache ships a versioned directory; take the newest.
-  const cache = process.env.PUPPETEER_CACHE_DIR ?? '/paperclip/.cache/puppeteer';
+  const cache = process.env.PUPPETEER_CACHE_DIR ?? `${cacheHome()}/puppeteer`;
   try {
     const found = execFileSync('bash', ['-lc',
       `ls -d ${cache}/chrome/linux-*/chrome-linux64/chrome 2>/dev/null | sort -V | tail -1`,

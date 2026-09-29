@@ -10,6 +10,11 @@ use Tests\TestCase;
 // exist whichever test file runs first.
 require_once __DIR__.'/Support/ThrottleEnvelope.php';
 
+// The deferred-Livewire boot wait (TOG-7927). Like the throttle envelope
+// above: every Browser journey on /events or /events/past needs it, so it
+// lives in one place rather than drifting per-file.
+require_once __DIR__.'/Support/DeferredLivewireBoot.php';
+
 pest()->extend(TestCase::class)
     ->use(RefreshDatabase::class)
     ->in('Feature');

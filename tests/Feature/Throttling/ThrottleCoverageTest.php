@@ -16,12 +16,21 @@ use Illuminate\Support\Facades\Route;
 // by this repo. The second test below pins that exclusion list, so a new
 // write route pointing anywhere unexpected fails instead of slipping through.
 //
-// `api.agent-events` is the one deliberate exception: it carries no
-// `throttle:` middleware because machine callers sit behind shared egress and
-// a per-IP bucket would be one budget for the whole fleet. Its two-level
-// per-grant limiter lives in AgentEventRateLimit and throws the same 429
-// envelope (TOG-6788) from inside AgentEventService — the last test asserts
-// that wiring still exists, so removing the service limiter fails here too.
+// `api.agent-events` is a deliberate exception: it carries no `throttle:`
+// middleware because machine callers sit behind shared egress and a per-IP
+// bucket would be one budget for the whole fleet. Its two-level per-grant
+// limiter lives in AgentEventRateLimit and throws the same 429 envelope
+// (TOG-6788) from inside AgentEventService — the last test asserts that
+// wiring still exists, so removing the service limiter fails here too.
+//
+// `csp-reports` is the second deliberate exception (TOG-8403): it lives in
+// routes/funnel.php's empty middleware stack so it keeps answering during an
+// app-DB outage (`throttle` reads the database-backed cache store, and the
+// browser fires the sink session-free). Flood control lives in
+// CspReportController instead — 8 KB body cap, always-204 (no retry
+// amplification), a fixed logged key set (never the raw body), and sampling
+// via CSP_REPORT_SAMPLE_RATE — pinned by tests/Feature/CspReportOnlyTest.php,
+// so weakening the sink fails there rather than here.
 
 function isAppAction(string $actionName): bool
 {
@@ -40,6 +49,7 @@ function unthrottledAppWriteRoutes(): array
         ->filter(fn ($route) => count(array_intersect($route->methods(), $write)) > 0)
         ->filter(fn ($route) => isAppAction($route->getActionName()))
         ->reject(fn ($route) => $route->getName() === 'api.agent-events')
+        ->reject(fn ($route) => $route->getName() === 'csp-reports')
         ->reject(fn ($route) => collect($route->gatherMiddleware())->contains(
             fn ($middleware) => is_string($middleware) && str_starts_with($middleware, 'throttle:')
         ))
