@@ -62,7 +62,9 @@ final class JoinController
     public function callback(Request $request): RedirectResponse|Response
     {
         if ($request->filled('error')) {
-            $this->recordAttempt(JoinOutcome::Denied, null, null, null);
+            $deniedSource = $request->session()->pull('join_source');
+
+            $this->recordAttempt(JoinOutcome::Denied, is_string($deniedSource) ? $deniedSource : null, null, null);
 
             // They pressed Cancel on the Discord consent screen
             // (`access_denied`), or Discord answered the approval with an

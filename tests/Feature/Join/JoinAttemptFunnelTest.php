@@ -214,6 +214,30 @@ it('carries the source onto the success row', function () {
     expect(JoinAttempt::query()->sole()->source)->toBe('web:homepage');
 });
 
+it('carries the source onto the deny row and clears it from the session', function () {
+    $this->get(route('join.redirect', ['source' => 'web:homepage']))->assertRedirect();
+
+    $this->get('/join/callback?error=access_denied&error_description=x&state=x')
+        ->assertOk()
+        ->assertSessionMissing('join_source');
+
+    expect(JoinAttempt::query()->sole()->source)->toBe('web:homepage');
+
+    Http::assertNothingSent();
+
+    // A later sourceless join in the same session must not inherit the stale source.
+    stubFunnelJoinProvider();
+    Http::fake([FUNNEL_ENDPOINT => Http::response([
+        'ok' => true,
+        'result' => ['outcome' => 'already_member'],
+        'request_id' => '01JFUNNELSTALE',
+    ], 200)]);
+
+    $this->get('/join/callback?code=good&state=x')->assertRedirect(route('profile'));
+
+    expect(JoinAttempt::query()->orderByDesc('id')->first()->source)->toBeNull();
+});
+
 it('never stores the token, an exception message, or the error_description', function () {
     $token = 'funnel-token-that-must-never-be-stored';
     $description = 'user denied the thing with specifics';
