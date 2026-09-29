@@ -170,6 +170,15 @@ jobs:
       - name: Deploy guard self-test
         run: ./ci/deploy-target-selftest.sh
 
+      # The deployment-records prune (TOG-9273): every merge to `main` creates
+      # a Deployment record and nothing deleted them, so a weekly scheduled
+      # workflow keeps the newest 30 per environment. The interesting case is
+      # a prune that deletes the wrong end of the list or reads an API error
+      # as an empty environment, so it needs no secret, no network and no
+      # server — a stub `gh` answers from fixtures, offline, in seconds.
+      - name: Deployment prune self-test
+        run: ./ci/prune-deployments-selftest.sh
+
       # The Nixpacks runtime setting that prevents PHP from disclosing its version
       # lives in nginx.template.conf. Keep its exact FastCGI scope pinned offline so
       # a later template edit cannot silently restore the X-Powered-By header.
