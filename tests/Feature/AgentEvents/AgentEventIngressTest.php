@@ -794,3 +794,61 @@ it('refuses an unauthenticated flood at the shield before the database runs', fu
     expect(AgentEventGrant::query()->count())->toBe(0)
         ->and(AgentEventAudit::query()->where('reason_code', 'unauthenticated')->count())->toBe(2);
 });
+
+it('throttles rapid invalid-grant probes without leaking grant-existence oracles', function () {
+    // TOG-9250: the shield (TOG-8402) counts every hit per credential before
+    // auth, so hammering one wrong credential 429s instead of spending a grant
+    // lookup and audit write per hit. The pin is two-sided: past the budget
+    // the probe is refused with the shared envelope, and no answer before or
+    // after it distinguishes one wrong credential from another.
+    Http::fake([AGENT_BOT_ENDPOINT => Http::response(agentBotUpsert())]);
+
+    config()->set('agent-events.route_per_minute', 3);
+    agentGrant();
+
+    // A one-character miss of the real credential plus an unrelated wrong one:
+    // neither names the grant, and the test compares their answers below.
+    $nearMiss = ['Authorization' => 'Bearer agent-test-credential-opaque-entropy-herf'];
+    $unrelated = ['Authorization' => 'Bearer another-wrong-credential-entropy'];
+    $valid = ['Authorization' => 'Bearer '.AGENT_CREDENTIAL];
+
+    $near = $this->postJson(route('api.agent-events'), agentOp('create', ['fields' => agentFields()]), $nearMiss)
+        ->assertUnauthorized();
+    $far = $this->postJson(route('api.agent-events'), agentOp('create', ['fields' => agentFields()]), $unrelated)
+        ->assertUnauthorized();
+
+    // No existence oracle: the near-miss and the unrelated guess get the same
+    // flat denial — same reason, same message, same body shape, with nothing
+    // credential-distinguishing in either.
+    foreach ([$near, $far] as $denied) {
+        $denied->assertJsonPath('reason', 'unauthenticated');
+    }
+
+    expect($near->json('message'))->toBe($far->json('message'))
+        ->and(array_keys($near->json()))->toEqualCanonicalizing(['reason', 'message', 'request_id'])
+        ->and(array_keys($far->json()))->toEqualCanonicalizing(['reason', 'message', 'request_id']);
+
+    // Two more near-miss hits spend that credential's shield of 3; the fourth
+    // and fifth are refused by the outer layer with the shared envelope
+    // (TOG-6788) — 429 JSON with Retry-After, never a stack.
+    $this->postJson(route('api.agent-events'), agentOp('create', ['fields' => agentFields()]), $nearMiss)
+        ->assertUnauthorized();
+    $this->postJson(route('api.agent-events'), agentOp('create', ['fields' => agentFields()]), $nearMiss)
+        ->assertUnauthorized();
+    assertThrottleEnvelope($this->postJson(route('api.agent-events'), agentOp('create', ['fields' => agentFields()]), $nearMiss));
+    assertThrottleEnvelope($this->postJson(route('api.agent-events'), agentOp('create', ['fields' => agentFields()]), $nearMiss));
+
+    // A different wrong credential hashes to its own bucket: still 401 while
+    // the probed one is throttled — one guess's budget never spends another's.
+    $this->postJson(route('api.agent-events'), agentOp('create', ['fields' => agentFields()]), $unrelated)
+        ->assertUnauthorized()
+        ->assertJsonPath('reason', 'unauthenticated');
+
+    // The valid caller is unaffected: its own bucket, its own budget.
+    $this->postJson(route('api.agent-events'), agentOp('create', ['fields' => agentFields()]), $valid)
+        ->assertCreated();
+
+    // Only the unthrottled misses wrote `unauthenticated` rows (3 near-miss +
+    // 2 unrelated); the two shield-refused hits wrote nothing.
+    expect(AgentEventAudit::query()->where('reason_code', 'unauthenticated')->count())->toBe(5);
+});
