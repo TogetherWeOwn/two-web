@@ -190,6 +190,41 @@ class EventService
     }
 
     /**
+     * Pause or reopen answers (TOG-8725). A flag flip, not a status
+     * transition: pausing keeps a published event visible while stopping new
+     * answers, and unlike cancelling it is reversible. Row-locked like every
+     * other event write.
+     *
+     * Reopening settles the backlog in the same locked write: seats freed
+     * while paused were never dealt (promotion freezes on a pause, below), and
+     * without this a newcomer answering after the reopen would take a freed
+     * seat ahead of the line that waited for it. Pausing dispatches no
+     * write-back — the mirror carries no RSVP-open state, so a pause changes
+     * nothing on the bot's side — but a reopen may have promoted rows, which
+     * is mirrored state, so it syncs.
+     */
+    public function setRsvpOpen(Event $event, bool $open): Event
+    {
+        return DB::transaction(function () use ($event, $open): Event {
+            $locked = Event::query()->whereKey($event->getKey())->lockForUpdate()->firstOrFail();
+
+            if ($locked->isRsvpOpen() !== $open) {
+                $locked->rsvp_open = $open;
+                $locked->save();
+
+                if ($open) {
+                    $this->promoteWaitlist($locked);
+                    $this->syncAfterCommit($locked);
+                }
+            }
+
+            $event->setRawAttributes($locked->getAttributes(), true);
+
+            return $event;
+        });
+    }
+
+    /**
      * Record a member's answer, and hand out the last free slot to exactly one of
      * however many people are asking for it at this instant.
      *
@@ -218,6 +253,15 @@ class EventService
             // locked row so a concurrent reconcile cannot reopen the window.
             if ($locked->status !== EventStatus::Published || $locked->hasEnded()) {
                 throw EventNotOpenException::forRsvp($locked);
+            }
+
+            // A moderator pause (TOG-8725): the event stays published and
+            // visible, but takes no new answers while closed — unpublishing to
+            // the same end would hide the event itself. Read on the locked row
+            // like the check above, so a concurrent reopen cannot slip through.
+            // Withdrawals are deliberately not gated: leaving is always allowed.
+            if (! $locked->isRsvpOpen()) {
+                throw EventNotOpenException::forRsvpClosed($locked);
             }
 
             $existing = Rsvp::query()
@@ -293,6 +337,15 @@ class EventService
     private function promoteWaitlist(Event $locked): void
     {
         if ($locked->status !== EventStatus::Published || $locked->hasEnded()) {
+            return;
+        }
+
+        // A moderator pause freezes the line (TOG-8725): seats freed while
+        // paused stay free until the reopen settles them. Dealing them now
+        // would move seats while the event claims to take no answers, and
+        // the reopen path above promotes in the same locked write — so the
+        // head of the line never loses a freed seat to a newcomer.
+        if (! $locked->isRsvpOpen()) {
             return;
         }
 

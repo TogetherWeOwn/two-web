@@ -33,6 +33,19 @@
                 {{ $this->event->status === \App\Enums\EventStatus::Cancelled ? 'Cancelled' : ($this->event->status === \App\Enums\EventStatus::Draft ? 'Not published yet' : 'This one has been and gone') }}
             </p>
 
+        @elseif ($paused && ! $going && ! $waitlisted)
+            {{-- A moderator pause (TOG-8725): still published, still visible,
+                 taking no new answers. Only members with no stake see this —
+                 a holder keeps their confirmation and withdraw below, someone
+                 in line keeps their place and the way out of it. role="status":
+                 a pause landing while the member watches re-renders here, and
+                 that change has to be announced (TOG-7332). --}}
+            <p class="inline-flex items-center gap-1.5 rounded-sm px-2 py-0.5 text-xs font-medium
+                      bg-raised text-ink-muted border border-line self-start"
+               role="status" data-testid="rsvp-paused">
+                RSVPs are paused for this event — check back soon.
+            </p>
+
         @elseif ($full || $atCapacity)
             {{-- Colour is not carrying this: there is an icon and there are words,
                  and the cap is named so the number is not a mystery.

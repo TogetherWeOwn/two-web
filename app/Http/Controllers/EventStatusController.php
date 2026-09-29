@@ -33,4 +33,24 @@ class EventStatusController
 
         return (new EventResource($this->events->cancel($event)))->response();
     }
+
+    /**
+     * Pause and reopen answers (TOG-8725). Same shape as publish/cancel —
+     * deliberate moderator verbs, not a `status` field on the update — but a
+     * flag flip rather than a transition: pausing keeps a published event
+     * visible while stopping new answers, and unlike cancelling it reverses.
+     */
+    public function pauseRsvps(Request $request, Event $event): JsonResponse
+    {
+        Gate::forUser($request->user())->authorize('toggleRsvp', $event);
+
+        return (new EventResource($this->events->setRsvpOpen($event, false)))->response();
+    }
+
+    public function reopenRsvps(Request $request, Event $event): JsonResponse
+    {
+        Gate::forUser($request->user())->authorize('toggleRsvp', $event);
+
+        return (new EventResource($this->events->setRsvpOpen($event, true)))->response();
+    }
 }

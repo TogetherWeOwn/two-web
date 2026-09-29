@@ -49,8 +49,11 @@ class RsvpPolicy
         // A draft is not visible and a cancelled event is not happening. Neither is
         // something to say yes to. The clock counts too: reconcile flips finished
         // rows to Past every ~10 min, so a recently finished event is still
-        // Published — and the page already hides its RSVP button (TOG-7273).
-        return $event->status === EventStatus::Published && ! $event->hasEnded();
+        // Published — and the page already hides its RSVP button (TOG-7273). And
+        // a moderator pause (TOG-8725) closes the gate while leaving the event
+        // visible: the service repeats this check on the locked row (409) for
+        // callers that reach it past here.
+        return $event->status === EventStatus::Published && ! $event->hasEnded() && $event->isRsvpOpen();
     }
 
     public function update(User $user, Rsvp $rsvp): bool
