@@ -1,9 +1,9 @@
 <?php
 
-// The test suite has to be able to run against whatever Postgres you can reach:
-// docker-compose on your laptop, a service container in CI, a shared server in a
-// sandbox with no Docker. The only thing tests must force is the database *name*,
-// so a run can never wipe your development data.
+// The test suite supports approved agent-testdb, disposable local developer
+// instances and disposable CI services. Environment-supplied hosts/credentials
+// support those setups, not arbitrary reachable hosts. The forced database name
+// and name/role guard are not host approval; see docs/testing-strategy.md.
 //
 // If phpunit.xml pins the host or the credentials, everyone whose Postgres is not
 // on 127.0.0.1 with the docker-compose password gets seven red tests and no clue
