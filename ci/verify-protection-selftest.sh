@@ -114,6 +114,43 @@ else
   rc=1
 fi
 
+# Neither field is complete: one check is modern-only, the second is duplicated,
+# and the rest are legacy-only. Choosing either shape instead of their union must
+# not verify this rule; the duplicate must not be treated as a stale context.
+mixed_shape='
+  .required_status_checks |= (
+    .checks as $checks
+    | .checks = $checks[0:2]
+    | .contexts = ($checks[1:] | map(.context))
+  )'
+n=$((n + 1))
+mixed="$WORK/mixed.json"
+if ! good | jq "$mixed_shape" > "$mixed"; then
+  fail "mixed-contexts-shape: the fixture itself failed to build"
+  rc=1
+else
+  out="$("$SCRIPT" "$mixed" 2>&1)"
+  if [ $? -eq 0 ]; then
+    pass "mixed-contexts-shape: checks and contexts are unioned with a duplicate"
+  else
+    fail "mixed-contexts-shape: a valid split rule was reported as broken"
+    printf '%s\n' "$out" | sed 's/^/        /'
+    rc=1
+  fi
+fi
+
+# Remove the shared context from both fields, not just one copy. The diagnostic
+# must name the missing check, rather than merely exiting non-zero.
+missing_context=$(good | jq -r '.required_status_checks.checks[1].context')
+expect_fail mixed-missing-context \
+  "required check(s) ${missing_context} are not required on" \
+  "$mixed_shape"'
+    | .required_status_checks |= (
+        .checks[1].context as $missing
+        | .checks |= map(select(.context != $missing))
+        | .contexts |= map(select(. != $missing))
+      )'
+
 printf '\n\033[1m==> The rule does not stop a self-merge\033[0m\n'
 
 expect_fail no-approval \
