@@ -16,10 +16,15 @@ $docs = 'docs/runbook.md';
 it('names the exact log queries and their channel prerequisites', function () use ($docs) {
     $source = file_get_contents(base_path($docs));
 
-    expect($source)->toContain("grep 'csp.report.violation' /var/www/two-web/storage/logs/laravel.log | tail -30");
+    // Staging runs in the Coolify application container (app root /app), so
+    // the documented queries read the container path; /var/www/... is the
+    // directly managed VM alternative only.
+    expect($source)->toContain("grep 'csp.report.violation' /app/storage/logs/laravel.log | tail -30");
     expect($source)->toContain('`LOG_CHANNEL=single`, or `LOG_CHANNEL=stack` with `LOG_STACK=single`');
     expect($source)->toContain('`LOG_CHANNEL=daily`, or `LOG_CHANNEL=stack` with `LOG_STACK=daily`');
-    expect($source)->toContain("grep 'csp.report.violation' /var/www/two-web/storage/logs/laravel-????-??-??.log | tail -30");
+    expect($source)->toContain("grep 'csp.report.violation' /app/storage/logs/laravel-????-??-??.log | tail -30");
+    expect($source)->toContain('directly managed VM');
+    expect($source)->toContain('/var/www/two-web/storage/logs/laravel.log');
 });
 
 it('pins a trigger forbidden by the shipped report-only policy', function () use ($docs) {
@@ -46,7 +51,7 @@ it('pins a trigger forbidden by the shipped report-only policy', function () use
 it('requires cached configuration rebuilds and header checks in both directions', function () use ($docs) {
     $source = file_get_contents(base_path($docs));
     $enable = strpos($source, '1. Set `CSP_REPORT_ONLY=true`');
-    $restore = strpos($source, '4. Flip the flag back to `CSP_REPORT_ONLY=false`');
+    $restore = strpos($source, '4. Always restore enforcement');
 
     expect($enable)->not->toBeFalse();
     expect($restore)->not->toBeFalse();
@@ -66,6 +71,10 @@ it('requires cached configuration rebuilds and header checks in both directions'
     expect($restoreSteps)->toContain('actual response headers: `Content-Security-Policy` present');
     expect($restoreSteps)->toContain('`Content-Security-Policy-Report-Only` absent');
     expect($restoreSteps)->toContain('restore any temporary sampling/logging settings');
+    // Restoration is unconditional: a header mismatch or a failed drill must
+    // still route back to step 4, so enforcement is never left disabled.
+    expect($restoreSteps)->toContain('on success, on a failed drill, and on');
+    expect($enableSteps)->toContain('skip to step 4 and restore enforcement');
 });
 
 it('requires warning-level logging and full sampling for the drill', function () use ($docs) {
@@ -95,4 +104,16 @@ it('states plainly that the log line is the store', function () use ($docs) {
     // The honest bound: no dashboard, no table. If this sentence goes missing,
     // a reader can believe a query UI exists that nobody built.
     expect($source)->toContain('no dashboard');
+});
+
+it('states the URL-field privacy caveat honestly', function () use ($docs) {
+    $source = file_get_contents(base_path($docs));
+
+    // The sink attaches no auth/session/IP metadata, but browser-supplied URL
+    // fields are copied unchanged and can carry identifiers — the old blanket
+    // "no user id" claim overstated the privacy bound.
+    expect($source)->toContain('attaches no authenticated-user, session, or IP metadata');
+    expect($source)->toContain('may carry');
+    expect($source)->toContain('/members/123');
+    expect($source)->not->toContain('Reports carry no user id');
 });

@@ -521,12 +521,17 @@ is no dashboard and no table to query; the log line is the store. This
 section is the documented provider path: how a reviewer triggers a
 violation on staging and finds it.
 
-**Read it on staging.** Same box access as any outage read
-(quick-reference step 3 below). The single-file query requires
+**Read it on staging.** Same staging access as any outage read
+(quick-reference step 3 shows the VM form); staging itself runs in the
+Coolify application container whose app root is `/app`
+(`nginx.template.conf` serves `/app/public`, and the file sinks resolve
+through `storage_path('logs/laravel.log')` in `config/logging.php`), so run
+these queries inside that container, or relative `storage/logs/...` from the
+application root. The single-file query requires
 `LOG_CHANNEL=single`, or `LOG_CHANNEL=stack` with `LOG_STACK=single`:
 
 ```bash
-grep 'csp.report.violation' /var/www/two-web/storage/logs/laravel.log | tail -30
+grep 'csp.report.violation' /app/storage/logs/laravel.log | tail -30
 # Illustrative row; browsers may include the directive's source list:
 # [2026-09-29 14:19:38] staging.WARNING: csp.report.violation {"blocked_uri":"https://csp-probe.invalid","violated_directive":"connect-src","document_uri":"...","source_file":"...","line_number":1}
 ```
@@ -535,16 +540,24 @@ For `LOG_CHANNEL=daily`, or `LOG_CHANNEL=stack` with `LOG_STACK=daily`,
 the handler writes dated files, not `laravel.log`. Query retained days:
 
 ```bash
-grep 'csp.report.violation' /var/www/two-web/storage/logs/laravel-????-??-??.log | tail -30
+grep 'csp.report.violation' /app/storage/logs/laravel-????-??-??.log | tail -30
 ```
+
+On a directly managed VM instead of Coolify, the same queries read
+`/var/www/two-web/storage/logs/laravel.log` (single) or
+`/var/www/two-web/storage/logs/laravel-????-??-??.log` (daily).
 
 For other configured channels, read their actual destination; an absent or
 stale `laravel.log` does not mean no violations. `violated_directive` names
 the policy clause that fired; `blocked_uri` names the violating resource
 (not necessarily blocked in report-only mode); `document_uri` is the page
 that produced the report. Cross-origin URLs may be reduced to their origin.
-Reports carry no user id, no session, and no IP beyond what the log line
-itself holds.
+The sink attaches no authenticated-user, session, or IP metadata beyond
+what the log line itself holds — but the browser-supplied URL fields
+(`document_uri`, `source_file`) are copied unchanged, so they may carry
+member identifiers (for example a report from `/members/123`,
+`routes/web.php`) or sensitive page query parameters. Treat these log lines
+with the same access and retention care as any user-identifying data.
 
 **Trigger one on purpose (authorized staging operators only).** This is an
 operator procedure, not permission for agents to probe staging or production.
@@ -564,8 +577,10 @@ For a deterministic drill, use `CSP_REPORT_SAMPLE_RATE=1.0`.
    disabled. Inspect that document's actual response headers in DevTools
    Network: require `Content-Security-Policy-Report-Only`, containing
    `connect-src 'self'` and `report-uri /csp-reports`, and no enforcing
-   `Content-Security-Policy` header. Stop if a proxy still emits enforcement
-   or the report-only header is absent; do not assume the env value is active.
+   `Content-Security-Policy` header. If a proxy still emits enforcement or
+   the report-only header is absent, skip to step 4 and restore enforcement
+   before doing anything else; do not assume the env value is active, and do
+   not leave the drill parked in report-only mode.
 3. On that page, run this in DevTools Console:
 
    ```js
@@ -580,11 +595,14 @@ For a deterministic drill, use `CSP_REPORT_SAMPLE_RATE=1.0`.
    Find the browser's `POST /csp-reports` (204) in Network, then query the
    configured log destination above for `connect-src` / `https://csp-probe.invalid`.
    Console warnings alone do not prove the sink received or logged a report.
-4. Flip the flag back to `CSP_REPORT_ONLY=false` to restore enforcement and
-   restore any temporary sampling/logging settings. Redeploy the staging
-   target again, or run `php artisan config:cache` again on the active release
-   with the restored environment. Reload the HTML document with cache disabled
-   and verify its actual response headers: `Content-Security-Policy` present,
+   A report that never arrives is a failed drill, not a pass; continue to
+   step 4 rather than retrying under a weakened policy.
+4. Always restore enforcement — on success, on a failed drill, and on
+   cancellation or abort from any earlier step. Flip the flag back to
+   `CSP_REPORT_ONLY=false` to restore enforcement; also restore any temporary sampling/logging settings.
+   Redeploy the staging target again, or run `php artisan config:cache` again on the active release
+   with the restored environment. Reload the HTML document with cache disabled and verify its
+   actual response headers: `Content-Security-Policy` present,
    `Content-Security-Policy-Report-Only` absent. Do not leave until enforcement
    is confirmed; report-only left on is an unenforced policy.
 
