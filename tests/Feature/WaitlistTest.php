@@ -238,6 +238,8 @@ it('promotes the head of the line when a seat frees (TOG-8394)', function () {
 });
 
 it('settles the waitlist when a going answer releases a seat', function (RsvpStatus $status) {
+    $this->freezeTime();
+    $this->full->rsvps()->where('user_id', $this->seatHolder->id)->update(['created_at' => now()]);
     $service = app(EventService::class);
     $second = User::factory()->create(['is_moderator' => false]);
     $head = $service->rsvp($this->full->fresh(), $this->member, RsvpStatus::Waitlisted);
@@ -248,7 +250,8 @@ it('settles the waitlist when a going answer releases a seat', function (RsvpSta
 
     $this->actingAs($this->seatHolder)
         ->putJson(route('events.rsvp.update', $this->full), ['status' => $status->value])
-        ->assertSuccessful();
+        ->assertOk()
+        ->assertJsonPath('data.status', $status->value);
 
     $event = $this->full->fresh();
 
@@ -260,7 +263,8 @@ it('settles the waitlist when a going answer releases a seat', function (RsvpSta
         ->and($next->fresh()->synced_to_discord_at->equalTo($nextStamp))->toBeTrue()
         ->and($event->waitlistPositionFor($second))->toBe(1)
         ->and($event->goingCount())->toBe(1)
-        ->and($event->waitlistCount())->toBe(1);
+        ->and($event->waitlistCount())->toBe($status === RsvpStatus::Waitlisted ? 2 : 1)
+        ->and($event->waitlistPositionFor($this->seatHolder))->toBe($status === RsvpStatus::Waitlisted ? 2 : null);
 
     $latecomer = User::factory()->create(['is_moderator' => false]);
 
@@ -270,7 +274,50 @@ it('settles the waitlist when a going answer releases a seat', function (RsvpSta
 })->with([
     'going to maybe' => [RsvpStatus::Maybe],
     'going to not going' => [RsvpStatus::NotGoing],
+    'going to waitlisted' => [RsvpStatus::Waitlisted],
 ]);
+
+it('returns the settled answer when a former holder is the only waiter', function () {
+    $answer = app(EventService::class)->rsvp($this->full->fresh(), $this->seatHolder, RsvpStatus::Waitlisted);
+
+    expect($answer->status)->toBe(RsvpStatus::Going)
+        ->and($answer->fresh()->status)->toBe($answer->status)
+        ->and($answer->synced_to_discord_at)->toBeNull()
+        ->and($this->full->fresh()->goingCount())->toBe(1)
+        ->and($this->full->fresh()->waitlistCount())->toBe(0);
+});
+
+it('returns the settled answer over HTTP when the former holder is the only waiter', function () {
+    $this->actingAs($this->seatHolder)
+        ->putJson(route('events.rsvp.update', $this->full), ['status' => RsvpStatus::Waitlisted->value])
+        ->assertOk()
+        ->assertJsonPath('data.status', RsvpStatus::Going->value);
+
+    expect($this->full->rsvps()->where('user_id', $this->seatHolder->id)->first()?->status)->toBe(RsvpStatus::Going);
+});
+
+it('announces the settled answer when the former holder is the only waiter', function () {
+    Livewire::actingAs($this->seatHolder)
+        ->test(RsvpButton::class, ['event' => $this->full])
+        ->call('rsvp', RsvpStatus::Waitlisted->value)
+        ->assertSeeHtml('data-testid="rsvp-confirmed"')
+        ->assertDontSeeHtml('data-testid="waitlist-position"')
+        ->assertDispatched('going-count-updated', eventKey: $this->full->event_key, viewerState: 'going');
+});
+
+it('keeps an existing waiter ahead when an older non-seat answer joins the line', function (RsvpStatus $status) {
+    $this->freezeTime();
+    $service = app(EventService::class);
+    $service->rsvp($this->full->fresh(), $this->member, $status);
+    $first = User::factory()->create(['is_moderator' => false]);
+    $service->rsvp($this->full->fresh(), $first, RsvpStatus::Waitlisted);
+
+    $service->rsvp($this->full->fresh(), $this->member, RsvpStatus::Waitlisted);
+    $service->rsvp($this->full->fresh(), $first, RsvpStatus::Waitlisted);
+
+    expect($this->full->fresh()->waitlistPositionFor($first))->toBe(1)
+        ->and($this->full->fresh()->waitlistPositionFor($this->member))->toBe(2);
+})->with([RsvpStatus::Maybe, RsvpStatus::NotGoing]);
 
 it('does not settle the waitlist for an answer that releases no seat', function (?RsvpStatus $before, RsvpStatus $after) {
     $service = app(EventService::class);

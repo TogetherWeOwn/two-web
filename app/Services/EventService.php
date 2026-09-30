@@ -288,6 +288,13 @@ class EventService
             $releasesASeat = $existing?->status === RsvpStatus::Going
                 && $status !== RsvpStatus::Going;
 
+            // Joining the line is a fresh place, not the priority of an older
+            // non-waitlisted answer. Recreate both FIFO keys (created_at, id)
+            // so same-second joins cannot jump existing waiters either.
+            if ($status === RsvpStatus::Waitlisted && $existing !== null && $existing->status !== RsvpStatus::Waitlisted) {
+                $existing->delete();
+            }
+
             $rsvp = Rsvp::query()->updateOrCreate(
                 ['event_id' => $locked->getKey(), 'user_id' => $user->getKey()],
                 // Any change makes the Discord mirror stale, so the member is back to
@@ -295,10 +302,16 @@ class EventService
                 ['status' => $status, 'synced_to_discord_at' => null],
             );
 
+            // A recreated queue entry still updates an existing answer over HTTP.
+            $rsvp->wasRecentlyCreated = $existing === null;
+
             // Settle the line before releasing the event lock, just like a
             // withdrawal, so a newcomer cannot claim the seat ahead of its head.
             if ($releasesASeat) {
                 $this->promoteWaitlist($locked);
+                // With no earlier waiters, the changed answer may itself be
+                // promoted. Return the settled status, not the requested one.
+                $rsvp->refresh();
             }
 
             $this->syncAfterCommit($locked);
