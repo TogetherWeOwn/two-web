@@ -133,6 +133,26 @@ it('isolates the drill from older ordinary work and another probe queue', functi
         ->and(DB::table('jobs')->orderBy('id')->get()->all())->toEqual($pending->all());
 });
 
+it('refuses to dispatch while the app is down for maintenance', function () {
+    // Laravel's --once worker returns without consuming while the app is
+    // down, so a dispatched probe would strand on its disposable queue —
+    // the refusal must happen before dispatch, with zero side effects.
+    $this->artisan('down')->assertSuccessful();
+
+    try {
+        $code = Artisan::call('queue:poison-probe', ['--json' => true]);
+        $payload = json_decode(Artisan::output(), true, flags: JSON_THROW_ON_ERROR);
+
+        expect($code)->toBe(1)
+            ->and($payload['status'])->toBe('error')
+            ->and($payload)->not->toHaveKey('marker')
+            ->and(DB::table('jobs')->count())->toBe(0)
+            ->and(DB::table('failed_jobs')->count())->toBe(0);
+    } finally {
+        $this->artisan('up')->assertSuccessful();
+    }
+});
+
 it('refuses a non-database driver instead of reporting a healthy zero', function () {
     config()->set('queue.default', 'sync');
 

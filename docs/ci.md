@@ -577,7 +577,11 @@ the answer means anything — CI never sees staging's queue.
    `AppServiceProvider`. The probe dispatches a self-failing job, runs the
    worker once against it, and reports the `failed_jobs` row it landed in.
    Clean the probe row up afterwards with `php artisan queue:forget <uuid>`
-   (the uuid is in the probe output), or retry it with `php artisan queue:retry`.
+   (the uuid is in the probe output). Do not `queue:retry`: retry would
+   restore the poison to its single-use isolated queue where no worker
+   listens — re-run the probe for a fresh drill instead. The probe refuses
+   to run while the app is down for maintenance, so run the drill with the
+   app up.
    The chain is pinned by `tests/Feature/Console/QueuePoisonProbeTest.php`.
 
 A real failure lands the same way: the worker already owns recovery (the

@@ -2,6 +2,7 @@
 
 use App\Console\Commands\PoisonProbeJob;
 use App\Console\Commands\QueuePoisonProbe;
+use Illuminate\Contracts\Foundation\MaintenanceMode as MaintenanceModeContract;
 use Illuminate\Database\Query\Builder;
 use Illuminate\Support\Facades\Bus;
 use Illuminate\Support\Facades\DB;
@@ -83,6 +84,28 @@ it('routes dispatch, the one-shot worker and the failed-row lookup to the same i
         expect($payload)->not->toHaveKey('failed_uuid');
     }
 })->with([true, false]);
+
+it('refuses maintenance mode before dispatch, consumption or failed-row queries', function () {
+    // Laravel's --once worker returns without consuming while the app is
+    // down, so a dispatched probe would strand on its disposable queue.
+    $mode = Mockery::mock(MaintenanceModeContract::class);
+    $mode->shouldReceive('active')->once()->andReturn(true);
+    app()->instance(MaintenanceModeContract::class, $mode);
+
+    DB::shouldReceive('table')->never();
+    $command = Mockery::mock(QueuePoisonProbe::class.'[callSilent]', []);
+    $command->setLaravel(app());
+    $command->shouldReceive('callSilent')->never();
+    $output = new BufferedOutput;
+
+    $code = $command->run(new ArrayInput(['--json' => true]), $output);
+    $payload = json_decode($output->fetch(), true, flags: JSON_THROW_ON_ERROR);
+
+    expect($code)->toBe(1)
+        ->and($payload['status'])->toBe('error')
+        ->and($payload)->not->toHaveKey('marker');
+    Bus::assertNothingDispatched();
+});
 
 it('refuses unsupported drivers before dispatch, consumption or failed-row queries', function (string $driver) {
     config()->set('queue.connections.probe_fixture.driver', $driver);
