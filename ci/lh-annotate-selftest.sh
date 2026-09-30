@@ -29,7 +29,8 @@
 #   no-results-file  lhci wrote no assertions      -> exit 0
 #   no-directory     lhci never ran at all         -> exit 1  (never measured)
 #
-# The fixtures are the real numbers CI reported at cb90bcc, not invented ones.
+# The original fixtures are the real numbers CI reported at cb90bcc. The
+# two-report aggregation case uses synthetic values with exact even-count medians.
 #
 # No network, no Chrome, no lhci. Well under a second. Run it anywhere.
 #
@@ -160,17 +161,21 @@ case_is samples-non-numeric 1 'median of 3 runs' \
 
 printf '\n\033[1m==> The host speed that produced those samples (TOG-3224)\033[0m\n'
 
-# case_with_lhr <slug> <expected exit> <expected substring> <assertion json> <lhr json>
-# Same contract as case_is, plus one lhr-*.json so the environment block is
-# readable. benchmarkIndex is per-host, so it is reported once per job.
+# case_with_lhr <slug> <expected exit> <expected substrings, one per line> <assertion json> <lhr json>...
+# Same contract as case_is, plus saved lhr-*.json reports so the environment block
+# is readable. benchmarkIndex is per-host, so it is reported once per job.
 case_with_lhr() {
-  local slug="$1" want="$2" expected="$3" body="$4" lhr="$5"
-  local dir out status
+  local slug="$1" want="$2" expected="$3" body="$4"
+  local dir out status lhr expected_line report=0
+  shift 4
   n=$((n + 1))
   dir="$WORK/$slug"
   mkdir -p "$dir/.lighthouseci"
   printf '%s\n' "$body" > "$dir/.lighthouseci/assertion-results.json"
-  printf '%s\n' "$lhr" > "$dir/.lighthouseci/lhr-1700000000000.json"
+  for lhr in "$@"; do
+    printf '%s\n' "$lhr" > "$dir/.lighthouseci/lhr-$((1700000000000 + report)).json"
+    report=$((report + 1))
+  done
 
   out="$( cd "$dir" && node "$ANNOTATE" 2>&1 )"
   status=$?
@@ -181,8 +186,16 @@ case_with_lhr() {
     rc=1
     return
   fi
-  if ! grep -qF -- "$expected" <<< "$out"; then
-    fail "$slug: exit ${status} was right, but the output never says: ${expected}"
+  while IFS= read -r expected_line; do
+    if ! grep -qF -- "$expected_line" <<< "$out"; then
+      fail "$slug: exit ${status} was right, but the output never says: ${expected_line}"
+      printf '%s\n' "$out" | sed 's/^/        /'
+      rc=1
+      return
+    fi
+  done <<< "$expected"
+  if [ "$(grep -cF -- '::error::CONTEXT, NOT A FAILURE — host speed while measuring:' <<< "$out")" -gt 1 ]; then
+    fail "$slug: host speed must be annotated only once per job"
     printf '%s\n' "$out" | sed 's/^/        /'
     rc=1
     return
@@ -206,6 +219,17 @@ case_with_lhr benchmark-on-a-green-job 0 'benchmarkIndex 904' '[]' "$LHR_SLOW"
 case_with_lhr benchmark-absent 1 'largest-contentful-paint' \
 '[{"auditId":"largest-contentful-paint","level":"error","url":"http://127.0.0.1:8000/events","actual":2114,"expected":2000,"passed":false}]' \
 "$LHR_NO_ENV"
+
+# Two reports for one URL exercise even-count medians, not an assertion's cached
+# `actual`. Both reports share the host, so its median and range belong on one line.
+LHR_LOW='{"finalDisplayedUrl":"http://127.0.0.1:8000/events","environment":{"benchmarkIndex":1000},"audits":{"largest-contentful-paint":{"numericValue":100}}}'
+LHR_HIGH='{"finalDisplayedUrl":"http://127.0.0.1:8000/events","environment":{"benchmarkIndex":1400},"audits":{"largest-contentful-paint":{"numericValue":300}}}'
+
+case_with_lhr two-reports-one-url 1 \
+'::error::CONTEXT, NOT A FAILURE — measured on http://127.0.0.1:8000/events (median of 2 runs): largest-contentful-paint 200
+::error::CONTEXT, NOT A FAILURE — host speed while measuring: benchmarkIndex 1200 (median of 2 runs, range 1000–1400).' \
+'[{"auditId":"largest-contentful-paint","level":"error","url":"http://127.0.0.1:8000/events","actual":200,"expected":150,"passed":false,"values":[100,300]}]' \
+"$LHR_LOW" "$LHR_HIGH"
 
 printf '\n'
 if [ "$rc" -ne 0 ]; then
