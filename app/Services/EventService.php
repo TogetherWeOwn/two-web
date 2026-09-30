@@ -285,12 +285,21 @@ class EventService
                 throw new EventAtCapacityException($locked);
             }
 
+            $releasesASeat = $existing?->status === RsvpStatus::Going
+                && $status !== RsvpStatus::Going;
+
             $rsvp = Rsvp::query()->updateOrCreate(
                 ['event_id' => $locked->getKey(), 'user_id' => $user->getKey()],
                 // Any change makes the Discord mirror stale, so the member is back to
                 // "saved here, syncing to Discord" until the job says otherwise.
                 ['status' => $status, 'synced_to_discord_at' => null],
             );
+
+            // Settle the line before releasing the event lock, just like a
+            // withdrawal, so a newcomer cannot claim the seat ahead of its head.
+            if ($releasesASeat) {
+                $this->promoteWaitlist($locked);
+            }
 
             $this->syncAfterCommit($locked);
 

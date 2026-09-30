@@ -237,6 +237,72 @@ it('promotes the head of the line when a seat frees (TOG-8394)', function () {
         ->assertDontSeeHtml('data-testid="waitlist-position"');
 });
 
+it('settles the waitlist when a going answer releases a seat', function (RsvpStatus $status) {
+    $service = app(EventService::class);
+    $second = User::factory()->create(['is_moderator' => false]);
+    $head = $service->rsvp($this->full->fresh(), $this->member, RsvpStatus::Waitlisted);
+    $next = $service->rsvp($this->full->fresh(), $second, RsvpStatus::Waitlisted);
+    $head->update(['synced_to_discord_at' => now()]);
+    $next->update(['synced_to_discord_at' => now()]);
+    $nextStamp = $next->fresh()->synced_to_discord_at;
+
+    $this->actingAs($this->seatHolder)
+        ->putJson(route('events.rsvp.update', $this->full), ['status' => $status->value])
+        ->assertSuccessful();
+
+    $event = $this->full->fresh();
+
+    expect($event->rsvps()->where('user_id', $this->seatHolder->id)->first()?->status)->toBe($status)
+        ->and($head->fresh()->status)->toBe(RsvpStatus::Going)
+        ->and($head->fresh()->synced_to_discord_at)->toBeNull()
+        ->and($event->waitlistPositionFor($this->member))->toBeNull()
+        ->and($next->fresh()->status)->toBe(RsvpStatus::Waitlisted)
+        ->and($next->fresh()->synced_to_discord_at->equalTo($nextStamp))->toBeTrue()
+        ->and($event->waitlistPositionFor($second))->toBe(1)
+        ->and($event->goingCount())->toBe(1)
+        ->and($event->waitlistCount())->toBe(1);
+
+    $latecomer = User::factory()->create(['is_moderator' => false]);
+
+    expect(fn () => $service->rsvp($event, $latecomer, RsvpStatus::Going))
+        ->toThrow(EventAtCapacityException::class);
+    expect($event->rsvps()->where('user_id', $latecomer->id)->exists())->toBeFalse();
+})->with([
+    'going to maybe' => [RsvpStatus::Maybe],
+    'going to not going' => [RsvpStatus::NotGoing],
+]);
+
+it('does not settle the waitlist for an answer that releases no seat', function (?RsvpStatus $before, RsvpStatus $after) {
+    $service = app(EventService::class);
+    $answeringMember = $before === RsvpStatus::Going ? $this->seatHolder : User::factory()->create(['is_moderator' => false]);
+
+    if ($before !== null && $before !== RsvpStatus::Going) {
+        $service->rsvp($this->full->fresh(), $answeringMember, $before);
+    }
+
+    $head = $service->rsvp($this->full->fresh(), $this->member, RsvpStatus::Waitlisted);
+    $head->update(['synced_to_discord_at' => now()]);
+    $stamp = $head->fresh()->synced_to_discord_at;
+
+    // Deliberately leave a gap beside the line so an unconditional promotion
+    // would be observable. Normal capacity increases settle it immediately.
+    $this->full->update(['capacity' => 2]);
+    $answer = $service->rsvp($this->full->fresh(), $answeringMember, $after);
+    $event = $this->full->fresh();
+
+    expect($answer->status)->toBe($after)
+        ->and($head->fresh()->status)->toBe(RsvpStatus::Waitlisted)
+        ->and($head->fresh()->synced_to_discord_at->equalTo($stamp))->toBeTrue()
+        ->and($event->waitlistPositionFor($this->member))->toBe(1)
+        ->and($event->goingCount())->toBe(1);
+})->with([
+    'going re-answer' => [RsvpStatus::Going, RsvpStatus::Going],
+    'maybe to not going' => [RsvpStatus::Maybe, RsvpStatus::NotGoing],
+    'not going to maybe' => [RsvpStatus::NotGoing, RsvpStatus::Maybe],
+    'waitlisted to maybe' => [RsvpStatus::Waitlisted, RsvpStatus::Maybe],
+    'new non-seat answer' => [null, RsvpStatus::Maybe],
+]);
+
 it('promotes the line when the cap is raised (TOG-8394)', function () {
     $second = User::factory()->create(['is_moderator' => false]);
 
