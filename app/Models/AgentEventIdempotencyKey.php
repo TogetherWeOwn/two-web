@@ -76,7 +76,7 @@ class AgentEventIdempotencyKey extends Model
      *
      * Scheduled daily in routes/console.php.
      *
-     * @return Builder<self>
+     * @return Builder<static>
      */
     public function prunable(): Builder
     {
