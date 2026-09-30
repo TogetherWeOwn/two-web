@@ -152,6 +152,175 @@ it('never serves one member the answer belonging to another', function () {
 });
 
 /* ---------------------------------------------------------------------------
+   Answers that do not hold a seat
+   --------------------------------------------------------------------------- */
+
+it('shows the JSON answer without offering an unnoticed seat-taking upgrade', function (RsvpStatus $status, string $copy, bool $full, bool $synced) {
+    if ($full) {
+        $this->event->update(['capacity' => 1]);
+        Rsvp::factory()->create(['event_id' => $this->event->id, 'status' => RsvpStatus::Going]);
+    }
+
+    $this->actingAs($this->member)
+        ->putJson(route('events.rsvp.update', $this->event), ['status' => $status->value])
+        ->assertSuccessful();
+
+    if ($synced) {
+        Rsvp::query()->where('event_id', $this->event->id)->where('user_id', $this->member->id)
+            ->update(['synced_to_discord_at' => now()]);
+    }
+
+    $component = Livewire::actingAs($this->member)
+        ->test(RsvpButton::class, ['event' => $this->event->fresh()])
+        ->assertSee($copy)
+        ->assertSeeHtml('data-testid="rsvp-answer"')
+        ->assertSee('Remove answer')
+        ->assertSeeHtml('data-testid="rsvp-withdraw"')
+        ->assertDontSeeHtml('data-testid="rsvp-going"')
+        ->assertDontSeeHtml('data-testid="waitlist-join"')
+        ->assertDontSeeHtml('data-testid="event-full"')
+        ->assertDontSeeHtml('data-testid="rsvp-confirmed"');
+
+    $component->assertSeeHtml($synced ? 'data-testid="rsvp-synced"' : 'data-testid="rsvp-syncing"')
+        ->assertDontSeeHtml($synced ? 'data-testid="rsvp-syncing"' : 'data-testid="rsvp-synced"');
+
+    expect(Rsvp::query()->where('event_id', $this->event->id)->where('user_id', $this->member->id)->sole()->status)
+        ->toBe($status);
+})->with([
+    'maybe' => [RsvpStatus::Maybe, "You're a maybe"],
+    'not going' => [RsvpStatus::NotGoing, "You're not going"],
+])->with(['room available' => false, 'full' => true])
+    ->with(['sync pending' => false, 'synced' => true]);
+
+it('shows an eager-loaded non-seat answer honestly', function (RsvpStatus $status, string $copy) {
+    Rsvp::factory()->create([
+        'event_id' => $this->event->id,
+        'user_id' => $this->member->id,
+        'status' => $status,
+    ]);
+
+    $this->actingAs($this->member);
+    $event = Event::query()->with('viewerRsvps')->findOrFail($this->event->id);
+
+    Livewire::actingAs($this->member)
+        ->test(RsvpButton::class, ['event' => $event])
+        ->assertSee($copy)
+        ->assertSee('Remove answer')
+        ->assertDontSeeHtml('data-testid="rsvp-going"');
+})->with([
+    'maybe' => [RsvpStatus::Maybe, "You're a maybe"],
+    'not going' => [RsvpStatus::NotGoing, "You're not going"],
+]);
+
+it('lets a member remove a non-seat answer even when the event is full', function (RsvpStatus $status, bool $full) {
+    if ($full) {
+        $this->event->update(['capacity' => 1]);
+        Rsvp::factory()->create(['event_id' => $this->event->id, 'status' => RsvpStatus::Going]);
+    }
+
+    Rsvp::factory()->create([
+        'event_id' => $this->event->id,
+        'user_id' => $this->member->id,
+        'status' => $status,
+    ]);
+
+    $component = Livewire::actingAs($this->member)
+        ->test(RsvpButton::class, ['event' => $this->event->fresh()])
+        ->assertSee('Remove answer')
+        ->call('withdraw')
+        ->assertDispatched('rsvp-state-changed')
+        ->assertDontSeeHtml('data-testid="rsvp-answer"')
+        ->assertDontSeeHtml('data-testid="rsvp-withdraw"');
+
+    $component->assertSeeHtml($full ? 'data-testid="waitlist-join"' : 'data-testid="rsvp-going"');
+
+    expect(Rsvp::query()->where('event_id', $this->event->id)->where('user_id', $this->member->id)->exists())
+        ->toBeFalse();
+})->with([RsvpStatus::Maybe, RsvpStatus::NotGoing])
+    ->with(['room available' => false, 'full' => true]);
+
+it('keeps a non-seat answer and its remove control when withdrawal fails', function (RsvpStatus $status, string $copy) {
+    Rsvp::factory()->create([
+        'event_id' => $this->event->id,
+        'user_id' => $this->member->id,
+        'status' => $status,
+    ]);
+    $this->mock(EventService::class)->shouldReceive('withdrawRsvp')->andThrow(new BotTransportException('down'));
+
+    Livewire::actingAs($this->member)
+        ->test(RsvpButton::class, ['event' => $this->event])
+        ->call('withdraw')
+        ->assertSee($copy)
+        ->assertSee('Remove answer')
+        ->assertSeeHtml('data-testid="rsvp-failed"')
+        ->assertDontSeeHtml('data-testid="rsvp-going"')
+        ->assertNotDispatched('rsvp-state-changed');
+
+    expect(Rsvp::query()->where('event_id', $this->event->id)->where('user_id', $this->member->id)->sole()->status)
+        ->toBe($status);
+})->with([
+    'maybe' => [RsvpStatus::Maybe, "You're a maybe"],
+    'not going' => [RsvpStatus::NotGoing, "You're not going"],
+]);
+
+it('keeps non-seat answers removable while RSVPs are paused', function (RsvpStatus $status, bool $full) {
+    if ($full) {
+        $this->event->update(['capacity' => 1]);
+        Rsvp::factory()->create(['event_id' => $this->event->id, 'status' => RsvpStatus::Going]);
+    }
+
+    Rsvp::factory()->create([
+        'event_id' => $this->event->id,
+        'user_id' => $this->member->id,
+        'status' => $status,
+    ]);
+    $this->event->update(['rsvp_open' => false]);
+
+    Livewire::actingAs($this->member)
+        ->test(RsvpButton::class, ['event' => $this->event->fresh()])
+        ->assertSeeHtml('data-testid="rsvp-answer"')
+        ->assertSee('Remove answer')
+        ->assertDontSeeHtml('data-testid="rsvp-paused"')
+        ->assertDontSeeHtml('data-testid="rsvp-going"')
+        ->call('withdraw')
+        ->assertDontSeeHtml('data-testid="rsvp-answer"')
+        ->assertSeeHtml('data-testid="rsvp-paused"');
+
+    expect(Rsvp::query()->where('event_id', $this->event->id)->where('user_id', $this->member->id)->exists())
+        ->toBeFalse();
+})->with([RsvpStatus::Maybe, RsvpStatus::NotGoing])
+    ->with(['room available' => false, 'full' => true]);
+
+it('does not describe a failed non-seat sync as a held spot or a successful sync', function (RsvpStatus $status) {
+    Rsvp::factory()->create([
+        'event_id' => $this->event->id,
+        'user_id' => $this->member->id,
+        'status' => $status,
+        'synced_to_discord_at' => null,
+    ]);
+    $this->event->update(['discord_sync_failed_at' => now()]);
+
+    Livewire::actingAs($this->member)
+        ->test(RsvpButton::class, ['event' => $this->event->fresh()])
+        ->assertSeeHtml('data-testid="rsvp-answer"')
+        ->assertSeeHtml('data-testid="rsvp-sync-failed"')
+        ->assertSee("Saved. Discord sync didn't go through — your answer is still saved.", false)
+        ->assertDontSee('your spot is still held')
+        ->assertDontSeeHtml('data-testid="rsvp-syncing"')
+        ->assertDontSeeHtml('data-testid="rsvp-synced"');
+})->with([RsvpStatus::Maybe, RsvpStatus::NotGoing]);
+
+it('offers a focusable answer after a non-seat Livewire write', function (RsvpStatus $status) {
+    Livewire::actingAs($this->member)
+        ->test(RsvpButton::class, ['event' => $this->event])
+        ->call('rsvp', $status->value)
+        ->assertDispatched('rsvp-state-changed')
+        ->assertSeeHtml('role="status" tabindex="-1" data-testid="rsvp-answer"')
+        ->assertSee('Remove answer')
+        ->assertDontSeeHtml('data-testid="rsvp-going"');
+})->with([RsvpStatus::Maybe, RsvpStatus::NotGoing]);
+
+/* ---------------------------------------------------------------------------
    Discord lag is not a failure
    --------------------------------------------------------------------------- */
 
