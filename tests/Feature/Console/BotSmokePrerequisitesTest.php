@@ -22,7 +22,7 @@ final class BotSmokePrerequisitesTest extends TestCase
 
         config([
             'services.bot.url' => 'https://bot.example.test',
-            'services.bot.secret' => 'synthetic-smoke-secret-at-least-32-characters',
+            'services.bot.secret' => bin2hex(random_bytes(32)),
             'services.bot.key_id' => 'smoke-test',
             'services.bot.timeout' => 1,
         ]);
