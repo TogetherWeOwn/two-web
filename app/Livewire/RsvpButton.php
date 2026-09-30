@@ -293,6 +293,7 @@ class RsvpButton extends Component
             'rsvp' => $rsvp,
             'going' => $going,
             'waitlisted' => $waitlisted,
+            'nonSeatAnswer' => in_array($rsvp?->status, [RsvpStatus::Maybe, RsvpStatus::NotGoing], true),
             'open' => $live,
             'paused' => $paused,
             // Somebody already holding a seat — or a place in line — is never
