@@ -154,7 +154,9 @@ test('the compiled calendar loader respects reduced motion during a month change
                     check();
                 JS, [$nextMonth]);
 
-                expect($settled)->toBe(['month' => $nextMonth, 'status' => $nextMonth, 'count' => 1]);
+                expect($settled['month'])->toBe($nextMonth);
+                expect($settled['status'])->toBe($nextMonth);
+                expect($settled['count'])->toBe(1);
                 $browser->assertSeeIn('[data-testid="calendar-month"]', $nextMonth)
                     ->assertMissing('[data-testid="events-loading"]')
                     ->assertVisible('[data-testid="events-content"]');
