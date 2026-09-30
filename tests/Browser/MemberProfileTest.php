@@ -190,6 +190,11 @@ it('stashes the draft without starting login when another tab broadcasts sign-ou
     $this->browse(function (Browser $browser) use ($member) {
         $browser->loginAs($member)
             ->visit('/profile')
+            // Flake hardening (docs/flake-policy.md; DiscordLoginTest 'a
+            // member can sign out again'): press() resolves the button and
+            // clicks it in separate round trips, so resolve against a
+            // rendered page instead of a page part-way through becoming one.
+            ->waitFor('[data-testid="profile-new-member"]')
             ->press('Add profile details')
             ->waitFor('[data-testid="profile-edit-form"]')
             ->type('bio', 'Sign-out broadcast draft')
@@ -239,6 +244,10 @@ it('keeps an open editor on the page when a second tab signs out for real', func
     $this->browse(function (Browser $browser) use ($member) {
         $browser->loginAs($member)
             ->visit('/profile')
+            // Same stale-element hardening as the broadcast test above:
+            // resolve the press against the rendered new-member section,
+            // not a page mid-morph (docs/flake-policy.md).
+            ->waitFor('[data-testid="profile-new-member"]')
             ->press('Add profile details')
             ->waitFor('[data-testid="profile-edit-form"]')
             ->type('bio', 'Cross-tab sign-out draft')
