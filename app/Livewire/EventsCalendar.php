@@ -141,6 +141,7 @@ class EventsCalendar extends Component
         // second resolve whether the first one's read failed is always "no",
         // which would silently turn every error state into the
         // never-scheduled one.
+        $term = trim($this->search);
         $discord = app(DiscordEventsSource::class);
         $discordRows = collect($discord->upcoming())
             // The view already filters to scheduled/active within 90 days, but
@@ -148,6 +149,7 @@ class EventsCalendar extends Component
             // against now so a just-started event cannot linger here forever
             // if the collector goes dark.
             ->filter(fn (Event $event): bool => $event->ends_at >= now());
+        $discordRows = $this->searchDiscordRows($discordRows);
         $discordFailed = $discord->lastReadFailed();
 
         $upcoming = $this->upcoming($discordRows);
@@ -160,7 +162,7 @@ class EventsCalendar extends Component
         }
         // A blank search is no search: spaces alone must not narrow the page to
         // nothing, and must not swap the empty states for the search one.
-        $searching = trim($this->search) !== '';
+        $searching = $term !== '';
         // While searching, matching past events show without opening the drawer:
         // a match hidden behind a closed drawer reads as "no results".
         $showPast = $this->showingPast || $searching;
@@ -236,6 +238,48 @@ class EventsCalendar extends Component
         return $local->concat($discordRows)->sortBy(fn (Event $event): int => $event->starts_at->getTimestamp())->values();
     }
 
+    /**
+     * @param  SupportCollection<int, Event>  $rows
+     * @return SupportCollection<int, Event>
+     */
+    private function searchDiscordRows(SupportCollection $rows): SupportCollection
+    {
+        if (trim($this->search) === '' || $rows->isEmpty()) {
+            return $rows;
+        }
+
+        // PHP's Unicode case folding is not Postgres ILIKE (notably σ versus ς).
+        // Ask the local connection to match bound transient copy in one query,
+        // with the same collation and escaped pattern as visible(). No writes.
+        $connection = (new Event)->getConnection();
+        $candidates = null;
+
+        foreach ($rows as $index => $event) {
+            $row = $connection->query()->selectRaw('? as row_index, ? as title, ? as description', [
+                $index, $event->title, $event->description,
+            ]);
+            $candidates = $candidates === null ? $row : $candidates->unionAll($row);
+        }
+
+        if ($candidates === null) {
+            return $rows;
+        }
+
+        $matches = $connection->query()
+            ->fromSub($candidates, 'discord_search')
+            ->whereLike('title', $this->searchPattern())
+            ->orWhereLike('description', $this->searchPattern())
+            ->pluck('row_index')
+            ->all();
+
+        return $rows->only($matches);
+    }
+
+    private function searchPattern(): string
+    {
+        return '%'.addcslashes(trim($this->search), '%_\\').'%';
+    }
+
     /** @return EloquentCollection<int, Event> Most recent first — "the last one was…". */
     private function past(): EloquentCollection
     {
@@ -269,7 +313,7 @@ class EventsCalendar extends Component
                     // `ilike` on Postgres, so casing is the database's problem,
                     // not the member's. The escape is ours, though: `%` and `_`
                     // in the query must match themselves, not act as wildcards.
-                    $term = '%'.addcslashes(trim($this->search), '%_\\').'%';
+                    $term = $this->searchPattern();
 
                     $query->where(fn (Builder $nested): Builder => $nested
                         ->whereLike('title', $term)
