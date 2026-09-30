@@ -220,6 +220,28 @@ class Event extends Model
         return $this->ends_at->isPast();
     }
 
+    /**
+     * Lifetime page views of the shareable page, summed over the daily rows
+     * (TOG-8408). Zero when nobody has looked yet — the absence of rows is a
+     * zero, not a null, so the moderator badge never has to explain itself.
+     */
+    public function viewCount(): int
+    {
+        return (int) $this->viewCounts()->sum('views');
+    }
+
+    /**
+     * The moderator-visible audience, eager-loadable next to going_count.
+     * Named `view_count` so the page reads `$event->view_count` exactly like
+     * the `$event->going_count` aggregate beside it.
+     *
+     * @return HasMany<EventViewCount, $this>
+     */
+    public function viewCounts(): HasMany
+    {
+        return $this->hasMany(EventViewCount::class);
+    }
+
     /** @return BelongsTo<User, $this> */
     public function creator(): BelongsTo
     {

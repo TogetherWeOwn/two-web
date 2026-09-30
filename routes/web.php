@@ -14,6 +14,7 @@ use App\Http\Controllers\HomeController;
 use App\Http\Controllers\JoinController;
 use App\Http\Controllers\ProfileController;
 use App\Http\Controllers\RsvpController;
+use App\Http\Middleware\RecordEventView;
 use App\Livewire\EventsCalendar;
 use App\Livewire\PastEvents;
 use App\Models\Event;
@@ -123,7 +124,12 @@ Route::get('/events/past', PastEvents::class)->name('events.past');
 // comment on `/events` above). The wildcard binds on `event_key`, same as the
 // JSON route (Event::getRouteKeyName()); an unknown key is a 404 from the
 // implicit binding, and a draft 403s for non-moderators via the policy.
-Route::get('/e/{event}', EventPageController::class)->name('events.page');
+// First-party view counting (TOG-8408): the middleware records one human page
+// view per 200 response. Drafts 403 and cancelled 410s never reach the write,
+// and bot/crawler User-Agents are excluded before anything is recorded.
+Route::get('/e/{event}', EventPageController::class)
+    ->middleware(RecordEventView::class)
+    ->name('events.page');
 
 // The per-event calendar download, on the same `event_key` binding. Public like
 // the page: a calendar client fetching the URL has no session, so a login wall

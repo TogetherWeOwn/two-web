@@ -44,6 +44,11 @@ final class EventPageController
         $event->loadCount(['rsvps as going_count' => fn ($query) => $query->where('status', RsvpStatus::Going)]);
         $event->loadMissing('viewerRsvps');
 
+        // The lifetime view total for the moderator badge (TOG-8408): one SUM
+        // over the narrow daily rows, next to the going_count aggregate above
+        // rather than a query per render. Guests never see it — see the blade.
+        $event->loadSum('viewCounts as view_count', 'views');
+
         // Who's going: member display names for signed-in viewers only, one
         // query ordered by answer time. A guest gets the count the page already
         // prints plus the join pitch — no member-identifying data leaves the

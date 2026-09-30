@@ -52,6 +52,17 @@
                         </span>
                     @endif
 
+                    {{-- Moderator-only audience count (TOG-8408): guests get the
+                         going count plus the join pitch, never this number —
+                         view totals are a moderation signal, not social proof. --}}
+                    @can('viewDrafts', \App\Models\Event::class)
+                        <span class="u-numeric inline-flex items-center gap-1.5 rounded-sm px-2 py-0.5 text-xs font-medium
+                                     bg-raised text-ink-muted border border-line"
+                              data-testid="event-view-count">
+                            {{ $event->view_count ?? 0 }} {{ ($event->view_count ?? 0) === 1 ? 'view' : 'views' }}
+                        </span>
+                    @endcan
+
                     <span class="u-numeric inline-flex items-center gap-1.5 rounded-sm px-2 py-0.5 text-xs font-medium
                                  bg-raised text-ink-muted border border-line"
                           data-testid="event-going-count">
