@@ -185,14 +185,14 @@ release sign-off.
 
 ## The budgets
 
-Set by the CEO. Enforced as **failures, not warnings**.
+Set by the maintainers. Enforced as **failures, not warnings**.
 
 - **LCP < 2.0s** on a mid-range phone profile — Moto G Power class, 4× CPU
   slowdown, simulated Slow 4G. Configured in `ci/lighthouserc.cjs`.
 - **CLS < 0.1**, same profile.
 - **WCAG 2.2 AA**, zero violations, in `ci/a11y.mjs`.
 
-One more assertion sits alongside them, and it is not a CEO budget:
+One more assertion sits alongside them, and it is not a maintainers' budget:
 
 - **Server response time < 600ms** for the main document.
 
@@ -245,7 +245,7 @@ is about LCP:
 | `slowserver` — three seconds of server think-time | `server-response-time`, for the reason above. **Not** `largest-contentful-paint`. |
 | `lcp` — a 1.6 MB uncompressed hero above the fold | `largest-contentful-paint`, and nothing else |
 
-The `lcp` case exists because without it the CEO's headline budget has no live proof
+The `lcp` case exists because without it the maintainers' headline budget has no live proof
 that it fires at all: `slowserver` is a server-side breach, so a broken
 `largest-contentful-paint` assertion would be invisible to every job in the pipeline.
 Measured on the settings in `ci/lighthouserc.cjs`, varying only the image:
@@ -269,7 +269,7 @@ Three Lighthouse runs per URL, median asserted — see the flake policy on why t
 is sampling and not a retry.
 
 **Nobody lowers a budget to unblock a release.** Not QA, not the Lead, not the
-Frontend Engineer. It is a CEO decision, made in writing on the issue, and then
+Frontend Engineer. It is a maintainers' decision, made in writing on the issue, and then
 landed here as its own commit that says so. A threshold quietly relaxed inside a
 feature PR is the specific thing this file exists to prevent.
 
@@ -638,8 +638,9 @@ not:
   deployed host.
 - **Continuously, on any environment: nobody.** No cron, no scheduled
   workflow, and no third-party pinger polls `/up` on a deployed host (this
-  repo uses no paid services) — the one scheduled workflow that does exist,
-  `codeowners.yml`'s weekly check, has nothing to do with `/up`. When
+  repo uses no paid services) — the scheduled workflows that do exist,
+  `codeowners.yml`'s weekly owners check and `deploy-records-prune.yml`'s
+  weekly deployment-records prune (TOG-9273), have nothing to do with `/up`. When
   staging or production stops answering between deploys, nothing notices
   until a human loads the page or the next deploy's poll fails. The release
   checklist's "someone is available to watch it after it goes out" is,
@@ -656,6 +657,75 @@ monitor is wired to a host that does not exist yet.
 
 Pinned by `tests/Unit/HealthMonitoringRunbookTest.php`, which asserts this
 section still names each poller, the gap, and the bound.
+
+### Error drill: prove a 500 pages (TOG-8730)
+
+The queue drill proves dead jobs surface. This proves 500s do too — same
+shape, different half: `php artisan error-alert:probe --json` throws a marker
+exception through the `report` listener in `bootstrap/app.php` and reports
+whether the `Unhandled exception.` alert fired and the repeat was muted (the
+`ErrorAlertRateLimit` noise guard: one alert per exception class + route per
+5 minutes). Then tail the log for the line. The cron watcher
+(`bin/error-log-watch.sh`, every 5 minutes — docs/runbook.md "Error
+alerting") scans the delta for that line and `Queue job failed.` and mails
+on either, so a 500 in staging produces an operator-visible alert within the
+documented path. The chain is pinned by
+`tests/Feature/Console/ErrorAlertProbeTest.php`. No Sentry, no Flare, no
+Bugsnag — none installed, none allowed.
+
+### Deployment-records retention: newest 30 per environment, weekly (TOG-9273)
+
+Every merge to `main` creates a GitHub Deployment record — the `environment:`
+keys in `deploy.yml` do that implicitly, with statuses — and nothing ever
+deleted them: 148 at the TOG-7649 readback, +1 per deploy after. The Shipping
+KPI reads these records, so the fix is retention, not silence: keep the
+newest 30 per environment, delete the rest, oldest first. This is NOT
+[TOG-8728](/TOG/issues/TOG-8728), which is log rotation on a different store —
+the gap list names this one separately and unowned.
+
+- **The schedule is `.github/workflows/deploy-records-prune.yml`**, Sundays
+  06:17 UTC (off the hour, like `codeowners.yml`: GitHub drops scheduled runs
+  under load at popular times, and a prune that silently does not run is
+  unbounded growth wearing a schedule), plus `workflow_dispatch` for a manual
+  pass. It runs `ci/prune-deployments.sh --keep 30 --env staging,production
+  --apply`. Dry run is the script's default; `--apply` is what makes the
+  schedule real rather than TOG-913 theater.
+- **Retention is per environment, not global.** Staging deploys on every merge
+  and production deploys almost never; a global keep-30 would let staging
+  churn evict the whole production history the KPI reads. The environment is
+  the unit the API organises records by and the unit the KPI reads, so it is
+  the unit the prune keeps.
+- **Keep-30 means the last 30 deploys, not the last 30 days.** A burst week of
+  merges narrows the window; a quiet month widens it. The schedule is weekly,
+  not per-deploy, and history depth is measured in releases — that is the
+  documented bound, not a defect.
+- **The credential is `GITHUB_TOKEN` with `deployments: write`, minted per
+  run.** That scope is the only one the job holds: list, retire, delete. No
+  box-side token exists for this — putting a GitHub token in the box `.env`
+  for a janitor job would be credential distribution, which is
+  owner-reserved. That is also why there is no artisan command and no
+  scheduler entry: the prune lives in Actions, where the credential is born
+  and dies with the run.
+
+The bound, stated plainly: with more than one deployment, GitHub deletes only
+**inactive** records — anything else is a 422. A record goes inactive when a
+newer `success` status lands on the same environment, so ordinarily every
+prune candidate already is. When one is not, the script retires it first (one
+`inactive` status naming the script and the card) and deletes it in the same
+run, so the transient state is invisible. If a record cannot be retired or
+deleted, the run fails naming its id — one stuck record never blocks the
+rest, and a prune that quietly skipped is the defect this card exists to fix.
+
+Pinned two ways: `ci/prune-deployments-selftest.sh` executes the pruner
+against a stub `gh` and pins that the newest are kept, the oldest go first,
+active records retire, stuck ids fail loudly, and API errors are never read
+as empty environments — it runs in `static`, offline. Large API pages are
+processed through stdin, ids are deduplicated before retention, and any JSON
+planning failure stops the environment before deletion. The scheduled job
+uses `ubuntu-latest`, matching the hosted-runner attestation above. And
+`tests/Unit/DeploymentRecordsPruneTest.php` pins this section's lines, so a
+future edit cannot silently drop the schedule, the per-environment rule, or
+the bound while deploys keep looking green.
 
 ### Production deploys are dispatch-only, behind a required reviewer
 

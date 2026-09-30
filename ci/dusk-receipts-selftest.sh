@@ -19,6 +19,28 @@ printf '%s\n' '{"body":{"action":"event.upsert"}}' > "$receipt"
 "$php_bin" "$root/ci/dusk-receipts-check.php" "$calls" "$receipt" >/dev/null
 echo 'PASS  complete OAuth and bot receipts are accepted'
 
+for scenario in wrong-action missing-action; do
+  case "$scenario" in
+    wrong-action) printf '%s\n' '{"body":{"action":"event.delete"}}' > "$work/mutated-receipt.json" ;;
+    missing-action) printf '%s\n' '{"body":{}}' > "$work/mutated-receipt.json" ;;
+  esac
+
+  status=0
+  "$php_bin" "$root/ci/dusk-receipts-check.php" "$calls" "$work/mutated-receipt.json" > "$work/out" 2> "$work/err" || status=$?
+  if [[ "$status" -ne 1 ]]; then
+    echo "FAIL  $scenario exited $status instead of 1" >&2
+    exit 1
+  fi
+
+  grep -Fxq 'Expected event.upsert receipt was absent.' "$work/err"
+  if grep -Fq 'OAuth and bot receipts present.' "$work/out" "$work/err"; then
+    echo "FAIL  $scenario emitted the success line" >&2
+    exit 1
+  fi
+
+  echo "PASS  $scenario makes the receipt gate red"
+done
+
 for missing in /oauth2/authorize /internal/actions; do
   grep -v "\"pathname\":\"$missing\"" "$calls" > "$work/mutated.jsonl"
 

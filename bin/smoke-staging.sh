@@ -20,10 +20,18 @@
 #                            routes/web.php, so an unauthenticated 200 is
 #                            impossible by design). With --cookie, also
 #                            asserts an authenticated 200.
+#   5. GET /join?next=/events
+#                         -> 200 for guests, and the one-click href forwards
+#                            the return-to page (`/join/discord` + `next=`);
+#                            the OAuth round trip itself is not exercised.
+#   6. GET /join?next=https://evil.test
+#                         -> 200 for guests, and the hostile host appears
+#                            nowhere in the HTML (open-redirect guard enforced
+#                            in the guest shape, see SafeRedirect).
 #
 # Prints PASS/FAIL per check. Exit 0 when every check passes, 1 otherwise.
 #
-# TOG-6772.
+# TOG-6772. Deep-link checks (5-6): TOG-9271.
 set -u
 
 BASE_URL=""
@@ -35,7 +43,7 @@ while [ $# -gt 0 ]; do
         --cookie=*) COOKIE="${1#--cookie=}"; shift ;;
         --cookie) COOKIE="${2:-}"; shift 2 ;;
         --selftest) SELFTEST=1; shift ;;
-        -h|--help) sed -n '2,21p' "$0"; exit 0 ;;
+        -h|--help) sed -n '2,30p' "$0"; exit 0 ;;
         --*) echo "unknown option: $1" >&2; exit 2 ;;
         *) if [ -z "$BASE_URL" ]; then BASE_URL="$1"; else echo "unexpected argument: $1" >&2; exit 2; fi; shift ;;
     esac
@@ -72,6 +80,42 @@ gated() {
         *cloudflareaccess.com*) return 0 ;;
         *) return 1 ;;
     esac
+}
+
+# GET and keep the body. Sets global FETCH_BODY, or FETCH_ERROR on failure.
+# Same header rules as probe(): session cookie when set, Cloudflare Access
+# service-token headers when the env provides them. Check this request's own
+# transport result and status: a healthy earlier probe cannot vouch for it.
+fetch_body() {
+    url="$1"
+    set -- "$url"
+    if [ -n "$COOKIE" ]; then set -- -H "Cookie: $COOKIE" "$url"; fi
+    if [ -n "${CF_ACCESS_CLIENT_ID:-}" ] && [ -n "${CF_ACCESS_CLIENT_SECRET:-}" ]; then
+        set -- -H "CF-Access-Client-Id: $CF_ACCESS_CLIENT_ID" \
+               -H "CF-Access-Client-Secret: $CF_ACCESS_CLIENT_SECRET" "$@"
+    fi
+    FETCH_BODY=""
+    FETCH_ERROR=""
+    fetch_response=$(curl -s -w '\n%{http_code}' --max-time 20 "$@" </dev/null)
+    fetch_status=$?
+    if [ "$fetch_status" -ne 0 ]; then
+        FETCH_ERROR="body fetch failed (curl exit $fetch_status)"
+        return 1
+    fi
+    # curl appends a newline and status after the body; split at the last newline.
+    fetch_code="${fetch_response##*
+}"
+    if [ "$fetch_code" != "200" ]; then
+        FETCH_ERROR="body fetch expected 200, got $fetch_code"
+        return 1
+    fi
+    FETCH_BODY="${fetch_response%
+*}"
+    if [ -z "$FETCH_BODY" ]; then
+        FETCH_ERROR="body fetch returned an empty body"
+        return 1
+    fi
+    return 0
 }
 
 check_up() {
@@ -152,6 +196,75 @@ check_events_json() {
     fi
 }
 
+check_join_next() {
+    # Guest shape only: the return-to page lives in the guest CTA, so force
+    # the unauthenticated view even when --cookie is set. The OAuth round
+    # trip itself is not exercised — only that the page answers 200 and the
+    # one-click href forwards the safe `?next=` value.
+    hold_cookie="$COOKIE"
+    COOKIE=""
+    probe "$BASE_URL/join?next=%2Fevents"
+    code="$PROBE_CODE"; location="$PROBE_LOCATION"
+    if gated "$location"; then
+        COOKIE="$hold_cookie"
+        fail "/join?next=" "got Cloudflare Access challenge; staging is gated, not the app"
+        return
+    fi
+    if [ "$code" != "200" ]; then
+        COOKIE="$hold_cookie"
+        fail "/join?next=" "expected 200, got $code"
+        return
+    fi
+    if ! fetch_body "$BASE_URL/join?next=%2Fevents"; then
+        COOKIE="$hold_cookie"
+        fail "/join?next=" "$FETCH_ERROR"
+        return
+    fi
+    COOKIE="$hold_cookie"
+    case "$FETCH_BODY" in
+        *join/discord*next*events*)
+            pass "/join?next=/events -> 200, one-click forwards the return-to page"
+            ;;
+        *)
+            fail "/join?next=" "200 but the one-click href does not forward next=/events"
+            ;;
+    esac
+}
+
+check_join_next_hostile() {
+    # Same guest shape: a hostile `?next=` must answer 200 with the hostile
+    # host nowhere in the HTML (SafeRedirect refuses it before the href is
+    # built). The one-click link stays bare.
+    hold_cookie="$COOKIE"
+    COOKIE=""
+    probe "$BASE_URL/join?next=https%3A%2F%2Fevil.test"
+    code="$PROBE_CODE"; location="$PROBE_LOCATION"
+    if gated "$location"; then
+        COOKIE="$hold_cookie"
+        fail "/join?next=hostile" "got Cloudflare Access challenge; staging is gated, not the app"
+        return
+    fi
+    if [ "$code" != "200" ]; then
+        COOKIE="$hold_cookie"
+        fail "/join?next=hostile" "expected 200, got $code"
+        return
+    fi
+    if ! fetch_body "$BASE_URL/join?next=https%3A%2F%2Fevil.test"; then
+        COOKIE="$hold_cookie"
+        fail "/join?next=hostile" "$FETCH_ERROR"
+        return
+    fi
+    COOKIE="$hold_cookie"
+    case "$FETCH_BODY" in
+        *evil.test*)
+            fail "/join?next=hostile" "200 but the hostile host leaks into the HTML (open-redirect guard)"
+            ;;
+        *)
+            pass "/join?next=hostile -> 200, hostile host absent (guard enforced)"
+            ;;
+    esac
+}
+
 selftest() {
     # Offline self-test: serve stub endpoints, run the real checks against them.
     stub=$(mktemp -d)
@@ -178,6 +291,14 @@ class H(BaseHTTPRequestHandler):
                 self._send(200, [('Content-Type', 'application/json')], b'[]')
             else:
                 self._send(302, [('Location', '/auth/discord/redirect')])
+        elif self.path.startswith('/join'):
+            # Guest shape for the deep-link checks (TOG-9271): a safe
+            # `?next=` is forwarded onto the one-click href, a hostile one
+            # leaves the href bare with the hostile host nowhere in the HTML.
+            if 'evil.test' in self.path:
+                self._send(200, body=b'<html><a data-testid="one-click-join" href="/join/discord">Join</a></html>')
+            else:
+                self._send(200, body=b'<html><a data-testid="one-click-join" href="/join/discord?next=%2Fevents">Join</a></html>')
         else:
             self._send(404)
     def log_message(self, *a):
@@ -225,6 +346,8 @@ check_up
 check_discord
 check_home
 check_events_json
+check_join_next
+check_join_next_hostile
 
 printf '\n%d passed, %d failed\n' "$pass_count" "$fail_count"
 [ "$fail_count" -eq 0 ]

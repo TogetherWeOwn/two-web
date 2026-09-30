@@ -1,6 +1,7 @@
 <?php
 
 use App\Enums\EventStatus;
+use App\Http\Controllers\Auth\AuthStatusController;
 use App\Http\Controllers\Auth\DiscordLoginController;
 use App\Http\Controllers\Auth\StagingQaLoginController;
 use App\Http\Controllers\DesignLab\HallmarkController;
@@ -164,6 +165,15 @@ Route::get('/auth/discord/callback', [DiscordLoginController::class, 'callback']
     ->middleware('throttle:10,1')
     ->name('login.callback');
 
+// TOG-8136: the cross-tab sign-out probe the layout's tab-sync script asks on
+// visibility/focus. Public on purpose — a logged-out tab must get
+// `{"authenticated":false}`, not the `auth`-group 302 — and throttled like the
+// neighbouring auth reads: visibility transitions are user-driven and rare,
+// and the throttle is the backstop against a stuck script looping the probe.
+Route::get('/auth/status', AuthStatusController::class)
+    ->middleware('throttle:60,1')
+    ->name('auth.status');
+
 // Staging's QA route is deliberately absent from every other environment. The
 // controller repeats the environment check so a cached or manually registered
 // route still fails closed, and it owns the secret comparison before fixture lookup.
@@ -210,6 +220,13 @@ Route::middleware('auth')->group(function () {
         ->middleware('throttle:30,1')->name('events.publish');
     Route::post('/events/{event}/cancel', [EventStatusController::class, 'cancel'])
         ->middleware('throttle:30,1')->name('events.cancel');
+    // Pause and reopen answers (TOG-8725). Same deliberate-verb shape as
+    // publish/cancel rather than a `status` field on the update — and the
+    // same `throttle:30,1` line, or the TOG-8709 coverage test fails.
+    Route::post('/events/{event}/rsvp-pause', [EventStatusController::class, 'pauseRsvps'])
+        ->middleware('throttle:30,1')->name('events.rsvp.pause');
+    Route::post('/events/{event}/rsvp-reopen', [EventStatusController::class, 'reopenRsvps'])
+        ->middleware('throttle:30,1')->name('events.rsvp.reopen');
 
     // One answer per member per event, so the RSVP is a singular sub-resource:
     // there is no collection to list and no id to hand back.
@@ -219,10 +236,15 @@ Route::middleware('auth')->group(function () {
     // the middleware refuses a hammering run before validation, policy and
     // the database run, keyed per member like the controller limiter. Both
     // verbs share the one bucket, so switching PUT/DELETE cannot multiply it.
+    //
+    // TOG-8824: a named limiter, not bare `throttle:12,1`. The bare form keys
+    // an authenticated request by sha1(user id) alone, so RSVP writes shared
+    // one counter with every `throttle:10,1` route (/join/discord,
+    // /auth/discord/*) and hammering one side could 429 the other.
     Route::put('/events/{event}/rsvp', [RsvpController::class, 'update'])
-        ->middleware('throttle:12,1')
+        ->middleware('throttle:rsvp-writes')
         ->name('events.rsvp.update');
     Route::delete('/events/{event}/rsvp', [RsvpController::class, 'destroy'])
-        ->middleware('throttle:12,1')
+        ->middleware('throttle:rsvp-writes')
         ->name('events.rsvp.destroy');
 });

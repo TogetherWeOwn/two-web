@@ -2,6 +2,7 @@
 
 namespace App\Filament\Resources\FeaturedContents\Schemas;
 
+use App\Rules\HttpsImageUrl;
 use Filament\Forms\Components\DateTimePicker;
 use Filament\Forms\Components\Textarea;
 use Filament\Forms\Components\TextInput;
@@ -43,10 +44,15 @@ class FeaturedContentForm
                             ->maxLength(255),
                         TextInput::make('image_url')
                             ->url()
+                            // TOG-7473: `url()` alone accepts ftp:// and any
+                            // https:// host, including .svg and tracking
+                            // pixels, rendered to every visitor. HttpsImageUrl
+                            // narrows it to https still-photo URLs.
+                            ->rule(new HttpsImageUrl)
                             ->live()
                             ->label('Image URL')
                             ->placeholder('https://example.org/photo.jpg')
-                            ->helperText('Optional. A direct link to a real community photo — never stock or generated imagery. Shown full-width below the text.')
+                            ->helperText('Optional. An https link to a real community photo (jpg, png, webp, gif, avif) — never stock or generated imagery. Shown full-width below the text.')
                             ->maxLength(255),
                         TextInput::make('image_alt')
                             ->live()
@@ -130,9 +136,11 @@ class FeaturedContentForm
             }
             if ($imageUrl !== '') {
                 // Same contract as the public cards: written alt wins, the
-                // headline stands in while the moderator is still typing.
+                // headline stands in while the moderator is still typing, and
+                // the 16:9 ratio box reserves layout (TOG-7331) — moderator
+                // URLs carry no dimensions, same as the home/taste cards.
                 $previewAlt = $imageAlt !== '' ? $imageAlt : $title;
-                $html .= '<img src="'.e($imageUrl).'" alt="'.e($previewAlt).'" loading="lazy" decoding="async" style="margin-top:0.75rem;max-width:100%;">';
+                $html .= '<img src="'.e($imageUrl).'" alt="'.e($previewAlt).'" loading="lazy" decoding="async" style="margin-top:0.75rem;width:100%;aspect-ratio:16/9;object-fit:cover;">';
             }
         }
 

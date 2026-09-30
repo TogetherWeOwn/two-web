@@ -3,23 +3,33 @@
 namespace App\Filament\Resources\Events\Tables;
 
 use App\Enums\EventStatus;
+use App\Enums\RsvpStatus;
 use App\Models\Event;
 use App\Services\EventService;
 use Filament\Actions\Action;
 use Filament\Actions\EditAction;
+use Filament\Notifications\Notification;
+use Filament\Tables\Columns\IconColumn;
 use Filament\Tables\Columns\TextColumn;
 use Filament\Tables\Filters\SelectFilter;
+use Filament\Tables\Filters\TernaryFilter;
 use Filament\Tables\Table;
 use Illuminate\Database\Eloquent\Builder;
+use Illuminate\Validation\ValidationException;
 
 class EventsTable
 {
     public static function configure(Table $table): Table
     {
         return $table
-            // The series column reads each child's parent; eager-load it once
+            // The series column reads each child's parent and the fill column
+            // reads each row's going seats; eager-load/aggregate both once
             // rather than once per row.
-            ->modifyQueryUsing(fn (Builder $query): Builder => $query->with('parentEvent'))
+            ->modifyQueryUsing(fn (Builder $query): Builder => $query
+                ->with('parentEvent')
+                // `going_count` is the same aggregate the JSON listing selects
+                // (EventController): one subquery up front, not a count per row.
+                ->withCount(['rsvps as going_count' => fn ($query) => $query->where('status', RsvpStatus::Going)]))
             ->columns([
                 TextColumn::make('title')
                     ->searchable()
@@ -27,7 +37,7 @@ class EventsTable
                 TextColumn::make('game')
                     ->toggleable(),
                 TextColumn::make('starts_at')
-                    ->label('Starts')
+                    ->label('Starts (UTC)')
                     ->dateTime('D j M Y, H:i', 'UTC')
                     ->sortable(),
                 TextColumn::make('status')
@@ -64,14 +74,50 @@ class EventsTable
                     })
                     ->placeholder('—')
                     ->toggleable(),
+                // Fill at a glance: "12/20" on a capped event, bare count when
+                // uncapped. A full event (going >= capacity) is a warning
+                // badge, so the row a moderator must not overbook stands out.
+                // "maybe" is not a seat (see Event::goingCount): the count only
+                // ever answers Going, same as the member-facing badge.
+                TextColumn::make('going_count')
+                    ->label('Fill')
+                    ->formatStateUsing(function (Event $record): string {
+                        // Prefer the query's aggregate; fall back to a count so
+                        // the column still renders outside the table query (the
+                        // same idiom as the events JSON resource).
+                        $going = $record->going_count ?? $record->goingCount();
+
+                        if ($record->capacity === null) {
+                            return (string) $going;
+                        }
+
+                        return "{$going}/{$record->capacity}";
+                    })
+                    ->badge(fn (Event $record): bool => $record->capacity !== null
+                        && ($record->going_count ?? $record->goingCount()) >= $record->capacity)
+                    ->color(fn (Event $record): ?string => $record->capacity !== null
+                        && ($record->going_count ?? $record->goingCount()) >= $record->capacity
+                            ? 'warning'
+                            : null),
                 TextColumn::make('capacity')
                     ->placeholder('Unlimited')
+                    ->toggleable(isToggledHiddenByDefault: true),
+                // Whether the event takes new answers (TOG-8725). A paused
+                // event stays published and visible while refusing new
+                // answers — unpublishing to the same end would hide it.
+                IconColumn::make('rsvp_open')
+                    ->label('RSVPs')
+                    ->boolean()
+                    ->trueIcon('heroicon-o-check-circle')
+                    ->falseIcon('heroicon-o-pause-circle')
                     ->toggleable(),
             ])
             ->defaultSort('starts_at', 'desc')
             ->filters([
                 SelectFilter::make('status')
                     ->options(EventStatus::class),
+                TernaryFilter::make('rsvp_open')
+                    ->label('RSVPs open'),
             ])
             ->recordActions([
                 EditAction::make(),
@@ -93,7 +139,19 @@ class EventsTable
                     ->modalDescription(fn (Event $record): string => $record->isSeriesParent()
                         ? 'Publishing announces the whole series to Discord — every instance that exists goes live and members can RSVP on each one.'
                         : 'Publishing announces the event to Discord. Members can RSVP from that moment.')
-                    ->action(fn (Event $record, EventService $service) => $service->publish($record))
+                    ->action(function (Event $record, EventService $service): void {
+                        try {
+                            $service->publish($record);
+                        } catch (ValidationException $exception) {
+                            // This confirmation has no fields for inline errors.
+                            Notification::make()
+                                ->title($exception->getMessage())
+                                ->danger()
+                                ->send();
+
+                            throw $exception;
+                        }
+                    })
                     ->icon('heroicon-o-megaphone')
                     ->color('success'),
                 Action::make('cancel')
@@ -101,11 +159,34 @@ class EventsTable
                     ->visible(fn (Event $record): bool => in_array($record->status, [EventStatus::Draft, EventStatus::Published], true))
                     ->requiresConfirmation()
                     ->modalDescription(fn (Event $record): string => $record->isSeriesParent()
-                        ? 'Cancelling calls off every instance in the series. This is permanent — Discord will be told and RSVPs are not coming back.'
-                        : 'Cancelling is permanent. Discord will be told; RSVPs are not coming back.')
+                        ? 'Cancelling calls off every instance in the series. This is permanent — any existing Discord mirrors will be cancelled and RSVPs are not coming back.'
+                        : 'Cancelling is permanent. Any existing Discord mirror will be cancelled; RSVPs are not coming back.')
                     ->action(fn (Event $record, EventService $service) => $service->cancel($record))
                     ->icon('heroicon-o-x-circle')
                     ->color('danger'),
+                // Pause and reopen answers (TOG-8725). Through EventService
+                // like every other state change above: row-locked there, and
+                // the reopen settles freed seats to the head of the line
+                // there. Pausing keeps the event visible while stopping new
+                // answers; cancelling above is the permanent version.
+                Action::make('pauseRsvps')
+                    ->label('Pause RSVPs')
+                    ->authorize(fn (Event $record): bool => auth()->user()?->can('toggleRsvp', $record) ?? false)
+                    ->visible(fn (Event $record): bool => $record->status === EventStatus::Published && $record->isRsvpOpen())
+                    ->requiresConfirmation()
+                    ->modalDescription('Pausing keeps the event visible but stops new RSVPs. Existing answers stay; members can still withdraw. Reversible.')
+                    ->action(fn (Event $record, EventService $service) => $service->setRsvpOpen($record, false))
+                    ->icon('heroicon-o-pause-circle')
+                    ->color('warning'),
+                Action::make('reopenRsvps')
+                    ->label('Reopen RSVPs')
+                    ->authorize(fn (Event $record): bool => auth()->user()?->can('toggleRsvp', $record) ?? false)
+                    ->visible(fn (Event $record): bool => $record->status === EventStatus::Published && ! $record->isRsvpOpen())
+                    ->requiresConfirmation()
+                    ->modalDescription('Reopening takes new RSVPs again. Seats freed while paused go to the head of the waitlist first.')
+                    ->action(fn (Event $record, EventService $service) => $service->setRsvpOpen($record, true))
+                    ->icon('heroicon-o-play-circle')
+                    ->color('success'),
             ])
             ->toolbarActions([
                 // No bulk actions: every state change should be one deliberate,

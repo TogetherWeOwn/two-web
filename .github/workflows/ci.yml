@@ -9,6 +9,10 @@ on:
   pull_request:
   push:
     branches: [main]
+  # Dispatched by the release workflow (TOG-10036) on release-please branches:
+  # PRs opened with GITHUB_TOKEN trigger no workflows, so the required checks
+  # would never run on the release PR without this path.
+  workflow_dispatch:
 
 # A second push to the same PR cancels the first. Never cancel `main` — its result
 # is what the staging deploy keys off.
@@ -30,15 +34,17 @@ jobs:
   # ---------------------------------------------------------------------------
   static:
     name: static
-    runs-on: [self-hosted, two-selfhosted]
+    runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
 
       # Where did this job actually run? `runs-on:` asks; only the job can
-      # answer. Fails on a GitHub-hosted runner (which bills) and publishes its
-      # runner_name as an annotation. First, so a misrouted job burns seconds
-      # rather than a full suite. See ci/attest-runner.sh (TOG-2847).
+      # answer. Fails on a non-hosted runner (the private group cannot serve
+      # this public repo, so a misrouted job would queue forever) and publishes
+      # its runner_name as an annotation. First, so a misrouted job burns
+      # seconds rather than a full suite. See ci/attest-runner.sh (TOG-8909;
+      # the pre-flip self-hosted gate was TOG-2847).
       - name: Attest the runner
         run: ./ci/attest-runner.sh
 
@@ -47,14 +53,14 @@ jobs:
       # preinstalled, but every other job here pins the version and this should not
       # be the exception — an unpinned interpreter is exactly the kind of thing that
       # works until somebody upgrades the host. No install step follows it; seconds.
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: ${{ env.NODE_VERSION }}
 
       # And the attestation itself, which is the one check in this repository that
       # cannot be proved by the run it is part of: on a correctly-routed job it
       # passes, and so does a version that returns 0 unconditionally. This drives
-      # it through a synthetic hosted runner, a spoofed name and an unaudited host
+      # it through a synthetic hosted runner, a spoofed name and a private host
       # and pins the exit code and reason for each, then asserts every job in every
       # workflow still carries the step. Under a second, no network.
       - name: Runner attestation self-test
@@ -133,6 +139,9 @@ jobs:
       - name: Dusk suite-health self-test
         run: node ci/suite-health-selftest.mjs
 
+      - name: Profile draft recovery self-test
+        run: node --test ci/profile-draft-selftest.mjs
+
       # The Dusk app, OAuth provider, bot stub and queue worker are separate
       # processes. This is the mutation control on their receipt gate: bypassing
       # OAuth or skipping the bot call must make the required browser job red.
@@ -163,6 +172,20 @@ jobs:
       # already green, which is far too late to stop the pull request that breaks it.
       - name: Deploy guard self-test
         run: ./ci/deploy-target-selftest.sh
+
+      # A healthy status probe cannot vouch for a later HTML fetch. Fake curl
+      # keeps every other smoke check green while that fetch fails; no network.
+      - name: Staging smoke body-fetch self-test
+        run: ./ci/smoke-staging-selftest.sh
+
+      # The deployment-records prune (TOG-9273): every merge to `main` creates
+      # a Deployment record and nothing deleted them, so a weekly scheduled
+      # workflow keeps the newest 30 per environment. The interesting case is
+      # a prune that deletes the wrong end of the list or reads an API error
+      # as an empty environment, so it needs no secret, no network and no
+      # server — a stub `gh` answers from fixtures, offline, in seconds.
+      - name: Deployment prune self-test
+        run: ./ci/prune-deployments-selftest.sh
 
       # The Nixpacks runtime setting that prevents PHP from disclosing its version
       # lives in nginx.template.conf. Keep its exact FastCGI scope pinned offline so
@@ -283,6 +306,14 @@ jobs:
       - name: Postgres backup self-test
         run: ./ci/pg-backup-selftest.sh
 
+      # The log watcher's offline half (TOG-8730): fixture logs through the
+      # real script — quiet stays silent, alert lines page, the offset
+      # advances, rotation re-reads, a missing log pages. Same pattern as the
+      # backup self-test above. No network, no log file, no database; the
+      # script is POSIX sh with no dependencies beyond grep/tail/wc.
+      - name: Error log watch self-test
+        run: ./bin/error-log-watch.sh --selftest
+
       - uses: shivammathur/setup-php@f3e473d116dcccaddc5834248c87452386958240 # v2
         with:
           php-version: ${{ env.PHP_VERSION }}
@@ -319,7 +350,7 @@ jobs:
           "$php_bin" "$RUNNER_TEMP/composer-pinned" --version
 
       - name: Cache Composer packages
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: vendor
           key: composer-${{ env.PHP_VERSION }}-${{ hashFiles('composer.lock') }}
@@ -347,7 +378,7 @@ jobs:
   # ---------------------------------------------------------------------------
   pest:
     name: pest
-    runs-on: [self-hosted, two-selfhosted]
+    runs-on: ubuntu-latest
     timeout-minutes: 15
 
     services:
@@ -371,7 +402,7 @@ jobs:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
 
       # See the note in `static`. Every job attests; a job that does not could be
-      # moved onto a billable runner with nothing going red (TOG-2847).
+      # moved onto a misrouted runner with nothing going red (TOG-8909; pre-flip gate TOG-2847).
       - name: Attest the runner
         run: ./ci/attest-runner.sh
 
@@ -411,7 +442,7 @@ jobs:
           "$php_bin" "$RUNNER_TEMP/composer-pinned" --version
 
       - name: Cache Composer packages
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: vendor
           key: composer-${{ env.PHP_VERSION }}-${{ hashFiles('composer.lock') }}
@@ -457,7 +488,7 @@ jobs:
   # ---------------------------------------------------------------------------
   dusk:
     name: dusk
-    runs-on: [self-hosted, two-selfhosted]
+    runs-on: ubuntu-latest
     timeout-minutes: 20
 
     # The persistent self-hosted hosts run Chrome as an unprivileged user,
@@ -493,7 +524,7 @@ jobs:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
 
       # See the note in `static`. Every job attests; a job that does not could be
-      # moved onto a billable runner with nothing going red (TOG-2847).
+      # moved onto a misrouted runner with nothing going red (TOG-8909; pre-flip gate TOG-2847).
       - name: Attest the runner
         run: ./ci/attest-runner.sh
 
@@ -520,13 +551,13 @@ jobs:
           [ "$("$php_bin" -r 'echo PHP_MAJOR_VERSION, ".", PHP_MINOR_VERSION;')" = "$PHP_VERSION" ] || { echo "::error::pinned PHP is $("$php_bin" -v | head -1), not PHP ${PHP_VERSION} — refusing to run on the wrong interpreter (TOG-5877)"; exit 1; }
           "$php_bin" "$RUNNER_TEMP/composer-pinned" --version
 
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: npm
 
       - name: Cache Composer packages
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: vendor
           key: composer-${{ env.PHP_VERSION }}-${{ hashFiles('composer.lock') }}
@@ -672,7 +703,7 @@ jobs:
   # ---------------------------------------------------------------------------
   budgets:
     name: budgets
-    runs-on: [self-hosted, two-selfhosted]
+    runs-on: ubuntu-latest
     timeout-minutes: 20
 
     services:
@@ -696,7 +727,7 @@ jobs:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
 
       # See the note in `static`. Every job attests; a job that does not could be
-      # moved onto a billable runner with nothing going red (TOG-2847).
+      # moved onto a misrouted runner with nothing going red (TOG-8909; pre-flip gate TOG-2847).
       - name: Attest the runner
         run: ./ci/attest-runner.sh
 
@@ -753,13 +784,13 @@ jobs:
           printf 'opcache.enable=1\nopcache.enable_cli=1\nopcache.validate_timestamps=0\n' > "$dir/zz-opcache-budgets.ini"
           echo "PHP_INI_SCAN_DIR=:$dir" >> "$GITHUB_ENV"
 
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: npm
 
       - name: Cache Composer packages
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: vendor
           key: composer-${{ env.PHP_VERSION }}-${{ hashFiles('composer.lock') }}
@@ -815,8 +846,11 @@ jobs:
           # The runners are persistent and these ports are stable per runner, so
           # a server an earlier run leaked is still bound and would answer the
           # readiness probe below while the real server silently failed to bind.
-          # See ci/reclaim-ports.sh (TOG-2847).
-          ./ci/reclaim-ports.sh "$PROXY_UPSTREAM_PORT" "$PROXY_LISTEN_PORT"
+          # See ci/reclaim-ports.sh (TOG-2847). CI_CHROME_PORT is Lighthouse's
+          # fixed debugging port (ci/lighthouserc.cjs, TOG-8177): a leaked
+          # Chrome there answers the launcher's TCP probe and then 404s
+          # /json/version, which reads as a browser crash mid-run.
+          ./ci/reclaim-ports.sh "$PROXY_UPSTREAM_PORT" "$PROXY_LISTEN_PORT" "$CI_CHROME_PORT"
 
           "$CI_PHP_BIN" artisan serve --host=127.0.0.1 --port="$PROXY_UPSTREAM_PORT" --no-reload > storage/logs/serve.log 2>&1 &
           echo $! > storage/logs/serve.pid
@@ -1028,17 +1062,18 @@ jobs:
   # ---------------------------------------------------------------------------
   deps-audit:
     name: deps-audit
-    runs-on: [self-hosted, two-selfhosted]
+    runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
 
       # See the note in `static`. Every job attests; a job that does not could be
-      # moved onto a billable runner with nothing going red (TOG-2847).
+      # moved onto a billable runner with nothing going red
+      # (TOG-8909; pre-flip gate TOG-2847).
       - name: Attest the runner
         run: ./ci/attest-runner.sh
 
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: ${{ env.NODE_VERSION }}
 
@@ -1085,14 +1120,14 @@ jobs:
   # ---------------------------------------------------------------------------
   tests:
     name: tests
-    runs-on: [self-hosted, two-selfhosted]
+    runs-on: ubuntu-latest
     timeout-minutes: 5
     if: always()
     needs: [static, pest, dusk, budgets, deps-audit]
     steps:
       # This job had no checkout: it only reads `needs` results. It needs one now
-      # so it can attest its own runner — the aggregate bills like any other job,
-      # and being cheap is not the same as being free (TOG-2847).
+      # so it can attest its own runner — a job that does not attest could be
+      # misrouted with nothing going red (TOG-8909).
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
 
       - name: Attest the runner

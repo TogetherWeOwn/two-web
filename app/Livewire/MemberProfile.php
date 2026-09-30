@@ -9,6 +9,7 @@ use App\Rules\NoControlCharacters;
 use App\Support\Profiles\MemberStats;
 use App\Support\Profiles\Milestone;
 use App\Support\Profiles\SaveMemberProfile;
+use App\Support\SafeRedirect;
 use App\Support\SpamTrap;
 use Illuminate\Auth\Access\AuthorizationException;
 use Illuminate\Support\Facades\Gate;
@@ -46,6 +47,29 @@ class MemberProfile extends Component
      */
     public bool $sessionExpired = false;
 
+    /**
+     * Set when a 419-stashed draft was folded back into the form after
+     * re-login (TOG-9355). Distinct from $sessionExpired on purpose: the
+     * session is alive again — they already logged back in — so the message
+     * names the kept draft, not the expiry. Cleared on the next edit, save
+     * or cancel like the other banners.
+     */
+    #[Locked]
+    public bool $draftRestored = false;
+
+    /**
+     * Where the guest login link sends the member back to after Discord.
+     *
+     * Captured once in mount, when the real page request is in hand. A
+     * Livewire re-render answers a `/livewire/update` request, so reading the
+     * path in the blade would point `?next=` at the update endpoint after the
+     * first morph — a persisted prop keeps the page path across updates, and
+     * keeps the expired-session re-render pointing at the page too. Null when
+     * the path fails the open-redirect guard, and the link stays bare.
+     * Mirrors RsvpButton::$returnTo (TOG-9254).
+     */
+    public ?string $returnTo = null;
+
     public string $bio = '';
 
     public string $gamesText = '';
@@ -78,6 +102,7 @@ class MemberProfile extends Component
         Gate::authorize('view', $member);
 
         $this->member = $member->loadMissing('profile');
+        $this->returnTo = SafeRedirect::safe(request()->getPathInfo());
         $this->statsAvailable = $stats->available;
         $this->statsJoinedAt = $stats->joinedAt?->toIso8601String();
         $this->rankKey = $stats->rankKey;
@@ -111,9 +136,22 @@ class MemberProfile extends Component
     {
         Gate::authorize('updateProfile', $this->member);
 
+        // TOG-9355: already open is a no-op, with no refill and no
+        // re-dispatch. The Edit/Add controls stay in the DOM while a
+        // restoreDraft round trip is outstanding (Livewire defers the morph),
+        // so a click queued behind the restore runs after it and would
+        // otherwise clear draftRestored and fillForm() over the recovered
+        // draft — after the browser already consumed its only stored copy. A
+        // forged repeat open is equally harmless: the stamp from the real
+        // open stands.
+        if ($this->editing) {
+            return;
+        }
+
         $this->saved = false;
         $this->saveFailed = false;
         $this->sessionExpired = false;
+        $this->draftRestored = false;
         $this->editing = true;
         $this->website = '';
         $this->formOpenedAt = now()->getTimestampMs();
@@ -142,12 +180,54 @@ class MemberProfile extends Component
 
         Gate::authorize('updateProfile', $this->member);
 
+        // TOG-9355 review: read the restored flag BEFORE clearing it —
+        // cancelling a manually-opened form after a failed restore must not
+        // destroy the stashed copy the member never saw, or the P2 loss
+        // returns through the sibling path. Only a consumed draft retires.
+        $retireDraft = $this->draftRestored;
+
+        $this->saveFailed = false;
         $this->resetValidation();
         $this->editing = false;
         $this->sessionExpired = false;
+        $this->draftRestored = false;
         $this->fillForm();
         // TOG-6957: closing the form unmounts the focused Cancel control.
         // Refocus the Edit profile button after the round trip.
+        $this->dispatch('profile-state-changed')->self();
+        // Explicit discard of a restored draft retires the stored copy too,
+        // or refresh reopens the input just cancelled. Same terminal signal
+        // as the genuine-save path.
+        if ($retireDraft) {
+            $this->dispatch('profile-draft-retired')->self();
+        }
+    }
+
+    /**
+     * Fold a 419-stashed draft back into the open form after re-login
+     * (TOG-9355). The browser stashed the unsaved input to sessionStorage
+     * before leaving for login and calls this once the fresh page opens the
+     * form; the same-author gate runs first, so a crafted call on another
+     * member's profile still 403s. Draft fields arrive through the normal
+     * validation rules on the next save, and the honeypot floor compares
+     * against the fresh edit() stamp — never against a client-supplied one.
+     */
+    public function restoreDraft(string $bio, string $gamesText, string $timezone): void
+    {
+        Gate::authorize('updateProfile', $this->member);
+
+        if (! $this->editing) {
+            $this->edit();
+        } else {
+            $this->saved = false;
+            $this->saveFailed = false;
+            $this->sessionExpired = false;
+        }
+
+        $this->bio = $bio;
+        $this->gamesText = $gamesText;
+        $this->timezone = $timezone;
+        $this->draftRestored = true;
         $this->dispatch('profile-state-changed')->self();
     }
 
@@ -166,6 +246,11 @@ class MemberProfile extends Component
         }
 
         Gate::authorize('updateProfile', $this->member);
+
+        // TOG-9856: recomputed per attempt — a prior write failure must not
+        // linger through a later validation failure (validate() throws and
+        // the per-game addError branches return before the write path).
+        $this->saveFailed = false;
 
         // TOG-6957: dispatched BEFORE validation on purpose. A failed
         // `$this->validate()` throws ValidationException, which aborts this
@@ -186,16 +271,34 @@ class MemberProfile extends Component
         // nothing attacker-shaped is logged.
         $validated = $this->validate(static::validationRules());
 
+        // A restored form is already filled when it opens. Refuse an early
+        // retry without consuming the recovered text or claiming a save. The
+        // refusal is decoy-independent on purpose (TOG-9355 review): an
+        // empty decoy and a filled one are both inside the same server-locked
+        // floor, so both get the same recoverable answer — splitting them
+        // would be a honeypot oracle. Past the floor the filled decoy takes
+        // the ordinary silent-trap path below. The server-set stamp is not
+        // backdated: no write gets past the floor.
+        if ($this->draftRestored && SpamTrap::tooFast($this->formOpenedAt)) {
+            $this->addError('bio', 'Please wait a moment and save again. Your changes are still here.');
+
+            return;
+        }
+
         if (SpamTrap::honeypotFilled($this->website) || SpamTrap::tooFast($this->formOpenedAt)) {
             // Mirror the genuine path's resets: the trap must end in the
             // exact success state, including no stale failure/expired banners
             // (main's TOG-8137 flags postdate the slice). Converging the two
-            // responses also keeps the trap oracle-free.
+            // responses also keeps the trap oracle-free — that includes the
+            // draft-retire signal below, so a stored copy cannot distinguish
+            // the swallow from a write on the next page load.
             $this->saveFailed = false;
             $this->sessionExpired = false;
+            $this->draftRestored = false;
             $this->editing = false;
             $this->saved = true;
             $this->fillForm();
+            $this->dispatch('profile-draft-retired')->self();
 
             return;
         }
@@ -225,11 +328,22 @@ class MemberProfile extends Component
 
         $this->saveFailed = false;
         $this->sessionExpired = false;
+        // TOG-9355 review: draftRestored is NOT cleared here. A write
+        // failure below must leave the marker set, or a later Cancel reads
+        // a spent flag and skips the retire signal — refresh then
+        // resurrects the discarded input. It clears only on the terminal
+        // success below (the trap-swallow and explicit-cancel paths clear
+        // their own copies alongside their retire signals).
+
+        // TOG-9855: strict '' comparison — trim("0") is "0" but "0" ?: null
+        // is null in PHP, which swallowed a bio of exactly "0" into NULL.
+        $bio = trim($validated['bio'] ?? '');
+        $timezoneRaw = $validated['timezone'] ?? null;
 
         $attributes = [
-            'bio' => trim($validated['bio'] ?? '') ?: null,
+            'bio' => $bio === '' ? null : $bio,
             'games' => $games,
-            'timezone' => $validated['timezone'] ?: null,
+            'timezone' => $timezoneRaw === '' ? null : $timezoneRaw,
         ];
 
         try {
@@ -245,7 +359,16 @@ class MemberProfile extends Component
         $this->member->setRelation('profile', $profile);
         $this->editing = false;
         $this->saved = true;
+        $this->draftRestored = false;
         $this->fillForm();
+        // TOG-9355 review: a restore that failed earlier kept the stored
+        // copy, but nothing retired it after the genuine save — the next
+        // page load restored the obsolete draft over the newer saved text.
+        // The signal fires only on terminal discard (genuine or trap-swallow
+        // save, explicit cancel): never on a write failure, a validation
+        // refusal, or the early restored-save retry, where the stored copy
+        // must stay recoverable.
+        $this->dispatch('profile-draft-retired')->self();
     }
 
     public function render(): View
@@ -257,6 +380,10 @@ class MemberProfile extends Component
             'games' => $this->games($profile),
             'isOwner' => auth()->user()?->is($this->member) ?? false,
             'isNewMember' => blank($profile->bio) && $this->games($profile) === [] && blank($profile->timezone),
+            // TOG-9355: the login links' return-to page, or null for bare
+            // links. Read from the persisted prop, never from the request —
+            // see $returnTo. Mirrors RsvpButton's render (TOG-9254).
+            'returnTo' => $this->returnTo,
         ]);
     }
 

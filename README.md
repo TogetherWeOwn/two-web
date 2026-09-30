@@ -1,5 +1,10 @@
 # TWO — the Together We Own website
 
+[![Release](https://img.shields.io/github/v/release/TogetherWeOwn/two-web)](https://github.com/TogetherWeOwn/two-web/releases)
+
+> **Maintenance mode (2026-09-29, TOG-9788):** bug and security fixes only — new
+> development continues in two-web-next.
+
 The community website for TWO. It exists to do one thing: get more people to join
 the Discord and stay active. Every feature here should plausibly move that number.
 
@@ -50,6 +55,12 @@ the test suite reads the same `.env` and only forces the database *name*, so cre
 ```sql
 CREATE DATABASE two_web_test;
 ```
+
+The suite only ever touches a database named `two_web_test*` — `phpunit.xml`
+forces the name and the `Tests\TestCase` guard refuses anything else before the
+first migration runs (TOG-9649). A `DB_DATABASE` here that does not start with
+`two_web_test` fails every test with that refusal, which is the protection
+working, not a setup bug.
 
 That PHP build has no `intl`, which Filament wants — locally you will need
 `--ignore-platform-req=ext-intl`. Real dev and production VMs have it, so this is

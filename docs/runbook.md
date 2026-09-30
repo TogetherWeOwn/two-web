@@ -23,7 +23,7 @@ Related pages: [`docs/ci.md`](ci.md) (CI gate, release checklist, staging
 | DevOps | the VM, nginx/PHP-FPM/systemd config, Postgres, backups, Coolify targets, this page |
 | QA & Release | the release checklist sign-off (`docs/ci.md`) — nothing reaches production without it |
 | Deployer | the person holding the hosting-dashboard login — triggers the production deploy, and *is* the approval gate (there is no GitHub environment gate on our plan; see `docs/ci.md`) |
-| CEO | deadline-vs-checklist trade-offs in writing, spend decisions (GitHub Team, extra infra) |
+| Maintainers | deadline-vs-checklist trade-offs in writing, spend decisions (GitHub Team, extra infra) |
 
 One rule: the person who wrote the release does not sign it off, and the
 person who signs it off watches it after it goes out (`docs/ci.md` checklist).
@@ -201,7 +201,7 @@ Rules:
   secret, bot shared secret and the QA auth token live in the box `.env` /
   secret controls, never in Postgres. A restore does not rotate them and does
   not leak them. If the incident *is* a credential leak, rotation is a
-  separate procedure owned by the CISO, not this page.
+  separate procedure owned by the maintainers, not this page.
 - After any restore: note the dump file, the SHA served, and the data-loss
   window (writes between the dump and the stop) on the incident card. The
   window is why step 1 stops the writers first.
@@ -315,7 +315,7 @@ inner one. Source of truth for rotation and hygiene is
 [`docs/env.md` §10](env.md#10-staging-qa-seam).
 
 **Who may use it.** Named QA engineers behind Cloudflare Access, plus the
-staging test automation — nobody else. Owner: CISO; day-to-day rotation is
+staging test automation — nobody else. Owner: maintainers; day-to-day rotation is
 executed by DevOps through Coolify secret controls; max credential age 90
 days (rotate sooner on suspected leak, QA-team change, or an env-parity
 `PROD-HAS-STAGING-ONLY` hit). Never demo credentials, never prod debugging,
@@ -432,6 +432,190 @@ Exit codes: `0` parity, `1` drift (the lines below), `2` called wrongly
 | `PROD-HAS-STAGING-ONLY TWO_WEB_STAGING_QA_AUTH_TOKEN` | The staging QA seam exists in prod | Remove it from prod, then **rotate** it per `docs/env.md` §10 — it existed where it must not. |
 | `FORBIDDEN …: DUSK_TEST_SEAMS` / `DUSK_DISCORD_PROVIDER_URL` | A test seam left the test suite | Unset it immediately on that environment; `true` outside tests lets anyone sign in as anyone. |
 | `UNKNOWN …: KEY` | In an env but in neither `.env.example` nor `docs/env.md` | Document it (with required/secret/staging-vs-prod columns) and add it to the example if it belongs there — or remove it from the env. |
+
+---
+
+## Error alerting (TOG-8730)
+
+The uptime ping above answers "is the site down". This section answers "is
+the site broken while still answering" — a 500 on one route, a job the
+worker gives up on. No Sentry, no Flare, no Bugsnag: none installed, none
+allowed. The channel is the log the box already tails, plus cron mail as
+the pager.
+
+**Two alert lines, both already in the log.** The application emits them:
+
+1. `Unhandled exception.` — one critical line per distinct unhandled
+   failure, logged by the `report` listener in `bootstrap/app.php`, with
+   the exception class, route and message as structured context. It runs
+   after the framework's own dont-report list, so 404s, 403s, validation
+   and throttles never alert — only genuine 500s. A per-fingerprint rate
+   limit (`App\Support\ErrorAlertRateLimit`: one alert per exception
+   class + route per 5 minutes) mutes repeats, so a crashing deploy
+   produces one line, not thousands. If the limiter store itself is down,
+   the guard degrades to unmuted rather than silent — a second mail beats
+   a swallowed outage.
+2. `Queue job failed.` — one critical line per failed job, logged by the
+   `Queue::failing` listener in `AppServiceProvider` (TOG-6948).
+
+**Who watches:** cron on the box, owned by DevOps (same box and same
+ownership as the uptime ping). The watcher is `bin/error-log-watch.sh` —
+it scans the log delta since the last run for those two lines and exits
+nonzero with the lines attached when one landed, so cron mail is the
+pager. The QUIET path prints nothing — stock cron mails on *any* job
+output regardless of exit code, so a chatty QUIET would page the on-call
+every 5 minutes forever. **No mail is QUIET, and an `ALERT` mail is a
+page** (`--verbose` restores the QUIET one-liner for hand runs).
+
+**Cadence:** every 5 minutes, production and staging (staging first —
+staging proves the path before production needs it):
+
+```cron
+MAILTO=devops@example.com
+*/5 * * * * /var/www/two-web/bin/error-log-watch.sh
+```
+
+(Use the real on-call address for `MAILTO`, set in the cron environment on
+the box — never in the repo. The log path defaults to the checkout's own
+`storage/logs/laravel.log`; a Coolify deploy whose log lives elsewhere
+passes `--log` explicitly.)
+
+**The drill — prove a 500 pages (staging, after each deploy until this
+settles):**
+
+```bash
+php artisan error-alert:probe --json   # alert fires once, repeat muted
+bin/error-log-watch.sh --verbose       # ALERT mail content, by hand
+```
+
+The probe throws a marker exception through the same `report` listener a
+real 500 travels and reports whether the alert fired and the repeat was
+muted; the watcher half is a log tail by hand. Pinned by
+`tests/Feature/Console/ErrorAlertProbeTest.php`.
+
+**Honest limits, same as the ping:**
+
+- A rotated log re-reads from the top (offset past EOF), so one duplicate
+  mail follows each rotation. The price of a pager that never goes blind.
+- An alert already mailed is not re-mailed: the offset advances even on
+  ALERT, so the mail carries the lines once. The next *new* alert still
+  pages. If paging ever needs re-mail-until-acknowledged, that is a new
+  decision with a new card.
+- Like the ping, this complains when broken — if cron itself dies, no mail
+  arrives and nothing pages.
+
+**Proving the watcher:** `bin/error-log-watch.sh --selftest` drives the
+real script against fixture logs (quiet, fires, queue-half, rotation,
+missing log, usage) entirely offline, the same pattern as
+`bin/uptime-ping.sh --selftest`. Run it after any edit to the script.
+
+---
+
+## Finding CSP violation reports (TOG-9276)
+
+**What it is.** `POST /csp-reports` is a log-only sink (TOG-8403): each
+sampled report lands as one `csp.report.violation` warning row in the app
+log, carrying the fixed key set (`blocked_uri`, `violated_directive`,
+`document_uri`, `source_file`, `line_number`) — never the raw body. There
+is no dashboard and no table to query; the log line is the store. This
+section is the documented provider path: how a reviewer triggers a
+violation on staging and finds it.
+
+**Read it on staging.** Same staging access as any outage read
+(quick-reference step 3 shows the VM form); staging itself runs in the
+Coolify application container whose app root is `/app`
+(`nginx.template.conf` serves `/app/public`, and the file sinks resolve
+through `storage_path('logs/laravel.log')` in `config/logging.php`), so run
+these queries inside that container, or relative `storage/logs/...` from the
+application root. The single-file query requires
+`LOG_CHANNEL=single`, or `LOG_CHANNEL=stack` with `LOG_STACK=single`:
+
+```bash
+grep 'csp.report.violation' /app/storage/logs/laravel.log | tail -30
+# Illustrative row; browsers may include the directive's source list:
+# [2026-09-29 14:19:38] staging.WARNING: csp.report.violation {"blocked_uri":"https://csp-probe.invalid","violated_directive":"connect-src","document_uri":"...","source_file":"...","line_number":1}
+```
+
+For `LOG_CHANNEL=daily`, or `LOG_CHANNEL=stack` with `LOG_STACK=daily`,
+the handler writes dated files, not `laravel.log`. Query retained days:
+
+```bash
+grep 'csp.report.violation' /app/storage/logs/laravel-????-??-??.log | tail -30
+```
+
+On a directly managed VM instead of Coolify, the same queries read
+`/var/www/two-web/storage/logs/laravel.log` (single) or
+`/var/www/two-web/storage/logs/laravel-????-??-??.log` (daily).
+
+For other configured channels, read their actual destination; an absent or
+stale `laravel.log` does not mean no violations. `violated_directive` names
+the policy clause that fired; `blocked_uri` names the violating resource
+(not necessarily blocked in report-only mode); `document_uri` is the page
+that produced the report. Cross-origin URLs may be reduced to their origin.
+The sink attaches no authenticated-user, session, or IP metadata beyond
+what the log line itself holds — but the browser-supplied URL fields
+(`document_uri`, `source_file`) are copied unchanged, so they may carry
+member identifiers (for example a report from `/members/123`,
+`routes/web.php`) or sensitive page query parameters. Treat these log lines
+with the same access and retention care as any user-identifying data.
+
+**Trigger one on purpose (authorized staging operators only).** This is an
+operator procedure, not permission for agents to probe staging or production.
+Save the original CSP, sampling and logging settings first. Both accepted
+reports and `csp.report.dropped_oversize` use `Log::warning`: the destination
+must include warnings (`LOG_LEVEL=warning`, `notice`, `info` or `debug`).
+`LOG_LEVEL=error` (also `critical`, `alert`, `emergency`) hides both rows.
+For a deterministic drill, use `CSP_REPORT_SAMPLE_RATE=1.0`.
+
+1. Set `CSP_REPORT_ONLY=true` in staging's Coolify env config
+   ([`docs/env.md` §15](env.md#15-csp-report-only-mode)), with the logging
+   threshold above. Apply those settings by redeploying the staging target;
+   the deployment rebuilds cached configuration with `php artisan config:cache`.
+   On a directly managed box, run `php artisan config:cache` in the active
+   release with the updated environment. Editing `.env` alone is not enough.
+2. Reload an HTML page (not `/up`, JSON or a redirect) with browser cache
+   disabled. Inspect that document's actual response headers in DevTools
+   Network: require `Content-Security-Policy-Report-Only`, containing
+   `connect-src 'self'` and `report-uri /csp-reports`, and no enforcing
+   `Content-Security-Policy` header. If a proxy still emits enforcement or
+   the report-only header is absent, skip to step 4 and restore enforcement
+   before doing anything else; do not assume the env value is active, and do
+   not leave the drill parked in report-only mode.
+3. On that page, run this in DevTools Console:
+
+   ```js
+   fetch('https://csp-probe.invalid/csp-probe', {mode: 'no-cors', credentials: 'omit', referrerPolicy: 'no-referrer'}).catch(() => {});
+   ```
+
+   The shipped `connect-src 'self'` forbids this cross-origin connection.
+   `.invalid` is reserved and cannot resolve to a public service; the fetch
+   fails separately at DNS, but report-only CSP still reports the policy
+   violation. It sends no credentials or referrer. An inline script is NOT
+   a valid trigger: the shipped `script-src` allows `'unsafe-inline'`.
+   Find the browser's `POST /csp-reports` (204) in Network, then query the
+   configured log destination above for `connect-src` / `https://csp-probe.invalid`.
+   Console warnings alone do not prove the sink received or logged a report.
+   A report that never arrives is a failed drill, not a pass; continue to
+   step 4 rather than retrying under a weakened policy.
+4. Always restore enforcement — on success, on a failed drill, and on
+   cancellation or abort from any earlier step. Flip the flag back to
+   `CSP_REPORT_ONLY=false` to restore enforcement; also restore any temporary sampling/logging settings.
+   Redeploy the staging target again, or run `php artisan config:cache` again on the active release
+   with the restored environment. Reload the HTML document with cache disabled and verify its
+   actual response headers: `Content-Security-Policy` present,
+   `Content-Security-Policy-Report-Only` absent. Do not leave until enforcement
+   is confirmed; report-only left on is an unenforced policy.
+
+**The bounds, stated plainly.** `CSP_REPORT_SAMPLE_RATE=0.0` means valid
+reports are parsed but never logged (blind) — an empty query can be sampling,
+logging threshold, destination or failed delivery, not absence of violations.
+Oversize bodies log under `csp.report.dropped_oversize`, not the violation key,
+so query that key in the same destination to find drops. Retention work is
+[TOG-8728](/TOG/issues/TOG-8728) (not this card): existing rotation and, for
+`daily`, `LOG_DAILY_DAYS` (default 14) bound how far back the query reaches.
+
+Pinned by `tests/Unit/CspReportQueryDocTest.php`, which asserts this section
+still names the grep string, the trigger, and the bounds.
 
 ---
 

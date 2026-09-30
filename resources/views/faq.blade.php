@@ -15,7 +15,7 @@
                         </div>
                         <div class="rounded-lg border border-line bg-surface p-4">
                             <h3 class="font-semibold text-ink">How do I join?</h3>
-                            <p class="mt-1 text-ink-muted">Approve once with Discord on the join page and we&rsquo;ll add you to the server &mdash; or use the Discord invite link instead. Then accept the rules on Discord&rsquo;s membership screen: that&rsquo;s the gate, and it&rsquo;s how we know you&rsquo;re really in.</p>
+                            <p class="mt-1 text-ink-muted">Approve once with Discord on the join page and we&rsquo;ll add you to the server &mdash; or use the Discord invite link instead. Then accept the rules on Discord&rsquo;s membership screen: that&rsquo;s the gate, and it&rsquo;s how we know you&rsquo;re really in. If you cancelled the Discord approval or it expired, nothing is broken &mdash; press Try joining again on the page and approve, or use the invite link instead.</p>
                         </div>
                         <div class="rounded-lg border border-line bg-surface p-4">
                             <h3 class="font-semibold text-ink">Do I need an invite, referral, or eligibility check?</h3>

@@ -1,0 +1,407 @@
+import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import { runInNewContext } from 'node:vm';
+import test from 'node:test';
+
+// Execute the shipped component script, not a second implementation.
+const blade = readFileSync(new URL('../resources/views/livewire/member-profile.blade.php', import.meta.url), 'utf8');
+const script = blade.match(/@script[\s\S]*?<script>([\s\S]*?)<\/script>/)[1];
+const layout = readFileSync(new URL('../resources/views/components/layouts/app.blade.php', import.meta.url), 'utf8');
+const authScript = layout.match(/<script data-testid="auth-tab-sync">([\s\S]*?)<\/script>/)[1]
+    .replace(/@js\(route\('auth.status'\)\)/, '"/auth/status"');
+const key = 'two:profile-draft:42';
+const input = { bio: 'Unsent <bio>\nsecond line', gamesText: 'Chess\nCo-op', timezone: 'Europe/London' };
+
+function page({ stored = null, owner = true, storageFails = false, restoreFails = false, manualRestore = false, form = true, localStorageFails = false } = {}) {
+    const storage = new Map(stored === null ? [] : [[key, stored]]);
+    const nodes = Object.fromEntries(Object.entries(input).map(([name, value]) => [name, { value }]));
+    const warning = { hidden: true, focus() { this.focused = true; } };
+    const notice = { hidden: true, focus() { this.focused = true; } };
+    let request;
+    let click;
+    let pendingRestore = null;
+    const listeners = {};
+    const restores = [];
+    const navigations = [];
+    const authReasons = [];
+    let localWrites = 0;
+    class HTMLFormElement {}
+    const document = Object.assign(new EventTarget(), { visibilityState: 'visible' });
+    document.addEventListener('two:before-auth-reload', e => authReasons.push(e.detail.reason));
+    const window = Object.assign(new EventTarget(), {
+        localStorage: { setItem() { localWrites++; if (localStorageFails) throw new DOMException('local storage full', 'QuotaExceededError'); } },
+        location: { assign(url) { navigations.push(url); }, reload() { navigations.push('reload'); } },
+    });
+    const wire = {
+        el: {
+            isConnected: true,
+            dataset: { profileId: '42', draftOwner: owner ? '1' : '0', loginUrl: '/login?next=%2Fmembers%2F42' },
+            querySelector(selector) {
+                if (selector === '[data-testid="profile-edit-form"]') return form ? {} : null;
+                if (selector === '[data-testid="profile-draft-unavailable"]') return warning;
+                if (selector === '[data-testid="profile-signed-out"]') return notice;
+                return nodes[{ '#bio': 'bio', '#games': 'gamesText', '#timezone': 'timezone' }[selector]] ?? null;
+            },
+            addEventListener(name, handler) { if (name === 'click') click = handler; },
+        },
+        on(name, handler) { (listeners[name] ??= []).push(handler); },
+        emit(name) { for (const handler of listeners[name] ?? []) handler(); },
+        $hook(name, handler) { if (name === 'request') request = handler; },
+        restoreDraft(...values) {
+            restores.push(values);
+            if (manualRestore) {
+                return new Promise((resolve) => { pendingRestore = resolve; });
+            }
+            return restoreFails ? Promise.reject(new Error('offline')) : Promise.resolve();
+        },
+    };
+    const context = {
+        $wire: wire, HTMLFormElement,
+        window, document, CustomEvent,
+        DOMException: globalThis.DOMException ?? Error,
+        fetch: async () => ({ ok: true, json: async () => ({ authenticated: false }) }),
+        sessionStorage: {
+            getItem(k) { if (storageFails) throw new Error('disabled'); return storage.get(k) ?? null; },
+            setItem(k, v) { if (storageFails) throw new Error('quota'); storage.set(k, v); },
+            removeItem(k) { if (storageFails) throw new Error('disabled'); storage.delete(k); },
+        },
+        Date, JSON,
+    };
+    runInNewContext(script, context);
+    runInNewContext(authScript, context);
+    return {
+        storage, warning, notice, restores, navigations, authReasons,
+        logoutSubmit() {
+            const form = Object.assign(new HTMLFormElement(), { action: 'https://test.invalid/logout' });
+            const event = new Event('submit');
+            Object.defineProperty(event, 'target', { value: form });
+            document.dispatchEvent(event);
+            return localWrites;
+        },
+        emit(name) { wire.emit(name); },
+        resolveRestore() {
+            assert.ok(pendingRestore, 'no pending restore');
+            pendingRestore();
+        },
+        authExpiry(source) {
+            if (source === 'focus') window.dispatchEvent(new Event('focus'));
+            else if (source === 'visibility') document.dispatchEvent(new Event('visibilitychange'));
+            else if (source === 'pageshow') window.dispatchEvent(Object.assign(new Event('pageshow'), { persisted: true }));
+            else window.dispatchEvent(Object.assign(new Event('storage'), { key: 'two-auth', newValue: 'signed-out' }));
+        },
+        detach() { wire.el.isConnected = false; },
+        fail(status) {
+            let prevented = false;
+            assert.ok(request, 'missing request hook');
+            request({ fail(handler) { handler({ status, preventDefault() { prevented = true; } }); } });
+            return prevented;
+        },
+        login() {
+            let prevented = false;
+            assert.ok(click, 'missing login-link draft handler');
+            click({ target: { closest() { return {}; } }, preventDefault() { prevented = true; } });
+            return prevented;
+        },
+    };
+}
+
+const draft = () => JSON.stringify({ version: 1, savedAt: Date.now(), ...input });
+const settle = () => new Promise(resolve => setImmediate(resolve));
+
+test('419 stashes deferred DOM input, shows the signed-out notice, and stays for an explicit login', async () => {
+    // TOG-9355 review (P1+P2): a 419 cannot distinguish logout from quiet
+    // expiry, so no automatic handoff starts OAuth here — the pinned Discord
+    // driver's prompt=none could silently sign the shared browser back in.
+    // Stash, show the notice with its explicit login link, and stay; the
+    // notice link click preserves the draft via the same keepDraft handler.
+    const expired = page();
+    assert.equal(expired.fail(419), true);
+    assert.deepEqual(JSON.parse(expired.storage.get(key)), { version: 1, savedAt: JSON.parse(expired.storage.get(key)).savedAt, ...input });
+    assert.deepEqual(expired.navigations, []);
+    assert.equal(expired.notice.hidden, false);
+    assert.equal(expired.notice.focused, true);
+    assert.equal(expired.login(), false, 'notice link keeps current input stashed');
+    const returned = page({ stored: expired.storage.get(key), form: false });
+    await settle();
+    assert.deepEqual(Array.from(returned.restores[0] ?? []), Object.values(input));
+    assert.equal(returned.storage.has(key), false);
+});
+
+test('other HTTP failures keep Livewire default handling and never navigate', () => {
+    for (const status of [401, 403, 422, 500]) {
+        const p = page();
+        assert.equal(p.fail(status), false);
+        assert.equal(p.storage.size, 0);
+        assert.equal(p.navigations.length, 0);
+    }
+});
+
+test('storage refusal keeps input on-screen with a focused copy-before-login warning', () => {
+    const p = page({ storageFails: true });
+    assert.equal(p.fail(419), true);
+    assert.equal(p.navigations.length, 0);
+    assert.equal(p.warning.hidden, false);
+    assert.equal(p.warning.focused, true);
+});
+
+test('server-rendered expiry login link also preserves the draft', () => {
+    const p = page();
+    assert.equal(p.login(), false);
+    assert.deepEqual(JSON.parse(p.storage.get(key)).bio, input.bio);
+    const refused = page({ storageFails: true });
+    assert.equal(refused.login(), true);
+    assert.equal(refused.warning.hidden, false);
+});
+
+test('different signed-in member cannot restore the original owners draft', async () => {
+    const p = page({ stored: draft(), owner: false });
+    await settle();
+    assert.equal(p.restores.length, 0);
+    assert.equal(p.storage.size, 0);
+});
+
+test('malformed, obsolete, or non-string drafts are discarded', async () => {
+    for (const stored of ['{', '{}', JSON.stringify({ version: 1, savedAt: 0, ...input }), JSON.stringify({ version: 1, savedAt: Date.now(), ...input, bio: {} })]) {
+        const p = page({ stored });
+        await settle();
+        assert.equal(p.restores.length, 0);
+        assert.equal(p.storage.size, 0);
+    }
+});
+
+test('draft remains recoverable if the restore request fails', async () => {
+    const p = page({ stored: draft(), restoreFails: true, form: false });
+    await settle();
+    assert.equal(p.restores.length, 1);
+    assert.equal(p.storage.has(key), true);
+});
+
+for (const source of ['focus', 'visibility', 'pageshow']) {
+    test(`${source} auth expiry stashes deferred input, shows the notice, and stays for an explicit login`, async () => {
+        // TOG-9355 review (P1): a probe cannot distinguish logout from
+        // quiet expiry — a missed localStorage broadcast delivers no
+        // storage event at all — so no automatic handoff starts OAuth.
+        const p = page();
+        p.authExpiry(source);
+        await settle();
+        assert.equal(JSON.parse(p.storage.get(key)).bio, input.bio);
+        assert.deepEqual(p.navigations, []);
+        assert.equal(p.notice.hidden, false);
+        assert.equal(p.notice.focused, true);
+        const returned = page({ stored: p.storage.get(key), form: false });
+        await settle();
+        assert.deepEqual(Array.from(returned.restores[0] ?? []), Object.values(input));
+    });
+}
+
+test('storage sign-out stashes the draft, shows the notice, and never starts login on its own', async () => {
+    // TOG-9355 review: an open editor that intercepted another tab's
+    // explicit logout auto-navigated to the login handoff, where the pinned
+    // Discord driver's prompt=none could silently complete an existing
+    // grant and sign the shared browser back in with no login click. The
+    // draft must survive and the notice must name the sign-out, but only an
+    // explicit login action may leave.
+    const p = page();
+    p.authExpiry('storage');
+    await settle();
+    assert.equal(JSON.parse(p.storage.get(key)).bio, input.bio);
+    assert.deepEqual(p.navigations, []);
+    assert.equal(p.notice.hidden, false);
+    assert.equal(p.notice.focused, true);
+    const returned = page({ stored: p.storage.get(key), form: false });
+    await settle();
+    assert.deepEqual(Array.from(returned.restores[0] ?? []), Object.values(input));
+});
+
+test('an expiry probe after a sign-out still requires an explicit login', async () => {
+    // The layout remembers an explicit sign-out for the page lifetime, so a
+    // later focus probe describes the same dead session — never a quiet
+    // expiry — and must not auto-start OAuth either.
+    const p = page();
+    p.authExpiry('storage');
+    await settle();
+    assert.deepEqual(p.navigations, []);
+    p.authExpiry('focus');
+    await settle();
+    assert.deepEqual(p.navigations, []);
+    assert.equal(JSON.parse(p.storage.get(key)).bio, input.bio);
+});
+
+for (const source of ['focus', 'visibility', 'pageshow', 'storage']) {
+    test(`${source} auth change cannot discard input when storage is unavailable`, async () => {
+        const p = page({ storageFails: true });
+        p.authExpiry(source);
+        await settle();
+        assert.deepEqual(p.navigations, []);
+        assert.equal(p.warning.hidden, false);
+        assert.equal(p.warning.focused, true);
+    });
+
+    test(`${source} auth change still reloads pages without an open profile form`, async () => {
+        const p = page({ form: false });
+        p.authExpiry(source);
+        await settle();
+        assert.deepEqual(p.navigations, ['reload']);
+        assert.equal(p.storage.size, 0);
+    });
+}
+
+test('a detached profile cannot interfere with the current pages auth reload', async () => {
+    const p = page();
+    p.detach();
+    p.authExpiry('focus');
+    await settle();
+    assert.deepEqual(p.navigations, ['reload']);
+    assert.equal(p.storage.size, 0);
+});
+
+for (const source of ['focus', 'visibility', 'pageshow', 'storage']) {
+    test(`${source} auth navigation during a pending restore retains the only stored copy`, async () => {
+        const p = page({ stored: draft(), manualRestore: true, form: false });
+        assert.equal(p.restores.length, 1);
+        p.authExpiry(source);
+        await settle();
+        assert.deepEqual(p.navigations, ['reload']);
+        p.resolveRestore();
+        await settle();
+        assert.equal(p.storage.has(key), true);
+        const returned = page({ stored: p.storage.get(key) });
+        await settle();
+        assert.deepEqual(Array.from(returned.restores[0] ?? []), Object.values(input));
+        assert.equal(returned.storage.has(key), false);
+    });
+}
+
+test('a retired draft no longer restores over a genuine save', async () => {
+    const expired = page();
+    assert.equal(expired.fail(419), true);
+    // The first restore attempt fails (offline), so the only stored copy
+    // stays. The member types the content manually and saves genuinely —
+    // the save dispatches profile-draft-retired, retiring that copy.
+    const returned = page({ stored: expired.storage.get(key), restoreFails: true });
+    await settle();
+    assert.equal(returned.restores.length, 1);
+    assert.equal(returned.storage.has(key), true);
+    returned.emit('profile-draft-retired');
+    assert.equal(returned.storage.has(key), false);
+    // The next load in the same tab sees no stored copy: nothing restores
+    // over the newer saved text.
+    const later = page({ stored: returned.storage.get(key) ?? null, form: false });
+    await settle();
+    assert.equal(later.restores.length, 0);
+    assert.equal(later.storage.size, 0);
+});
+
+test('a retired draft stays discarded after an explicit cancel', async () => {
+    const expired = page();
+    assert.equal(expired.fail(419), true);
+    // Same failed-first-restore setup; the member discards the form instead
+    // of saving. Cancel dispatches the same retire signal, or refresh
+    // reopens the input just cancelled.
+    const returned = page({ stored: expired.storage.get(key), restoreFails: true });
+    await settle();
+    assert.equal(returned.restores.length, 1);
+    assert.equal(returned.storage.has(key), true);
+    returned.emit('profile-draft-retired');
+    assert.equal(returned.storage.has(key), false);
+    const later = page({ stored: returned.storage.get(key) ?? null, form: false });
+    await settle();
+    assert.equal(later.restores.length, 0);
+    assert.equal(later.storage.size, 0);
+});
+
+test('a failed save never retires the only stored copy', async () => {
+    const expired = page();
+    assert.equal(expired.fail(419), true);
+    const returned = page({ stored: expired.storage.get(key), restoreFails: true });
+    await settle();
+    assert.equal(returned.restores.length, 1);
+    assert.equal(returned.storage.has(key), true);
+    // No retire event: a failed save dispatches nothing, so the next load
+    // in the same tab can still retry the restore.
+    const later = page({ stored: returned.storage.get(key) ?? null });
+    await settle();
+    assert.deepEqual(Array.from(later.restores[0] ?? []), Object.values(input));
+});
+
+test('419 without an open form leaves default handling alone and invents no draft', () => {
+    // No deferred fields at risk: the hook stays out so Livewire's own 419
+    // handling runs, and no "changes are still here" notice names nothing.
+    const p = page({ form: false });
+    assert.equal(p.fail(419), false);
+    assert.equal(p.storage.size, 0);
+    assert.equal(p.navigations.length, 0);
+    assert.equal(p.notice.hidden, true);
+});
+
+for (const probe of [false, true]) {
+    test(`explicit sign-out then ${probe ? 'focus then ' : ''}419 Save/Cancel request shows the notice and stays`, async () => {
+        // TOG-9355 review: after another tab signs out, Save/Cancel sends
+        // the stale CSRF token and gets a 419 without any before-auth
+        // reload firing first. The hook must stash, show the notice, and
+        // stay — Save/Cancel is not an explicit login click, and the pinned
+        // Discord driver's prompt=none could otherwise silently sign the
+        // shared browser back in.
+        const p = page();
+        p.authExpiry('storage');
+        await settle();
+        assert.deepEqual(p.navigations, [], 'broadcast itself must stay');
+        if (probe) {
+            p.authExpiry('focus');
+            await settle();
+            assert.deepEqual(p.navigations, [], 'sticky layout state must stay');
+        }
+        assert.equal(p.fail(419), true, 'suppress generic 419 handling');
+        assert.equal(JSON.parse(p.storage.get(key)).bio, input.bio, 'preserve typed input');
+        assert.equal(p.notice.hidden, false, 'notice names the sign-out');
+        assert.equal(p.notice.focused, true, 'notice takes focus');
+        assert.deepEqual(p.navigations, [], 'Save/Cancel is not an explicit login click');
+    });
+}
+
+// TOG-9355 review (P1): localStorage and sessionStorage have independent
+// quotas, so the sender's synchronous logout broadcast can fail while the
+// editor can still stash to sessionStorage. A real logout has completed
+// before these probes: fetch reports authenticated:false. The missing
+// broadcast is not evidence of quiet expiry — no automatic OAuth handoff,
+// from either the focus probe or the 419 hook. Both shipped scripts run;
+// no replacement implementation.
+test('focus after a logout with failed localStorage broadcast must not auto-start OAuth', async () => {
+    const sender = page({ form: false, localStorageFails: true });
+    assert.equal(sender.logoutSubmit(), 2, 'startup and submit both tried the shipped localStorage writer');
+    const editor = page(); // no storage event is delivered after the sender write failed
+    editor.authExpiry('focus');
+    await settle();
+    assert.equal(JSON.parse(editor.storage.get(key)).bio, input.bio, 'sessionStorage still works');
+    assert.deepEqual(editor.authReasons, ['expired'], 'missing broadcast is classified as expiry');
+    assert.deepEqual(editor.navigations, [], 'logout is not permission to restart OAuth');
+    assert.equal(editor.notice.hidden, false, 'notice names the ended session');
+    assert.equal(editor.notice.focused, true, 'notice takes focus');
+});
+
+test('419 after a logout with failed localStorage broadcast must not auto-start OAuth', async () => {
+    const sender = page({ form: false, localStorageFails: true });
+    assert.equal(sender.logoutSubmit(), 2);
+    const editor = page();
+    assert.equal(editor.fail(419), true);
+    assert.equal(JSON.parse(editor.storage.get(key)).bio, input.bio);
+    assert.deepEqual(editor.navigations, [], 'an absent broadcast cannot establish quiet expiry');
+    assert.equal(editor.notice.hidden, false);
+    assert.equal(editor.notice.focused, true);
+});
+
+test('signed-out notice login click preserves the draft and returns to the profile', async () => {
+    // TOG-9355 review (P2): the recovery journey. The notice link is a real
+    // explicit login action — it stashes the current deferred fields through
+    // the same keepDraft click handler and returns to this profile, where
+    // the restore folds the draft back into the reopened form.
+    const p = page();
+    p.authExpiry('focus');
+    await settle();
+    assert.equal(p.notice.hidden, false);
+    assert.equal(p.login(), false, 'notice link stashes without blocking');
+    const returned = page({ stored: p.storage.get(key), form: false });
+    await settle();
+    assert.deepEqual(Array.from(returned.restores[0] ?? []), Object.values(input));
+    assert.equal(returned.storage.has(key), false);
+});

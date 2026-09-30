@@ -9,8 +9,9 @@ use Symfony\Component\HttpFoundation\Response;
 /**
  * One 429 shape for every throttle in the app.
  *
- * The throttles fire from three places — the `throttle:10,1` / `throttle:12,1`
- * route middleware on the auth callbacks and RSVP writes, the per-member
+ * The throttles fire from three places — the `throttle:10,1` route middleware
+ * on the auth callbacks, the `rsvp-writes` named limiter on the RSVP writes,
+ * the per-member
  * RsvpRateLimit limiter (shared by the JSON routes and the Livewire control),
  * and the AgentEventRateLimit limiters on the machine ingress — but the answer
  * must not depend on which one fired ([TOG-6788](/TOG/issues/TOG-6788)):

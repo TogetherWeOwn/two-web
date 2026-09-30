@@ -27,6 +27,9 @@ Approve once with Discord on the join page and we'll add you to the server —
 or use the Discord invite link instead. Then accept the rules on Discord's
 membership screen: that's the gate, and it's how we know you're really in.
 
+If you cancelled the Discord approval or it expired, nothing is broken — press
+**Try joining again** on the page and approve, or use the invite link instead.
+
 ### 3. Do I need an invite, referral, or eligibility check?
 
 No. The doors are open — no invite code, no referral, no waitlist. If you can

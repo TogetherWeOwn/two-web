@@ -25,6 +25,8 @@
 #   multiple             every port in the block is reclaimed in one call
 #   no-args              called with no ports              -> exit 2
 #   bad-port             called with a non-number          -> exit 2
+#   inspection-fails     ss exits 42, even with PID output  -> exit 1, no signals
+#   inspection-empty     ss succeeds with no listeners     -> exit 0, no signals
 #
 # And the two workflow assertions, which are what actually keep the leak fixed:
 #
@@ -49,8 +51,57 @@ PORT_A=39411
 PORT_B=39412
 
 PIDS=""
-cleanup() { for p in $PIDS; do kill "$p" 2>/dev/null || true; done; }
+STUB_DIR="$(mktemp -d "${TMPDIR:-/tmp}/reclaim-ports-selftest.XXXXXX")" || exit 1
+cleanup() {
+  for p in $PIDS; do kill "$p" 2>/dev/null || true; done
+  rm -rf "$STUB_DIR"
+}
 trap cleanup EXIT
+
+# These cases do not touch the network or signal a process. BASH_ENV replaces
+# even bash's builtin kill, so unexpected PID parsing cannot escape the fixture.
+cat > "$STUB_DIR/ss" <<'STUB'
+#!/usr/bin/env bash
+printf '%s' "${STUB_SS_OUTPUT:-}"
+exit "${STUB_SS_STATUS:-0}"
+STUB
+cat > "$STUB_DIR/effects.sh" <<'STUB'
+kill() { printf 'kill %s\n' "$*" >> "$STUB_EFFECTS"; return 1; }
+ps() { printf 'ps %s\n' "$*" >> "$STUB_EFFECTS"; return 1; }
+sleep() { printf 'sleep %s\n' "$*" >> "$STUB_EFFECTS"; }
+STUB
+chmod +x "$STUB_DIR/ss"
+
+run_inspection_fixture() {
+  PATH="$STUB_DIR:$PATH" BASH_ENV="$STUB_DIR/effects.sh" \
+    STUB_EFFECTS="$STUB_DIR/effects.log" ./ci/reclaim-ports.sh "$PORT_A" 2>&1
+}
+
+printf '\n\033[1m==> Listener inspection fails closed\033[0m\n'
+
+for listing in '' 'users:(("php",pid=1234,fd=3))'; do
+  n=$((n + 1))
+  : > "$STUB_DIR/effects.log"
+  out="$(STUB_SS_STATUS=42 STUB_SS_OUTPUT="$listing" run_inspection_fixture)"
+  status=$?
+  if [ "$status" -ne 1 ] || ! grep -qF "listener inspection failed for port ${PORT_A} (ss exited 42)" <<< "$out"; then
+    fail "inspection-fails: expected exit 1 and an inspection diagnostic, got ${status} (${listing:-empty listing})"
+  elif [ -s "$STUB_DIR/effects.log" ] || grep -qF "killing it" <<< "$out"; then
+    fail "inspection-fails: attempted cleanup after a failed inspection"
+  else
+    pass "inspection-fails (${listing:-empty listing})"
+  fi
+done
+
+n=$((n + 1))
+: > "$STUB_DIR/effects.log"
+out="$(STUB_SS_STATUS=0 STUB_SS_OUTPUT='' run_inspection_fixture)"
+status=$?
+if [ "$status" -eq 0 ] && [ -z "$out" ] && [ "$(<"$STUB_DIR/effects.log")" = 'sleep 1' ]; then
+  pass "inspection-empty"
+else
+  fail "inspection-empty: expected a silent successful no-op without signals, got ${status}"
+fi
 
 # Start a trivial listener and return its pid. node is a hard dependency of the
 # repo, so this needs nothing that is not already here.

@@ -33,6 +33,43 @@
                 {{ $this->event->status === \App\Enums\EventStatus::Cancelled ? 'Cancelled' : ($this->event->status === \App\Enums\EventStatus::Draft ? 'Not published yet' : 'This one has been and gone') }}
             </p>
 
+        @elseif ($nonSeatAnswer)
+            {{-- An API answer is still an answer, even without a seat. Keep it
+                 visible ahead of the full/paused refusal, with a way to remove
+                 it rather than silently replacing it with Going. --}}
+            <p class="flex items-center gap-1.5 text-sm text-ink" role="status" tabindex="-1" data-testid="rsvp-answer">
+                <span class="font-medium">{{ $rsvp->status === \App\Enums\RsvpStatus::Maybe ? "You're a maybe" : "You're not going" }}</span>
+            </p>
+
+            <button type="button"
+                    wire:click="withdraw"
+                    wire:loading.attr="disabled"
+                    wire:target="withdraw"
+                    aria-busy="false"
+                    data-testid="rsvp-withdraw"
+                    class="inline-flex items-center justify-center gap-2 min-h-11 px-3 rounded-md
+                           text-ink-muted hover:text-ink hover:bg-raised
+                           transition-colors duration-fast ease-out-quick self-start">
+                <span wire:loading.remove wire:target="withdraw">Remove answer</span>
+                <span wire:loading wire:target="withdraw" aria-busy="true" style="display: none">Removing…</span>
+            </button>
+
+        @elseif ($paused && ! $going && ! $waitlisted)
+            {{-- A moderator pause (TOG-8725): still published, still visible,
+                 taking no new answers. Only members with no stake see this —
+                 a holder keeps their confirmation and withdraw below, someone
+                 in line keeps their place and the way out of it. role="status":
+                 a pause landing while the member watches re-renders here, and
+                 that change has to be announced (TOG-7332).
+                 tabindex="-1": removing an answer while paused swaps the
+                 controls for this notice — the same focus loss as a successful
+                 RSVP — so it must take focus for the handler below (TOG-6956). --}}
+            <p class="inline-flex items-center gap-1.5 rounded-sm px-2 py-0.5 text-xs font-medium
+                      bg-raised text-ink-muted border border-line self-start"
+               role="status" tabindex="-1" data-testid="rsvp-paused">
+                RSVPs are paused for this event — check back soon.
+            </p>
+
         @elseif ($full || $atCapacity)
             {{-- Colour is not carrying this: there is an icon and there are words,
                  and the cap is named so the number is not a mystery.
@@ -69,6 +106,20 @@
             </button>
 
         @elseif ($waitlisted)
+            @if ($claimLost)
+                {{-- TOG-8820: the member clicked "a seat opened up" and the seat
+                     went to somebody else first. Their place never moved, so the
+                     line view stays — with an honest note above it, not the full
+                     refusal. role="status": this lands after a click, so the swap
+                     announces politely (TOG-7332). --}}
+                <p class="flex items-start gap-1.5 text-sm text-ink" role="status" data-testid="waitlist-claim-lost">
+                    <span>
+                        <span class="font-medium">Someone just took that seat.</span>
+                        You're still in line — your place below hasn't moved.
+                    </span>
+                </p>
+            @endif
+
             {{-- tabindex="-1": same swap as the confirmation — joining replaces
                  the button with this, so keyboard focus moves here (TOG-6956).
                  The place is named in words and digits, never colour alone. --}}
@@ -199,6 +250,17 @@
             </p>
         @endif
 
+        @if ($nonSeatAnswer)
+            {{-- TOG-8826: a Maybe/NotGoing answer is saved here and never
+                 mirrored — `event.upsert` carries event metadata only, no
+                 member and no status — so it must never claim a Discord sync.
+                 The stamp a metadata write leaves on the row is not proof an
+                 answer was mirrored, and the copy must not read as if it were. --}}
+            <p class="text-xs text-ink-muted" role="status" data-testid="rsvp-saved">
+                Your answer is saved here.
+            </p>
+        @endif
+
         @if ($rateLimitedMessage !== null)
             {{-- TOG-7976: the throttle wait. role="status", not alert: a throttle is
                  temporary, not a failure that interrupts (CM spec in TOG-7928
@@ -256,7 +318,7 @@
         <script>
             $wire.on('rsvp-state-changed', () => {
                 const root = $wire.el;
-                const confirmed = root.querySelector('[data-testid="rsvp-confirmed"]');
+                const confirmed = root.querySelector('[data-testid="rsvp-confirmed"], [data-testid="rsvp-answer"]');
                 if (confirmed) {
                     confirmed.focus({ preventScroll: true });
                     return;
@@ -270,10 +332,41 @@
                     return;
                 }
 
+                // TOG-8826: removing an answer while paused swaps the
+                // controls for the paused notice alone — same focus loss,
+                // so the notice takes focus rather than dropping to <body>.
+                const paused = root.querySelector('[data-testid="rsvp-paused"]');
+                if (paused) {
+                    paused.focus({ preventScroll: true });
+                    return;
+                }
+
                 const going = root.querySelector('[data-testid="rsvp-going"], [data-testid="waitlist-join"]');
                 if (going) {
                     going.focus({ preventScroll: true });
                 }
+            });
+
+            // TOG-9354: the round trip above never reaches the component when
+            // the session died underneath the page (SESSION_LIFETIME). The
+            // POST dies first in ValidateCsrfToken — the page holds a stale
+            // data-csrf token against a fresh session — answering 419, and
+            // Livewire's handlePageExpiry answers that with a native
+            // confirm(), so the branded session-expired banner below stays
+            // unreachable. Intercept the 419 before Livewire's default:
+            // prevent the confirm and reload into the guest render, which
+            // carries the same login link with the ?next= return. 419-only
+            // on purpose: any other failure still gets Livewire's failure
+            // modal. No loop: the reloaded guest page issues no POST.
+            $wire.$hook('request', ({ fail }) => {
+                fail(({ status, preventDefault }) => {
+                    if (status !== 419) {
+                        return;
+                    }
+
+                    preventDefault();
+                    window.location.reload();
+                });
             });
         </script>
     @endscript

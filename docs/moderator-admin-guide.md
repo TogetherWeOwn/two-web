@@ -12,14 +12,14 @@ where your job ends).
 
 ## 0. Getting into the admin panel
 
-1. Open the **staging** admin: `<staging>/admin` (ask the COO for the
+1. Open the **staging** admin: `<staging>/admin` (ask the maintainers for the
    staging URL). The panel lives at path `admin` and there is no separate
    login page — signing in happens through Discord.
 2. Sign in with Discord. Moderator status is recomputed from your Discord
    role at **every** login, so a newly-granted moderator must sign out and
    back in once before the panel appears.
 3. If you sign in and get a **403** (or never see an admin link), you are
-   signed in fine but not a moderator — ask the COO to check your role.
+   signed in fine but not a moderator — ask the maintainers to check your role.
    Members get 403, guests are sent to Discord sign-in.
 
 > Staging only. The moderator panel does not operate on production until
@@ -74,6 +74,22 @@ drafts and published events — and confirm. Know before you confirm:
 **Cancelled is not past.** An event becomes *past* by itself when the
 clock passes its end time — you never set that by hand, and past events
 quietly leave listings and the calendar feed.
+
+## 2b. Pause RSVPs without unpublishing
+
+On the event's row (`/admin/events`), choose **Pause RSVPs** — available
+for published events that are still taking answers — and confirm. The
+event stays published and visible, but members see "RSVPs are paused for
+this event — check back soon" instead of the RSVP button. Use this when
+sign-ups need to stop but the event itself is still on (a heated thread,
+a cap you are about to raise, a detail you are confirming).
+
+- **Pausing is reversible.** Choose **Reopen RSVPs** on the same row to
+  take answers again. Cancelling (§2) is the permanent version.
+- Existing answers stay. Members who already RSVP'd keep their seats and
+  can still withdraw; members on the waitlist keep their places.
+- Seats freed while paused wait for the reopen: reopening hands them to
+  the head of the waitlist first, before any newcomer.
 
 ## 3. Feature content on the homepage
 
@@ -152,11 +168,11 @@ sign-in, so it works when everything else is down.
 | Join/sign-in shows a recovery page with a retry button | Discord hiccup or expired approval — nothing is broken. | Retry on the page, or use `/discord`. (Exact sentences: see `docs/troubleshooting-join.md`.) |
 | "Slow down a little" | Rate limit. | Wait a minute and try again. |
 | Event page says it was cancelled | The event is not happening; the page stays so old links land honestly. | It was cancelled — watch `/events` for the replacement. |
-| Anything else / page looks wrong | Unknown. | Ask for the **page URL and the exact sentence** it shows, then escalate to the COO with both. Never guess, never promise a fix time. |
+| Anything else / page looks wrong | Unknown. | Ask for the **page URL and the exact sentence** it shows, then escalate to the maintainers with both. Never guess, never promise a fix time. |
 
 Escalation rules: collect URL + exact wording first (engineers need
 both); moderators never deploy, restart, or "try something on the box" —
-write it up and hand it to the COO/DevOps.
+write it up and hand it to the maintainers.
 
 ---
 

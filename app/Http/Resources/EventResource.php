@@ -42,6 +42,11 @@ class EventResource extends JsonResource
             // (show/store/update) working without a special query.
             'going_count' => $this->going_count ?? $this->goingCount(),
             'status' => $this->status->value,
+            // Whether the event takes new answers (TOG-8725). Out on the wire
+            // so the calendar can say "paused" without inferring it from a
+            // refusal — a client that only reads `status` would print an
+            // "I'm in" button for an event that refuses answers.
+            'rsvp_open' => $this->isRsvpOpen(),
             'synced_to_discord' => $this->discord_event_id !== null,
         ];
     }

@@ -72,7 +72,7 @@ it('exposes only the allowlisted fields on every row', function () {
     $allowed = [
         'event_key', 'title', 'game', 'description',
         'starts_at', 'ends_at', 'starts_at_local', 'ends_at_local', 'timezone',
-        'location', 'capacity', 'going_count', 'status', 'synced_to_discord',
+        'location', 'capacity', 'going_count', 'status', 'rsvp_open', 'synced_to_discord',
     ];
     sort($allowed);
 

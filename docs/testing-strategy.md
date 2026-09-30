@@ -74,6 +74,42 @@ They run against **real Postgres**, never sqlite. We use `jsonb` and Postgres da
 handling; a sqlite suite goes green on things that break in production. `phpunit.xml`
 pins this and explains it.
 
+### The test-database contract (TOG-9649)
+
+The suite wipes and re-migrates whatever database it points at (`RefreshDatabase`
+runs `migrate:fresh`), so pointing it at the wrong database destroys data. On
+2026-09-29 exactly that happened: a run inherited a production database URL from
+its worker environment and migrated the production controller database. Two
+layers stop a repeat — keep both:
+
+1. **`phpunit.xml` forces `DB_CONNECTION` and `DB_DATABASE` with `force="true"`.**
+   Without `force`, the environment silently overrides these values. Forced
+   values beat `.env`-file values. (They do not beat a *real* process
+   environment variable for a Laravel app — PHPUnit sets `putenv`/`$_ENV` but
+   never `$_SERVER`, which Laravel reads first. That case is what layer 2 is
+   for.) Host, port and credentials stay env-supplied on purpose, so the suite
+   runs against whatever Postgres you can reach — `TestDatabaseIsNotPinnedTest`
+   fails the build if anyone pins them.
+2. **`Tests\TestCase::setUpTraits()` refuses the wrong database before the first
+   migration runs** (`tests/Support/TestDatabaseGuard.php`). The check sees the
+   resolved config after boot, so it covers every repointing mechanism —
+   inherited environment, `.env`, config cache. It throws
+   `TestDatabaseRefusedException` (an error, never a skip) unless the database
+   name starts with `two_web_test`, and it names-and-shames the production
+   controller database (`paperclip`) and its roles (`paperclip`/`paperclip_app`)
+   specifically. There is no escape hatch: the suite has no legitimate reason to
+   touch a non-test database.
+
+Rules that follow from the contract:
+
+- Never point `DB_DATABASE` at `two_web` (dev) or `paperclip` (controller) and
+  run the suite. The guard will refuse; that refusal is the feature working.
+- Per-worktree databases must be named `two_web_test_<something>` — the prefix
+  is what the guard checks.
+- Dusk is outside this contract by design: it drives a real browser against a
+  real server on your local `two_web` and never comes through `Tests\TestCase`.
+  Do not point Dusk at staging or production either (see `phpunit.dusk.xml`).
+
 ### The Integration suite is the exception to the transaction rule
 
 `Feature` wraps every test in a transaction it never commits (`RefreshDatabase`).

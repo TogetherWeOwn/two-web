@@ -94,7 +94,8 @@ class FeaturedContent extends Model
         $query->where('is_published', true)
             ->where(fn (Builder $q) => $q->whereNull('starts_at')->orWhere('starts_at', '<=', now()))
             ->where(fn (Builder $q) => $q->whereNull('ends_at')->orWhere('ends_at', '>', now()))
-            ->orderBy('position');
+            ->orderBy('position')
+            ->orderBy('id');
     }
 
     /** @return BelongsTo<User, $this> */

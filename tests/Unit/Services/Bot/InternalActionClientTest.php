@@ -123,6 +123,27 @@ it('sends location and never channel_key', function () {
     });
 });
 
+it('carries event metadata only, never a member or a status', function () {
+    // TOG-8826: the claim the saved-answer copy rests on. A Maybe/NotGoing
+    // stamp on the row is a metadata-write artifact, not proof the answer was
+    // mirrored — the payload has no member key and no status key to mirror
+    // with. A future payload that adds either must come back through this
+    // test and the rsvp-saved copy together.
+    Http::fake([BOT_ENDPOINT => Http::response(botCreated())]);
+
+    botClient()->upsertEvent(movieNight(), Str::uuid()->toString());
+
+    Http::assertSent(function (Request $r) {
+        $body = json_decode($r->body(), true);
+
+        return ! array_key_exists('member', $body)
+            && ! array_key_exists('user', $body)
+            && ! array_key_exists('user_id', $body)
+            && ! array_key_exists('status', $body)
+            && ! array_key_exists('rsvp', $body);
+    });
+});
+
 it('omits description entirely when there is none', function () {
     // A null is not the same as an absent field to a validator that checks types.
     Http::fake([BOT_ENDPOINT => Http::response(botCreated())]);

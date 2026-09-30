@@ -42,14 +42,14 @@ leave everything marked "leave blank/unset" alone.
 ## 3. Database (app)
 
 Postgres only. `docker compose up -d` starts one matching the example values
-exactly. There is intentionally no Redis/broker — adding one is a CEO
+exactly. There is intentionally no Redis/broker — adding one is a maintainers'
 conversation, not a quiet `.env` change (see `.env.example` header comment).
 
 | Key | Required? | Local | Staging / Production | What breaks if wrong |
 | --- | --- | --- | --- | --- |
 | `DB_CONNECTION` | Optional (default `pgsql`) | `pgsql` | `pgsql` | Anything else is untested and unsupported. |
 | `DB_HOST` / `DB_PORT` | Required | `127.0.0.1` / `5432` | Private-network host/port of the managed Postgres | Wrong host/port: everything database-backed (sessions, queue, cache, app data) fails at once. |
-| `DB_DATABASE` / `DB_USERNAME` / `DB_PASSWORD` (**secret**) | Required | `two_web` / `two_web` / `two_web` | Per-environment values via secret controls | Wrong credentials: same total outage as wrong host. The local password is a dev-only convenience; prod password comes from secret controls, never the repo. |
+| `DB_DATABASE` / `DB_USERNAME` / `DB_PASSWORD` (**secret**) | Required | `two_web` / `two_web` / `two_web` | Per-environment values via secret controls | Wrong credentials: same total outage as wrong host. The local password is a dev-only convenience; prod password comes from secret controls, never the repo. **Test runs ignore `DB_DATABASE`:** `phpunit.xml` forces it to `two_web_test`, and the `Tests\TestCase` guard (TOG-9649) refuses to run against anything outside `two_web_test*` — see `docs/testing-strategy.md`. |
 | `DB_SSLMODE` | Optional, not in `.env.example` (default `prefer`) | Unset | `require` (or `verify-full` if the provider supports it) | `prefer` against a DB that mandates TLS still negotiates TLS; setting `disable` where TLS is required refuses to connect. |
 | `DB_CACHE_*` (`DB_CACHE_CONNECTION`, `DB_CACHE_TABLE`, `DB_CACHE_LOCK_CONNECTION`, `DB_CACHE_LOCK_TABLE`), `DB_QUEUE_*` (`DB_QUEUE_CONNECTION`, `DB_QUEUE_TABLE`, `DB_QUEUE`, `DB_QUEUE_RETRY_AFTER`), `QUEUE_FAILED_DRIVER` | Optional, not in `.env.example` | Unset (defaults: `cache`/`cache_locks` tables, `jobs` table, `default` queue, retry-after 90s) | Unset unless sharing a connection or renaming tables | Wrong table name: cache/queue reads fail with missing-relation errors after a fresh migrate. `DB_QUEUE_RETRY_AFTER` lower than the longest job runtime causes duplicate job execution. |
 
@@ -64,7 +64,7 @@ Everything runs on the database. Keep it that way.
 | `SESSION_ENCRYPT` | Optional (default `false`) | `false` | `false` | `true` without a valid `APP_KEY` breaks all sessions. Only enable deliberately. |
 | `SESSION_PATH` | Optional (default `/`) | `/` | `/` | Scoping it to a subpath logs users out everywhere else. |
 | `SESSION_DOMAIN` | Leave `null` unless you know why | `null` | `null` | A shared parent domain (`.togetherweown.com`) would hand the session cookie to the WordPress store on the apex. See `docs/dns.md`. Setting this wrong logs everyone out or leaks the cookie cross-site. |
-| `SESSION_SECURE_COOKIE` | Pinned `true` in `.env.example` (explicit, never framework-default — CISO bar rule 6) | `true` | `true` | Staging/prod terminate TLS at the edge and trust the proxy (`bootstrap/app.php`), so the cookie is always Secure in practice. Safe on `http://localhost` too — loopback is a secure context, so local logins keep working. Setting `false` would send the session cookie over plaintext on any non-loopback http. |
+| `SESSION_SECURE_COOKIE` | Pinned `true` in `.env.example` (explicit, never framework-default — maintainers' bar rule 6) | `true` | `true` | Staging/prod terminate TLS at the edge and trust the proxy (`bootstrap/app.php`), so the cookie is always Secure in practice. Safe on `http://localhost` too — loopback is a secure context, so local logins keep working. Setting `false` would send the session cookie over plaintext on any non-loopback http. |
 | `SESSION_SAME_SITE` | Pinned `lax` in `.env.example` (not Strict, deliberately) | `lax` | `lax` | The Discord OAuth callback is a top-level GET navigation and the state lookup needs the session cookie present — `Strict` would drop it and break login. See `docs/dns.md`. `none` would additionally require `Secure=true`. |
 | `SESSION_HTTP_ONLY` / `SESSION_EXPIRE_ON_CLOSE` / `SESSION_PARTITIONED_COOKIE` / `SESSION_CONNECTION` / `SESSION_STORE` / `SESSION_TABLE` | Optional, not in `.env.example` (defaults `true`/`false`/`false`/default connection/default store/`sessions`) | Unset | Unset | Wrong `SESSION_TABLE` breaks login with a missing-relation error. The rest only matter when deviating from database sessions. |
 | `QUEUE_CONNECTION` | Optional | `database` | `database` | Wrong value silently stops background jobs (Discord role grants, announcements, mail) — the site looks fine while nothing happens. |
@@ -88,7 +88,7 @@ values break login/password-reset in obvious ways; leave unset.
 One OAuth application serves every environment. The callback path is always
 `/auth/discord/callback`; only the host differs per environment and each
 host must be **added** (not swapped) as a redirect URI in the Discord portal
-before switching. Ask the CEO (TWO-21); values arrive through the secrets
+before switching. Ask the maintainers (TWO-21); values arrive through the secrets
 channel, never in an issue comment or chat.
 
 | Key | Required? | Local | Staging / Production | What breaks if wrong |
@@ -177,8 +177,8 @@ shared token. The route is registered only when `APP_ENV=staging` and the
 controller re-checks the environment and fails closed on a blank token, but
 token age and rotation need an owner regardless.
 
-- **Owner:** CISO. Day-to-day rotation is executed by DevOps through
-  Coolify secret controls; the CISO owns the age limit and confirms each
+- **Owner:** maintainers. Day-to-day rotation is executed by DevOps through
+  Coolify secret controls; the maintainers own the age limit and confirm each
   rotation is recorded.
 - **Who may hold QA identities:** only the staging test automation and named
   QA engineers behind Cloudflare Access (the outer gate). The token is sent
@@ -254,7 +254,7 @@ observe-then-revert switch, not a steady state. Neither key is a secret.
 ## Quick checklists
 
 **New developer:** copy example → `key:generate` → fill `DISCORD_CLIENT_ID` /
-`DISCORD_CLIENT_SECRET` (CEO, secrets channel) → `BOT_SHARED_SECRET`
+`DISCORD_CLIENT_SECRET` (maintainers, secrets channel) → `BOT_SHARED_SECRET`
 (secrets channel) → `docker compose up -d` → migrate. Leave `DISCORD_GUILD_ID`,
 `DISCORD_INVITE_URL`, `SESSION_DOMAIN`, `BOT_DB_USERNAME`/`BOT_DB_PASSWORD`
 blank.

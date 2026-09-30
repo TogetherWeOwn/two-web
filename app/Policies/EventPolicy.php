@@ -60,6 +60,16 @@ class EventPolicy
         return $user->is_moderator === true;
     }
 
+    /**
+     * Pause or reopen answers (TOG-8725). Moderators only, like every other
+     * event state change — pausing is what keeps a heated event visible while
+     * stopping new answers, so it must not be a member verb.
+     */
+    public function toggleRsvp(User $user, Event $event): bool
+    {
+        return $user->is_moderator === true;
+    }
+
     public function delete(User $user, Event $event): bool
     {
         return $user->is_moderator === true;
