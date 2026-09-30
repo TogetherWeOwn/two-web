@@ -120,7 +120,7 @@ it('shows per-game errors before either profile trap signal', function (string $
         'games' => ['Minecraft'],
         'timezone' => 'Europe/London',
     ]);
-    $before = $profile->getAttributes();
+    $before = $profile->fresh()->getAttributes();
 
     $edit = Livewire::actingAs($member)
         ->test(MemberProfile::class, ['member' => $member, 'stats' => memberStatsStub($member->discord_id)])
@@ -165,7 +165,7 @@ it('silently swallows valid games under either profile trap signal', function (b
         'games' => ['Minecraft'],
         'timezone' => 'Europe/London',
     ]);
-    $before = $profile->getAttributes();
+    $before = $profile->fresh()->getAttributes();
     $games = array_map(fn (int $i) => str_pad("Game {$i}", 80, 'g'), range(1, 20));
 
     $edit = Livewire::actingAs($member)
