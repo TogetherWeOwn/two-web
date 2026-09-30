@@ -190,10 +190,12 @@ it('stashes the draft without starting login when another tab broadcasts sign-ou
     $this->browse(function (Browser $browser) use ($member) {
         $browser->loginAs($member)
             ->visit('/profile')
-            // Flake hardening (docs/flake-policy.md; DiscordLoginTest 'a
-            // member can sign out again'): press() resolves the button and
-            // clicks it in separate round trips, so resolve against a
-            // rendered page instead of a page part-way through becoming one.
+            // Order-dependence guard (docs/flake-policy.md; DiscordLoginTest
+            // 'a member can sign out again'): press() resolves then clicks
+            // in separate round trips, so resolve against the rendered
+            // closed page rather than a page mid-morph — including the
+            // morph a leaked draft's auto-restore would cause. The next
+            // test's prefix depends on this storage being clean.
             ->waitFor('[data-testid="profile-new-member"]')
             ->press('Add profile details')
             ->waitFor('[data-testid="profile-edit-form"]')
@@ -235,6 +237,12 @@ it('stashes the draft without starting login when another tab broadcasts sign-ou
             ->assertPathIs('/profile')
             ->assertVisible('[data-testid="profile-edit-form"]')
             ->assertInputValue('bio', 'Sign-out broadcast draft');
+
+        // Leave no stored draft behind. This tab is shared with the next
+        // test and profile ids are reused across tests, so a leftover here
+        // would restore on their page load and open a form they never
+        // asked for (docs/flake-policy.md: order dependence).
+        $browser->script("sessionStorage.removeItem('{$key}');");
     });
 });
 
@@ -244,9 +252,9 @@ it('keeps an open editor on the page when a second tab signs out for real', func
     $this->browse(function (Browser $browser) use ($member) {
         $browser->loginAs($member)
             ->visit('/profile')
-            // Same stale-element hardening as the broadcast test above:
-            // resolve the press against the rendered new-member section,
-            // not a page mid-morph (docs/flake-policy.md).
+            // Same order-dependence guard as the broadcast test above:
+            // the wait only passes on a genuinely fresh page, so a leaked
+            // draft's auto-restore cannot silently steal this press.
             ->waitFor('[data-testid="profile-new-member"]')
             ->press('Add profile details')
             ->waitFor('[data-testid="profile-edit-form"]')
@@ -279,6 +287,10 @@ it('keeps an open editor on the page when a second tab signs out for real', func
             ->assertInputValue('gamesText', "Chess\nCo-op")
             ->assertInputValue('timezone', 'Europe/London');
         expect($member->profile()->first())->toBeNull();
+
+        // Same leak guard as the broadcast test: tab A's sign-out stash
+        // must not restore into the next test's fresh page.
+        $browser->script("sessionStorage.removeItem('{$key}');");
 
         $browser->driver->switchTo()->window($tabB);
         $browser->driver->close();
