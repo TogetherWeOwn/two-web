@@ -50,6 +50,8 @@ it('moves focus into the form on open and back to Edit profile on cancel (TOG-56
     $this->browse(function (Browser $browser) use ($member) {
         $browser->loginAs($member)
             ->visit('/profile')
+            // Same order-dependence guard as the sign-out tests below.
+            ->waitFor('[data-testid="profile-new-member"]')
             ->press('Add profile details')
             ->waitFor('[data-testid="profile-edit-form"]')
             // The trigger unmounts when the form renders: without the focus
@@ -68,6 +70,8 @@ it('recovers deferred profile input after a real CSRF 419 and page round trip', 
     $this->browse(function (Browser $browser) use ($member) {
         $browser->loginAs($member)
             ->visit('/profile')
+            // Same order-dependence guard as the sign-out tests below.
+            ->waitFor('[data-testid="profile-new-member"]')
             ->press('Add profile details')
             ->waitFor('[data-testid="profile-edit-form"]')
             ->type('bio', 'Unsent <bio>')
@@ -158,6 +162,8 @@ it('preserves unsent profile input when an expiry probe navigates before save', 
     $this->browse(function (Browser $browser) use ($member) {
         $browser->loginAs($member)
             ->visit('/profile')
+            // Same order-dependence guard as the sign-out tests below.
+            ->waitFor('[data-testid="profile-new-member"]')
             ->press('Add profile details')
             ->waitFor('[data-testid="profile-edit-form"]')
             ->type('bio', 'Auth-sync draft')
@@ -304,6 +310,8 @@ it('blocks auth-sync navigation when profile draft storage is unavailable', func
     $this->browse(function (Browser $browser) use ($member, $source) {
         $browser->loginAs($member)
             ->visit('/profile')
+            // Same order-dependence guard as the sign-out tests above.
+            ->waitFor('[data-testid="profile-new-member"]')
             ->press('Add profile details')
             ->waitFor('[data-testid="profile-edit-form"]')
             ->type('bio', 'Copy this before login');
@@ -334,6 +342,8 @@ it('keeps an invalid edit open and gives the field an accessible error', functio
     $this->browse(function (Browser $browser) use ($member) {
         $browser->loginAs($member)
             ->visit('/profile')
+            // Same order-dependence guard as the sign-out tests above.
+            ->waitFor('[data-testid="profile-new-member"]')
             ->press('Add profile details')
             ->waitFor('[data-testid="profile-edit-form"]')
             ->type('timezone', 'BST')
