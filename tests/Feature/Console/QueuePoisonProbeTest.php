@@ -109,6 +109,50 @@ it('reports the dead letter through the probe command', function () {
         ->and(DB::table('failed_jobs')->where('uuid', $payload['failed_uuid'])->exists())->toBeTrue();
 });
 
+it('isolates the drill from older ordinary work and another probe queue', function () {
+    config()->set('queue.connections.probe_fixture', config('queue.connections.database'));
+    config()->set('queue.connections.probe_fixture.queue', 'ordinary-work');
+    config()->set('queue.default', 'probe_fixture');
+
+    SelfFailingProbeJob::dispatch();
+    PoisonProbeJob::dispatch('other-probe')->onQueue('poison-probe-other');
+    $pending = DB::table('jobs')->orderBy('id')->get();
+
+    expect($pending)->toHaveCount(2);
+
+    $code = Artisan::call('queue:poison-probe', ['--json' => true]);
+    $payload = json_decode(Artisan::output(), true, flags: JSON_THROW_ON_ERROR);
+    $failed = DB::table('failed_jobs')->where('uuid', $payload['failed_uuid'])->first();
+
+    expect($code)->toBe(0)
+        ->and($payload['status'])->toBe('ok')
+        ->and($payload['failed_connection'])->toBe('probe_fixture')
+        ->and($payload['failed_queue'])->toBe($payload['marker'])
+        ->and($failed->payload)->toContain($payload['marker'])
+        ->and(DB::table('failed_jobs')->count())->toBe(1)
+        ->and(DB::table('jobs')->orderBy('id')->get()->all())->toEqual($pending->all());
+});
+
+it('refuses to dispatch while the app is down for maintenance', function () {
+    // Laravel's --once worker returns without consuming while the app is
+    // down, so a dispatched probe would strand on its disposable queue —
+    // the refusal must happen before dispatch, with zero side effects.
+    $this->artisan('down')->assertSuccessful();
+
+    try {
+        $code = Artisan::call('queue:poison-probe', ['--json' => true]);
+        $payload = json_decode(Artisan::output(), true, flags: JSON_THROW_ON_ERROR);
+
+        expect($code)->toBe(1)
+            ->and($payload['status'])->toBe('error')
+            ->and($payload)->not->toHaveKey('marker')
+            ->and(DB::table('jobs')->count())->toBe(0)
+            ->and(DB::table('failed_jobs')->count())->toBe(0);
+    } finally {
+        $this->artisan('up')->assertSuccessful();
+    }
+});
+
 it('refuses a non-database driver instead of reporting a healthy zero', function () {
     config()->set('queue.default', 'sync');
 

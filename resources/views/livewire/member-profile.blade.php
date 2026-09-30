@@ -1,4 +1,40 @@
-<div class="min-h-full bg-canvas text-ink">
+{{--
+    data-login-url: the way back in with the ?next= return (TOG-9254).
+    TOG-9355 review: no script navigates here automatically — a 419 or an
+    unauthenticated probe cannot distinguish logout from quiet expiry, so
+    only an explicit login-link click leaves. The client-side signed-out
+    notice below carries the same ?next= return; this dataset stays as its
+    fallback and for tests pinning the destination. Rendered always, not
+    only with the expired banner, because the client-side path never reaches
+    the server render that would show the banner.
+--}}
+<div class="min-h-full bg-canvas text-ink"
+     data-profile-id="{{ $member->getKey() }}"
+     data-draft-owner="{{ $isOwner ? '1' : '0' }}"
+     data-login-url="{{ route('login', $returnTo ? ['next' => $returnTo] : []) }}">
+    <div hidden role="alert" tabindex="-1" data-testid="profile-draft-unavailable"
+         class="mx-auto max-w-6xl rounded-lg border border-line bg-surface p-5 text-sm text-ink">
+        Your session expired. Copy your changes before logging in; this browser could not keep a draft.
+        <a href="{{ route('login', $returnTo ? ['next' => $returnTo] : []) }}"
+           class="font-semibold underline underline-offset-4">Log in after copying your changes</a>
+    </div>
+    {{-- TOG-9355 review (P2): the client-side signed-out notice. The healthy
+         authenticated render has no expiry banner (it only renders after a
+         server round trip names the expiry), and suppressing the 419 default
+         handling means no morph can supply one — so without this, a
+         successful sign-out capture leaves retained input but an apparently
+         inert Save/Cancel and no visible login path. This names the sign-out
+         and offers an explicit login link: it preserves the current deferred
+         fields via the same keepDraft click handler and returns to this
+         profile, but never starts OAuth until clicked. Distinct from the
+         storage-failure warning above on purpose: that one asks for a copy
+         first because nothing was stashed; this one stashed successfully. --}}
+    <div hidden role="status" tabindex="-1" data-testid="profile-signed-out"
+         class="mx-auto max-w-6xl rounded-lg border border-line bg-surface p-5 text-sm text-ink">
+        Your session ended — for example, you signed out in another tab or it expired. Your changes are still here.
+        <a href="{{ route('login', $returnTo ? ['next' => $returnTo] : []) }}" data-profile-login
+           class="font-semibold underline underline-offset-4">Log in with Discord to save them</a>
+    </div>
     <div class="mx-auto max-w-6xl px-4 py-8 md:px-6 md:py-12 lg:px-8">
         <div class="flex flex-col gap-8">
             <header class="rounded-lg border border-line bg-surface p-5 md:p-8">
@@ -138,9 +174,35 @@
                                     <p class="text-sm font-medium text-ink">Your session expired.</p>
                                     <p class="mt-0.5 text-sm text-ink-muted">
                                         Your changes are still here.
-                                        <a href="{{ route('login') }}" class="font-semibold text-ink underline underline-offset-4 hover:text-ink">Log in with Discord</a>
+                                        {{-- TOG-9355: the ?next= return puts them
+                                             back on this page after Discord,
+                                             next to their still-open draft —
+                                             a bare link strands them on
+                                             /profile instead. Mirrors the
+                                             RSVP login link (TOG-9254). --}}
+                                        <a href="{{ route('login', $returnTo ? ['next' => $returnTo] : []) }}" data-profile-login class="font-semibold text-ink underline underline-offset-4 hover:text-ink">Log in with Discord</a>
                                         and save again.
                                     </p>
+                                </div>
+                            </div>
+                        @endif
+
+                        {{-- TOG-9355: the 419-stashed draft made it back. The
+                             session is alive again — they already logged back
+                             in — so this names the kept draft, not the expiry.
+                             role="status", not alert: nothing was interrupted
+                             on this page load, the draft simply arrived. --}}
+                        @if ($draftRestored ?? false)
+                            <div class="mt-5 flex items-start gap-3 rounded-lg border border-line bg-online-quiet p-4"
+                                 role="status"
+                                 tabindex="-1"
+                                 data-testid="profile-draft-restored">
+                                <svg class="mt-0.5 size-5 shrink-0 text-online" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+                                    <path d="M6.2 11.8 2.6 8.2l1.1-1.1 2.5 2.5 6.1-6.1 1.1 1.1-7.2 7.2Z"/>
+                                </svg>
+                                <div>
+                                    <p class="text-sm font-medium text-ink">Your unsent changes are back.</p>
+                                    <p class="mt-0.5 text-sm text-ink-muted">Review them and save when ready.</p>
                                 </div>
                             </div>
                         @endif
@@ -398,6 +460,16 @@
                     return;
                 }
 
+                // TOG-9355: a 419-stashed draft just landed back in the open
+                // form. Not an interruption, so it comes after the alerts —
+                // but before the heading/saved fallthroughs, which would
+                // strand focus away from the news that their text survived.
+                const restored = root.querySelector('[data-testid="profile-draft-restored"]');
+                if (restored) {
+                    restored.focus({ preventScroll: true });
+                    return;
+                }
+
                 const saved = root.querySelector('[data-testid="profile-saved"]');
                 if (saved) {
                     saved.focus({ preventScroll: true });
@@ -415,6 +487,168 @@
                     edit.focus({ preventScroll: true });
                 }
             });
+
+            // Deferred wire:model values may not have reached the server when
+            // CSRF rejects the save. Capture the DOM, not the last snapshot.
+            // Tab-local storage never crosses profiles; restoreDraft also gates
+            // the caller server-side. A draft expires after one day.
+            const draftKey = `two:profile-draft:${$wire.el.dataset.profileId}`;
+            const keepDraft = () => {
+                if (!$wire.el.querySelector('[data-testid="profile-edit-form"]')) {
+                    return true;
+                }
+
+                try {
+                    sessionStorage.setItem(draftKey, JSON.stringify({
+                        version: 1,
+                        savedAt: Date.now(),
+                        bio: $wire.el.querySelector('#bio').value,
+                        gamesText: $wire.el.querySelector('#games').value,
+                        timezone: $wire.el.querySelector('#timezone').value,
+                    }));
+                    return true;
+                } catch {
+                    // Storage can be disabled or full. Never navigate away
+                    // with unpreserved input: offer an explicit copy-first exit.
+                    const warning = $wire.el.querySelector('[data-testid="profile-draft-unavailable"]');
+                    warning.hidden = false;
+                    warning.focus({ preventScroll: true });
+                    return false;
+                }
+            };
+
+            // TOG-9355 review: an unauthenticated probe or a 419 cannot
+            // distinguish a logout from a quiet expiry — auth.status answers
+            // one boolean, and a missed localStorage broadcast (quota,
+            // private mode) delivers no storage event at all. Absence of a
+            // broadcast is not evidence of quiet expiry, so NO automatic
+            // handoff starts OAuth here: after a real logout the pinned
+            // Discord driver's prompt=none could silently complete an
+            // existing grant and sign the shared browser back in with no
+            // login click. Preserve input, show the signed-out notice with
+            // its explicit login link, and stay — only an explicit login
+            // action leaves this page. The notice carries the same
+            // data-profile-login stashing as the server login links, so the
+            // click preserves the current deferred fields and returns to
+            // this profile. Ignore unmounted components.
+            //
+            // TOG-9355: either branch starts abandoning this document — the
+            // layout reloads when no form is open, this listener stashes
+            // when one is. A restore still in flight must not consume the
+            // only stored copy for a document about to be replaced; the
+            // replacement page needs it. keepDraft is synchronous DOM
+            // capture, so it lands before a slow restore response.
+            //
+            // TOG-9355 review: the 419 request hook below is an independent
+            // path — after another tab signs out, Save/Cancel sends the
+            // stale CSRF token and gets a 419 without any before-auth
+            // reload firing first. It shows the same notice and stays too.
+            let authAbandoned = false;
+            // Form-guarded: without an open form there are no deferred
+            // fields to name, so a 419 there stays silent instead of
+            // showing a "changes are still here" notice about nothing.
+            const showSignedOutNotice = () => {
+                if (!$wire.el.querySelector('[data-testid="profile-edit-form"]')) {
+                    return;
+                }
+                const notice = $wire.el.querySelector('[data-testid="profile-signed-out"]');
+                if (notice) {
+                    notice.hidden = false;
+                    notice.focus({ preventScroll: true });
+                }
+            };
+            document.addEventListener('two:before-auth-reload', (event) => {
+                authAbandoned = true;
+                if (!$wire.el.isConnected || !$wire.el.querySelector('[data-testid="profile-edit-form"]')) {
+                    return;
+                }
+
+                event.preventDefault();
+                if (!keepDraft()) {
+                    return;
+                }
+                showSignedOutNotice();
+            });
+
+            // Same no-automatic-handoff rule as above: a 419 cannot
+            // distinguish logout from expiry either, so stash, show the
+            // notice, and stay. Save/Cancel is not an explicit login
+            // action. Without an open form there is no deferred input at
+            // risk, so leave Livewire's default 419 handling alone.
+            $wire.$hook('request', ({ fail }) => {
+                fail(({ status, preventDefault }) => {
+                    if (status !== 419) {
+                        return;
+                    }
+                    if (!$wire.el.querySelector('[data-testid="profile-edit-form"]')) {
+                        return;
+                    }
+
+                    preventDefault();
+                    if (keepDraft()) {
+                        showSignedOutNotice();
+                    }
+                });
+            });
+
+            // Covers the component's guest-session banner too, when CSRF
+            // remained valid but authentication expired before save().
+            $wire.el.addEventListener('click', (event) => {
+                if (event.target.closest('[data-profile-login]') && !keepDraft()) {
+                    event.preventDefault();
+                }
+            });
+
+            // TOG-9355 review: a restore that failed earlier kept the stored
+            // copy, but the later genuine save or explicit cancel never
+            // retired it — the next page load restored the obsolete draft
+            // over the newer saved text (or reopened cancelled input). The
+            // server dispatches profile-draft-retired only on those terminal
+            // discards — never on a write failure, validation refusal, or
+            // early restored-save retry — so consuming it here keeps the only
+            // stored copy recoverable until it is truly spent. sessionStorage
+            // is per-tab, so the saving tab retires exactly its own copy.
+            $wire.on('profile-draft-retired', () => {
+                try {
+                    sessionStorage.removeItem(draftKey);
+                } catch {}
+            });
+
+            const restoreDraft = async () => {
+                let draft;
+                try {
+                    const stored = sessionStorage.getItem(draftKey);
+                    if (!stored) return;
+                    draft = JSON.parse(stored);
+                    if ($wire.el.dataset.draftOwner !== '1'
+                        || draft?.version !== 1
+                        || !Number.isFinite(draft.savedAt)
+                        || draft.savedAt > Date.now()
+                        || Date.now() - draft.savedAt > 24 * 60 * 60 * 1000
+                        || !['bio', 'gamesText', 'timezone'].every(field => typeof draft[field] === 'string')) {
+                        sessionStorage.removeItem(draftKey);
+                        return;
+                    }
+                } catch {
+                    try { sessionStorage.removeItem(draftKey); } catch {}
+                    return;
+                }
+
+                try {
+                    await $wire.restoreDraft(draft.bio, draft.gamesText, draft.timezone);
+                    // A restore that resolves after auth-driven abandonment
+                    // started is landing in a document about to be replaced.
+                    // Keep the stored copy so the replacement page restores;
+                    // consuming it here orphans the unsaved recovered form.
+                    if (!authAbandoned) {
+                        sessionStorage.removeItem(draftKey);
+                    }
+                } catch {
+                    // An interrupted restore must not consume the only copy.
+                    // A later page load can retry; never auto-save a draft.
+                }
+            };
+            restoreDraft();
         </script>
     @endscript
 </div>

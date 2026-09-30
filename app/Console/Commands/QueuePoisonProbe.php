@@ -37,8 +37,12 @@ use RuntimeException;
  * buffer, so the worker's own chatter would land ahead of the `--json`
  * payload and break machine parsing of the probe output. `callSilent`
  * keeps the buffer for the report alone. The probe row is marked by its
- * marker so it can be identified and — on a box, by hand — retried or
- * forgotten afterwards.
+ * marker so it can be identified and — on a box, by hand — forgotten
+ * afterwards (`queue:forget <uuid>`). Do not `queue:retry`: retry would
+ * restore the poison to its single-use isolated queue where no worker
+ * listens; re-run the probe for a fresh drill instead. The probe refuses
+ * to dispatch while the app is down for maintenance, so a drill never
+ * strands a job no worker will consume.
  */
 class QueuePoisonProbe extends Command
 {
@@ -61,13 +65,30 @@ class QueuePoisonProbe extends Command
             ], self::FAILURE);
         }
 
+        // Laravel's --once worker returns without consuming while the app is
+        // down for maintenance. Refuse before dispatch so the drill never
+        // strands a poison on its disposable queue.
+        if ($this->laravel->isDownForMaintenance()) {
+            return $this->report([
+                'status' => 'error',
+                'connection' => $connection,
+                'driver' => $driver,
+                'detail' => 'application is down for maintenance; refusing to dispatch a probe no worker will consume.',
+            ], self::FAILURE);
+        }
+
         $marker = 'poison-probe-'.now()->format('YmdHis').'-'.substr((string) str()->uuid(), 0, 8);
 
-        PoisonProbeJob::dispatch($marker);
+        // A queue per drill keeps ordinary work and concurrent probes out of
+        // the one-shot worker. The marker also identifies its failed row.
+        $queue = $marker;
+        PoisonProbeJob::dispatch($marker)->onConnection($connection)->onQueue($queue);
 
         $before = $this->failedCount();
 
         $exit = $this->callSilent('queue:work', [
+            'connection' => $connection,
+            '--queue' => $queue,
             '--once' => true,
             '--tries' => 1,
             '--sleep' => 0,
@@ -75,6 +96,8 @@ class QueuePoisonProbe extends Command
         ]);
 
         $failed = DB::table(config('queue.failed.table', 'failed_jobs'))
+            ->where('connection', $connection)
+            ->where('queue', $queue)
             ->where('payload', 'like', '%'.$marker.'%')
             ->orderByDesc('id')
             ->first();

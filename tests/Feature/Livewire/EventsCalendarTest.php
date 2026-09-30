@@ -7,6 +7,7 @@ use App\Models\Event;
 use App\Models\Rsvp;
 use App\Models\User;
 use App\Support\Events\DiscordEventsSource;
+use App\Support\Events\EventSearchLogger;
 use Carbon\CarbonImmutable;
 use Livewire\Livewire;
 
@@ -840,6 +841,181 @@ it('lists the guild Sunday Squad event even when our own table is empty', functi
         ->assertSeeHtml('data-event-key="discord:1545955994972987422"')
         // The empty state must not render alongside a live event.
         ->assertDontSeeHtml('data-testid="events-empty-never"');
+});
+
+it('applies the same literal search to local and Discord titles and descriptions', function (string $field, string $copy, string $term) {
+    $local = upcomingEvent(['title' => 'Local match', 'description' => null, $field => $copy]);
+    $discord = sundaySquadEvent();
+    $discord->fill(['title' => 'Discord match', 'description' => null, $field => $copy]);
+    $unrelated = sundaySquadEvent();
+    $unrelated->setAttribute('event_key', 'discord:1545955994972987423');
+    upcomingEvent(['title' => 'Unrelated local event', 'description' => null]);
+    mockDiscordEvents([$discord, $unrelated]);
+
+    Livewire::test(EventsCalendar::class)
+        ->set('search', $term)
+        ->assertViewHas('upcoming', fn ($events): bool => $events->count() === 2 && $events->first()->is($local) && $events->last() === $discord)
+        ->assertDontSee('Unrelated local event')
+        ->assertDontSeeHtml('data-event-key="discord:1545955994972987423"')
+        ->assertDontSeeHtml('data-testid="events-empty-search"');
+
+    $this->assertDatabaseHas('event_search_logs', [
+        'normalized_query' => app(EventSearchLogger::class)->normalize($term),
+        'result_count' => 2,
+    ]);
+})->with([
+    'title fragment and casing' => ['title', 'Friday HELLDIVERS night', 'helldiv'],
+    'description fragment and trimming' => ['description', 'Bring extra AMMO tonight.', '  ammo  '],
+    'multibyte title casing' => ['title', 'Équipe gaming night', 'éQUIPE'],
+    'literal percent' => ['title', '100% co-op night', '%'],
+    'literal underscore' => ['description', 'Bring your squad_name.', '_'],
+    'literal backslash' => ['description', 'Use squad\\name.', '\\'],
+]);
+
+it('preserves PostgreSQL ordinary and final sigma matching across both sources', function (string $field, string $copy, string $term, bool $matches) {
+    $local = upcomingEvent(['title' => 'Local sigma', 'description' => null, $field => $copy]);
+    $discord = sundaySquadEvent();
+    $discord->fill(['title' => 'Discord sigma', 'description' => null, $field => $copy]);
+    mockDiscordEvents([$discord]);
+
+    Livewire::test(EventsCalendar::class)
+        ->set('search', $term)
+        ->assertViewHas('upcoming', fn ($events): bool => $matches
+            ? $events->count() === 2 && $events->first()->is($local) && $events->last() === $discord
+            : $events->isEmpty())
+        ->assertViewHas('hasVisibleResults', $matches);
+
+    $this->assertDatabaseHas('event_search_logs', [
+        'normalized_query' => app(EventSearchLogger::class)->normalize($term),
+        'result_count' => $matches ? 2 : 0,
+    ]);
+})->with([
+    'uppercase title versus ordinary sigma' => ['title', 'ΟΣ', 'οσ', true],
+    'uppercase title versus final sigma' => ['title', 'ΟΣ', 'ος', false],
+    'uppercase description versus ordinary sigma' => ['description', 'ΟΣ', 'οσ', true],
+    'uppercase description versus final sigma' => ['description', 'ΟΣ', 'ος', false],
+    'final sigma title stays distinct from ordinary sigma' => ['title', 'ος', 'οσ', false],
+    'final sigma description matches literally' => ['description', 'ος', 'ος', true],
+]);
+
+it('matches Discord search copy in one read without persisting transient rows', function () {
+    $events = [];
+
+    for ($index = 0; $index < 12; $index++) {
+        $event = sundaySquadEvent();
+        $event->setAttribute('event_key', 'discord:'.(1545955994972987422 + $index));
+        $events[] = $event;
+    }
+
+    // Filtering retains the source keys; the SQL matches must use those keys,
+    // not offsets in the remaining list after an expired row is removed.
+    $events[0]->ends_at = now()->subMinute();
+    mockDiscordEvents($events);
+    $component = Livewire::test(EventsCalendar::class);
+
+    DB::enableQueryLog();
+    $component->set('search', 'squad')
+        ->assertViewHas('upcoming', fn ($rows): bool => $rows->count() === 11 && $rows->first() === $events[1] && $rows->last() === $events[11]);
+    $queries = collect(DB::getQueryLog());
+    DB::disableQueryLog();
+
+    expect($queries->filter(fn (array $query): bool => str_contains($query['query'], '"discord_search"')))->toHaveCount(1);
+    $this->assertDatabaseCount('events', 0);
+});
+
+it('skips the Discord search query for empty rows or a blank search', function (bool $hasRows, string $term) {
+    mockDiscordEvents($hasRows ? [sundaySquadEvent()] : []);
+    $component = Livewire::test(EventsCalendar::class);
+
+    DB::enableQueryLog();
+    $component->set('search', $term)
+        ->assertViewHas('upcoming', fn ($rows): bool => $rows->count() === ($hasRows ? 1 : 0));
+    $queries = collect(DB::getQueryLog());
+    DB::disableQueryLog();
+
+    expect($queries->filter(fn (array $query): bool => str_contains($query['query'], '"discord_search"')))->toHaveCount(0);
+    $this->assertDatabaseCount('events', 0);
+})->with([
+    'no source rows' => [false, 'squad'],
+    'empty search' => [true, ''],
+    'whitespace search' => [true, '   '],
+]);
+
+it('filters both sources when opening a shareable search URL', function () {
+    upcomingEvent(['description' => null]);
+    mockDiscordEvents([sundaySquadEvent()]);
+
+    $this->get(route('events.index', ['q' => 'FALL GUYS']))
+        ->assertOk()
+        ->assertSee('Sunday Squad')
+        ->assertDontSee('Friday night Helldivers')
+        ->assertDontSeeHtml('data-testid="events-empty-search"');
+
+    $this->assertDatabaseHas('event_search_logs', [
+        'normalized_query' => 'fall guys',
+        'result_count' => 1,
+    ]);
+});
+
+it('shows a healthy mixed-source search empty state and logs zero matches', function () {
+    upcomingEvent(['description' => null]);
+    $discord = sundaySquadEvent();
+    $discord->description = null;
+    mockDiscordEvents([$discord]);
+
+    Livewire::test(EventsCalendar::class)
+        ->set('search', 'zzz-no-such-event-zzz')
+        ->assertViewHas('upcoming', fn ($events): bool => $events->isEmpty())
+        ->assertSeeHtml('data-testid="events-empty-search"')
+        ->assertSee('Nothing matches that search.')
+        ->assertDontSee('Friday night Helldivers')
+        ->assertDontSee('Sunday Squad')
+        ->assertDontSeeHtml('data-testid="events-empty-never"')
+        ->assertDontSeeHtml('data-testid="events-empty-gap"')
+        ->assertDontSeeHtml('data-testid="events-empty-error"');
+
+    $this->assertDatabaseHas('event_search_logs', [
+        'normalized_query' => 'zzz-no-such-event-zzz',
+        'result_count' => 0,
+    ]);
+});
+
+it('clears a mixed-source search and restores both sources in start order', function () {
+    upcomingEvent(['description' => null]);
+    mockDiscordEvents([sundaySquadEvent()]);
+
+    Livewire::test(EventsCalendar::class)
+        ->set('search', 'helldiv')
+        ->assertSee('Friday night Helldivers')
+        ->assertDontSee('Sunday Squad')
+        ->call('clearSearch')
+        ->assertSet('search', '')
+        ->assertViewHas('upcoming', fn ($events): bool => $events->pluck('title')->all() === ['Friday night Helldivers', 'Sunday Squad'])
+        ->assertSee('Friday night Helldivers')
+        ->assertSee('Sunday Squad')
+        ->assertDontSeeHtml('data-testid="events-search-status"');
+});
+
+it('keeps both sources for a whitespace-only search', function () {
+    upcomingEvent(['description' => null]);
+    mockDiscordEvents([sundaySquadEvent()]);
+
+    Livewire::test(EventsCalendar::class)
+        ->set('search', '   ')
+        ->assertSee('Friday night Helldivers')
+        ->assertSee('Sunday Squad')
+        ->assertDontSeeHtml('data-testid="events-search-status"');
+});
+
+it('does not revive an ended Discord event when its title matches the search', function () {
+    $discord = sundaySquadEvent();
+    $discord->ends_at = now()->subMinute();
+    mockDiscordEvents([$discord]);
+
+    Livewire::test(EventsCalendar::class)
+        ->set('search', 'squad')
+        ->assertSeeHtml('data-testid="events-empty-search"')
+        ->assertDontSeeHtml('data-event-key="discord:1545955994972987422"');
 });
 
 it('renders the Sunday Squad start in the same visitor format as local cards', function () {
