@@ -261,6 +261,10 @@ class EventsCalendar extends Component
             $candidates = $candidates === null ? $row : $candidates->unionAll($row);
         }
 
+        if ($candidates === null) {
+            return $rows;
+        }
+
         $matches = $connection->query()
             ->fromSub($candidates, 'discord_search')
             ->whereLike('title', $this->searchPattern())

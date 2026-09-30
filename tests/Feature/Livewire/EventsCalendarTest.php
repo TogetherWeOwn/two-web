@@ -923,6 +923,24 @@ it('matches Discord search copy in one read without persisting transient rows', 
     $this->assertDatabaseCount('events', 0);
 });
 
+it('skips the Discord search query for empty rows or a blank search', function (bool $hasRows, string $term) {
+    mockDiscordEvents($hasRows ? [sundaySquadEvent()] : []);
+    $component = Livewire::test(EventsCalendar::class);
+
+    DB::enableQueryLog();
+    $component->set('search', $term)
+        ->assertViewHas('upcoming', fn ($rows): bool => $rows->count() === ($hasRows ? 1 : 0));
+    $queries = collect(DB::getQueryLog());
+    DB::disableQueryLog();
+
+    expect($queries->filter(fn (array $query): bool => str_contains($query['query'], '"discord_search"')))->toHaveCount(0);
+    $this->assertDatabaseCount('events', 0);
+})->with([
+    'no source rows' => [false, 'squad'],
+    'empty search' => [true, ''],
+    'whitespace search' => [true, '   '],
+]);
+
 it('filters both sources when opening a shareable search URL', function () {
     upcomingEvent(['description' => null]);
     mockDiscordEvents([sundaySquadEvent()]);
