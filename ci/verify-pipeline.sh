@@ -595,6 +595,45 @@ lint() {
           rc=1
         fi
       done
+
+      # How LHCI binds Chrome's debugging port, read the same way — through
+      # node, not grep. TOG-8177: the budgets job died mid-/admin with
+      # `Failed to fetch browser webSocket URL ... /json/version: HTTP Not
+      # Found`, a squatter answering HTTP on chrome-launcher's random ephemeral
+      # debugging port. A fixed port inside the runner's reserved block
+      # (ci/runner-ports.sh CI_CHROME_PORT, reclaimed before the server starts)
+      # closes that race; 0 is chrome-launcher's "pick a random port", which is
+      # where the crash came from. The getter reads CI_CHROME_PORT and falls
+      # back to 0 where the var is unset, so this probes both shapes: with the
+      # var set it must be the reserved port, and the fallback must stay 0
+      # rather than a literal that silently re-points the job.
+      local chrome_port
+      chrome_port=$(CI_CHROME_PORT=16165 node -e '
+        const path = require("path");
+        const config = require(path.resolve(process.argv[1]));
+        console.log((config.ci || {}).collect?.settings?.port ?? "absent");
+      ' "$budget_file" 2>&1) || chrome_port="unreadable: ${chrome_port}"
+      if [ "$chrome_port" = "16165" ]; then
+        pass "LHCI binds Chrome to the runner-reserved debugging port (\`CI_CHROME_PORT\`)"
+      else
+        fail "ci/lighthouserc.cjs does not bind Chrome to \`CI_CHROME_PORT\` (settings.port reads \`${chrome_port}\` with the var set). A random ephemeral debugging port is how a squatter 404s /json/version mid-run and takes the whole budgets job down with zero assertion results (TOG-8177). If the fixed port genuinely has to go, say which race replaces it and why in the commit, and update this check with it."
+        rc=1
+      fi
+      local chrome_port_fallback
+      # Unset the var for this probe: CI runners export it, and this checks the
+      # *fallback* shape, not the configured one. Without `env -u` a
+      # runner-populated shell fails this check on a correct config (TOG-10673).
+      chrome_port_fallback=$(env -u CI_CHROME_PORT node -e '
+        const path = require("path");
+        const config = require(path.resolve(process.argv[1]));
+        console.log((config.ci || {}).collect?.settings?.port ?? "absent");
+      ' "$budget_file" 2>&1) || chrome_port_fallback="unreadable: ${chrome_port_fallback}"
+      if [ "$chrome_port_fallback" = "0" ]; then
+        pass "LHCI debugging-port fallback stays random-port (0) where \`CI_CHROME_PORT\` is unset"
+      else
+        fail "ci/lighthouserc.cjs debugging-port fallback reads \`${chrome_port_fallback}\`, not \`0\`. Where CI_CHROME_PORT is unset (notably \`static\`, which loads this file for --lint) the port must stay chrome-launcher's random-port default; a literal there would point every environment without the var at one fixed port."
+        rc=1
+      fi
     fi
   fi
 
