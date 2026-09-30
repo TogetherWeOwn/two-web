@@ -87,3 +87,46 @@ it('rejects a window that closes before it opens', function () {
 
     expect(FeaturedContent::query()->where('title', 'Backwards window')->count())->toBe(0);
 });
+
+it('rejects an image url with no alt text instead of saving a silent image', function () {
+    livewire(CreateFeaturedContent::class)
+        ->fillForm([
+            'title' => 'Summer social photos',
+            'image_url' => 'https://example.org/photo.jpg',
+        ])
+        ->call('create')
+        ->assertHasFormErrors(['image_alt']);
+
+    expect(FeaturedContent::query()->where('title', 'Summer social photos')->count())->toBe(0);
+});
+
+it('saves the alt text alongside the image url', function () {
+    livewire(CreateFeaturedContent::class)
+        ->fillForm([
+            'title' => 'Summer social photos',
+            'image_url' => 'https://example.org/photo.jpg',
+            'image_alt' => 'Members playing board games at the summer social',
+        ])
+        ->call('create')
+        ->assertHasNoFormErrors();
+
+    expect(FeaturedContent::query()->where('title', 'Summer social photos')->sole()->image_alt)
+        ->toBe('Members playing board games at the summer social');
+});
+
+it('previews the typed alt text and falls back to the headline while typing', function () {
+    livewire(CreateFeaturedContent::class)
+        ->fillForm([
+            'title' => 'Summer social photos',
+            'image_url' => 'https://example.org/photo.jpg',
+            'image_alt' => 'Members playing board games at the summer social',
+        ])
+        ->assertSee('alt="Members playing board games at the summer social"', escape: false);
+
+    livewire(CreateFeaturedContent::class)
+        ->fillForm([
+            'title' => 'Summer social photos',
+            'image_url' => 'https://example.org/photo.jpg',
+        ])
+        ->assertSee('alt="Summer social photos"', escape: false);
+});

@@ -9,8 +9,11 @@
 <div class="flex flex-col gap-2">
     @guest
         {{-- Not a disabled RSVP button. A guest's next action is to log in, and
-             saying so is shorter than explaining why the button is grey. --}}
-        <a href="{{ route('login') }}"
+             saying so is shorter than explaining why the button is grey.
+             `?next=` returns them to this page after Discord (TOG-9254);
+             `$returnTo` is the page path captured at render, null for a bare
+             link. --}}
+        <a href="{{ route('login', $returnTo ? ['next' => $returnTo] : []) }}"
            class="inline-flex items-center justify-center gap-2 min-h-11 px-5 rounded-md
                   bg-transparent text-ink border border-line-strong
                   hover:bg-raised hover:border-ink-muted active:bg-surface
@@ -28,6 +31,19 @@
                       bg-raised text-ink-muted border border-line self-start"
                role="status" data-testid="rsvp-closed">
                 {{ $this->event->status === \App\Enums\EventStatus::Cancelled ? 'Cancelled' : ($this->event->status === \App\Enums\EventStatus::Draft ? 'Not published yet' : 'This one has been and gone') }}
+            </p>
+
+        @elseif ($paused && ! $going && ! $waitlisted)
+            {{-- A moderator pause (TOG-8725): still published, still visible,
+                 taking no new answers. Only members with no stake see this —
+                 a holder keeps their confirmation and withdraw below, someone
+                 in line keeps their place and the way out of it. role="status":
+                 a pause landing while the member watches re-renders here, and
+                 that change has to be announced (TOG-7332). --}}
+            <p class="inline-flex items-center gap-1.5 rounded-sm px-2 py-0.5 text-xs font-medium
+                      bg-raised text-ink-muted border border-line self-start"
+               role="status" data-testid="rsvp-paused">
+                RSVPs are paused for this event — check back soon.
             </p>
 
         @elseif ($full || $atCapacity)
@@ -66,6 +82,20 @@
             </button>
 
         @elseif ($waitlisted)
+            @if ($claimLost)
+                {{-- TOG-8820: the member clicked "a seat opened up" and the seat
+                     went to somebody else first. Their place never moved, so the
+                     line view stays — with an honest note above it, not the full
+                     refusal. role="status": this lands after a click, so the swap
+                     announces politely (TOG-7332). --}}
+                <p class="flex items-start gap-1.5 text-sm text-ink" role="status" data-testid="waitlist-claim-lost">
+                    <span>
+                        <span class="font-medium">Someone just took that seat.</span>
+                        You're still in line — your place below hasn't moved.
+                    </span>
+                </p>
+            @endif
+
             {{-- tabindex="-1": same swap as the confirmation — joining replaces
                  the button with this, so keyboard focus moves here (TOG-6956).
                  The place is named in words and digits, never colour alone. --}}
@@ -80,9 +110,12 @@
             </p>
 
             @if ($seatOpenForWaitlist)
-                {{-- A seat freed while in line. The waitlist never auto-promotes
-                     — that claim would be its own race — so the member takes it
-                     through the same locked write as everybody else. --}}
+                {{-- A seat reads free while the member is still in line — only
+                     possible mid-flight before their promotion renders, or when
+                     a promotion never fired. A withdraw (or a raised cap) deals
+                     freed seats to the head of the line in the same locked
+                     write (TOG-8394); this control takes the seat through the
+                     same locked write for whatever gap remains. --}}
                 <button type="button"
                         wire:click="rsvp('{{ \App\Enums\RsvpStatus::Going->value }}')"
                         wire:loading.attr="disabled"
@@ -124,6 +157,10 @@
                 <span class="font-medium">You're in</span>
             </p>
 
+            {{-- Same loading contract as the "I'm in" button below: the box is
+                 reserved up front (CLS budget 0.1), the control disables while
+                 the answer is in flight, and the spinner + copy swap in with
+                 aria-busy so the wait is announced (TOG-5416). --}}
             <button type="button"
                     wire:click="withdraw"
                     wire:loading.attr="disabled"
@@ -175,9 +212,30 @@
             <p class="text-xs text-ink-muted" role="status" data-testid="rsvp-syncing">
                 Saved. Syncing to Discord.
             </p>
+        @elseif ($syncFailed && $going)
+            {{-- TOG-6990: the third state. The bot refused the mirror terminally,
+                 so this will not retry until somebody changes something — but
+                 the answer is saved and counts. role="status", not alert: there
+                 is nothing to act on and nobody did anything wrong. --}}
+            <p class="text-xs text-ink-muted" role="status" data-testid="rsvp-sync-failed">
+                Saved. Discord sync didn't go through — your spot is still held.
+            </p>
         @elseif ($going)
             <p class="text-xs text-ink-muted" role="status" data-testid="rsvp-synced">
                 Synced to Discord.
+            </p>
+        @endif
+
+        @if ($rateLimitedMessage !== null)
+            {{-- TOG-7976: the throttle wait. role="status", not alert: a throttle is
+                 temporary, not a failure that interrupts (CM spec in TOG-7928
+                 `copy` doc). Beside the control with the button enabled, like
+                 rsvp-failed below — never disabling or replacing the control. --}}
+            <p class="flex items-start gap-1.5 text-sm text-ink-muted" role="status" data-testid="rsvp-rate-limited">
+                <svg class="size-4 shrink-0 mt-0.5" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+                    <path d="M8 1.5a6.5 6.5 0 1 0 0 13 6.5 6.5 0 0 0 0-13Zm.75 3.75a.75.75 0 0 0-1.5 0v3.5a.75.75 0 0 0 1.5 0V5.25ZM8 11.5a.9.9 0 1 0 0-1.8.9.9 0 0 0 0 1.8Z"/>
+                </svg>
+                <span>{{ $rateLimitedMessage }}</span>
             </p>
         @endif
 
@@ -208,7 +266,7 @@
             </svg>
             <span>
                 <span class="font-medium text-ink">Your session expired.</span>
-                <a href="{{ route('login') }}" class="font-semibold underline underline-offset-4 hover:text-ink">Log in with Discord</a>
+                <a href="{{ route('login', $returnTo ? ['next' => $returnTo] : []) }}" class="font-semibold underline underline-offset-4 hover:text-ink">Log in with Discord</a>
                 and try again.
             </span>
         </p>
@@ -243,6 +301,28 @@
                 if (going) {
                     going.focus({ preventScroll: true });
                 }
+            });
+
+            // TOG-9354: the round trip above never reaches the component when
+            // the session died underneath the page (SESSION_LIFETIME). The
+            // POST dies first in ValidateCsrfToken — the page holds a stale
+            // data-csrf token against a fresh session — answering 419, and
+            // Livewire's handlePageExpiry answers that with a native
+            // confirm(), so the branded session-expired banner below stays
+            // unreachable. Intercept the 419 before Livewire's default:
+            // prevent the confirm and reload into the guest render, which
+            // carries the same login link with the ?next= return. 419-only
+            // on purpose: any other failure still gets Livewire's failure
+            // modal. No loop: the reloaded guest page issues no POST.
+            $wire.$hook('request', ({ fail }) => {
+                fail(({ status, preventDefault }) => {
+                    if (status !== 419) {
+                        return;
+                    }
+
+                    preventDefault();
+                    window.location.reload();
+                });
             });
         </script>
     @endscript

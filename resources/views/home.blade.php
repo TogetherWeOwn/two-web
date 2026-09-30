@@ -86,7 +86,8 @@
                                              reserves the box (no CLS) the same way the taste concept
                                              does; `object-cover` keeps the crop honest. Lazy: this
                                              sits beside/below the hero, not in the LCP path. --}}
-                                        <img src="{{ $item->image_url }}" alt="" loading="lazy" decoding="async" class="mt-5 aspect-video w-full border border-ledger-rule object-cover">
+                                        {{-- TOG-7473: referrerpolicy keeps the third-party image host from learning which page a visitor is on. --}}
+                                        <img src="{{ $item->image_url }}" alt="{{ $item->imageAltText() }}" loading="lazy" decoding="async" referrerpolicy="no-referrer" class="mt-5 aspect-video w-full border border-ledger-rule object-cover">
                                     @endif
                                 </article>
                             @endforeach
@@ -230,7 +231,9 @@
                 <p>Together We Own · adult gaming community · founded 1998</p>
                 <div class="flex flex-wrap items-center gap-4 md:gap-6">
                     <a href="{{ route('about') }}" class="font-semibold underline underline-offset-4 hover:text-brand">About</a>
+                    <a href="{{ route('faq') }}" class="font-semibold underline underline-offset-4 hover:text-brand">FAQ</a>
                     <a href="{{ route('rules') }}" class="font-semibold underline underline-offset-4 hover:text-brand">House rules</a>
+                    <a href="{{ route('privacy') }}" class="font-semibold underline underline-offset-4 hover:text-brand">Privacy</a>
                     @auth
                         <a href="{{ route('profile') }}" class="font-semibold underline underline-offset-4 hover:text-brand">Your profile</a>
                     @else

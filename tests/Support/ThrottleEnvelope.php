@@ -5,8 +5,8 @@ use Illuminate\Testing\TestResponse;
 /**
  * The one shared 429 assertion for every throttled route (TOG-6788).
  *
- * Whatever fired the throttle — the `throttle:10,1` / `throttle:12,1` route
- * middleware on the auth callbacks and RSVP writes, the per-member
+ * Whatever fired the throttle — the `throttle:10,1` route middleware on the
+ * auth callbacks, the `rsvp-writes` named limiter on the RSVP writes, the per-member
  * RsvpRateLimit limiter, or the machine-ingress limiters — a JSON caller must
  * see the same envelope: 429, the `{reason, message, retry_after}` body with
  * retry info, the `Retry-After` header, and no stack trace.

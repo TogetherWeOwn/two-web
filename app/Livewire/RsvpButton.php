@@ -11,6 +11,7 @@ use App\Models\Rsvp;
 use App\Models\User;
 use App\Services\EventService;
 use App\Support\RsvpRateLimit;
+use App\Support\SafeRedirect;
 use Illuminate\Http\Exceptions\ThrottleRequestsException;
 use Illuminate\View\View;
 use Livewire\Attributes\Locked;
@@ -40,6 +41,11 @@ use Throwable;
  *    and the session died underneath it. Saying "try once more" would be a lie
  *    — no retry can succeed without logging in first — so the click names the
  *    expired session and points at the way back in instead.
+ *
+ *  - **A terminal Discord refusal is a mirror failure, never an RSVP failure.**
+ *    The bot answered no (`discord_sync_failed_at` is stamped), so "Syncing…"
+ *    would be a lie — nothing is on its way — but so would the error banner:
+ *    the answer is committed and counts. The member is told exactly that.
  */
 class RsvpButton extends Component
 {
@@ -58,6 +64,18 @@ class RsvpButton extends Component
     public bool $full = false;
 
     /**
+     * Set when the shared RSVP write budget ran out. The member waits, then
+     * retries — the button stays enabled and the wait is announced politely.
+     */
+    public bool $rateLimited = false;
+
+    /**
+     * Seconds from the limiter's Retry-After, for the announced wait. Null when
+     * the header was missing or unparseable, which selects the fallback copy.
+     */
+    public ?int $retryAfterSeconds = null;
+
+    /**
      * Set when the click arrived with no signed-in member behind it — the page
      * was rendered authenticated and the session died underneath it
      * (SESSION_LIFETIME). Distinct from $failed on purpose: the next action is
@@ -65,9 +83,30 @@ class RsvpButton extends Component
      */
     public bool $sessionExpired = false;
 
+    /**
+     * Where the guest login links send the member back to after Discord.
+     *
+     * Captured once in mount, when the real page request is in hand. A
+     * Livewire re-render answers a `/livewire/update` request, so reading the
+     * path in the blade would point `?next=` at the update endpoint after the
+     * first morph — a persisted prop keeps the page path across updates, and
+     * keeps the expired-session re-render pointing at the page too. Null when
+     * the path fails the open-redirect guard, and the links stay bare.
+     */
+    public ?string $returnTo = null;
+
+    /**
+     * Set when a waitlisted member clicked "a seat opened up" and the seat
+     * went to somebody else first (TOG-8820). Their place in line never
+     * moved, so the full refusal must not bury it: the waitlist view stays,
+     * with an honest note above it.
+     */
+    public bool $claimLost = false;
+
     public function mount(Event $event): void
     {
         $this->event = $event;
+        $this->returnTo = SafeRedirect::safe(request()->getPathInfo());
     }
 
     public function rsvp(string $status, EventService $events): void
@@ -92,11 +131,19 @@ class RsvpButton extends Component
         // a successful RSVP is its own bug.
         $this->failed = false;
         $this->full = false;
+        $this->rateLimited = false;
+        $this->retryAfterSeconds = null;
         $this->sessionExpired = false;
+        $this->claimLost = false;
 
         try {
             RsvpRateLimit::hit($user);
             $events->rsvp($this->event, $user, $answer);
+            // TOG-6990: a re-arming write clears the terminal stamp on the
+            // service's own row instance. Re-read so this render sees the
+            // cleared stamp — otherwise the banner shows "failed" for an
+            // attempt that is already back to "syncing".
+            $this->event = $this->event->fresh() ?? $this->event;
             // TOG-6956: a successful write swaps the focused button for the
             // confirmation, which drops keyboard focus to <body>. The
             // self-dispatch fires after Livewire has morphed the new state in,
@@ -118,16 +165,27 @@ class RsvpButton extends Component
                 },
             );
         } catch (EventAtCapacityException) {
-            $this->full = true;
+            // TOG-8820: a waitlisted member who clicked "a seat opened up"
+            // and lost the race is still in line — nothing was written for
+            // them. Setting $full would bury their place behind the full
+            // refusal and offer "join the waitlist" as if they had none.
+            // Keep the line view with an honest note instead.
+            if ($this->currentRsvp()?->status === RsvpStatus::Waitlisted) {
+                $this->claimLost = true;
+            } else {
+                $this->full = true;
+            }
         } catch (EventNotOpenException) {
-            // Cancelled or already over while they were looking at it. Re-rendering
-            // against the fresh row is the honest answer; the reason shows there.
+            // Cancelled, already over, or paused while they were looking at
+            // it. Re-rendering against the fresh row is the honest answer;
+            // the reason shows there.
             $this->event = $this->event->fresh() ?? $this->event;
         } catch (ThrottleRequestsException $exception) {
-            // Unlike an internal write failure, this is an intentional HTTP refusal.
-            // Let Livewire return the 429 and its Retry-After rather than rendering a
-            // generic "try once more" message that invites an immediately doomed retry.
-            throw $exception;
+            // TOG-7976: a thrown 429 never re-renders — Livewire's JS only morphs
+            // the DOM on response.ok and shows its failure modal otherwise, so the
+            // member hears nothing. Catch the throttle and render the announced
+            // wait in the normal 200 morph instead, with the button enabled.
+            $this->flagRateLimited($exception);
         } catch (Throwable) {
             // Deliberately not surfaced. Whatever the reason is — the queue, the
             // database, the bot's client — it is ours, and the member's next action
@@ -147,7 +205,10 @@ class RsvpButton extends Component
         }
 
         $this->failed = false;
+        $this->rateLimited = false;
+        $this->retryAfterSeconds = null;
         $this->sessionExpired = false;
+        $this->claimLost = false;
 
         try {
             RsvpRateLimit::hit($user);
@@ -163,10 +224,49 @@ class RsvpButton extends Component
                 viewerState: 'none',
             );
         } catch (ThrottleRequestsException $exception) {
-            throw $exception;
+            // TOG-7976: same announced wait as the join path — copy is neutral
+            // ("Nothing changed") so one node covers both.
+            $this->flagRateLimited($exception);
         } catch (Throwable) {
             $this->failed = true;
         }
+    }
+
+    /**
+     * The announced throttle copy (TOG-7976, CM-frozen in TOG-7928 `copy` doc —
+     * do not reword without CM sign-off). Null unless the last attempt hit the
+     * shared write budget. {N} is the ceiling of Retry-After, min 1, so the
+     * member is never told to wait 0 seconds; an unusable header selects the
+     * "in a moment" fallback instead of a number.
+     */
+    public function rateLimitedMessage(): ?string
+    {
+        if (! $this->rateLimited) {
+            return null;
+        }
+
+        if ($this->retryAfterSeconds === null) {
+            return 'Slow down — try again in a moment. Nothing changed, just wait a bit.';
+        }
+
+        $seconds = $this->retryAfterSeconds === 1 ? '1 second' : "{$this->retryAfterSeconds} seconds";
+
+        return "Slow down — try again in {$seconds}. Nothing changed, just wait a moment.";
+    }
+
+    /**
+     * Record a throttled attempt as renderable state. The Retry-After header is
+     * the limiter's own value (RsvpRateLimit::hit throws with it set); anything
+     * missing, non-numeric or non-positive falls back to the headerless copy.
+     */
+    private function flagRateLimited(ThrottleRequestsException $exception): void
+    {
+        $raw = $exception->getHeaders()['Retry-After'] ?? null;
+
+        $seconds = is_numeric($raw) ? (int) ceil((float) $raw) : null;
+
+        $this->rateLimited = true;
+        $this->retryAfterSeconds = $seconds !== null && $seconds >= 1 ? $seconds : null;
     }
 
     public function render(): View
@@ -175,27 +275,61 @@ class RsvpButton extends Component
         $going = $rsvp?->status === RsvpStatus::Going;
         $waitlisted = $rsvp?->status === RsvpStatus::Waitlisted;
 
+        // The clock counts, not just the status: a recently finished event is
+        // still Published until the reconcile pass flips it to Past, and
+        // offering a button for it would be a lie the write path refuses.
+        $live = $this->event->status === EventStatus::Published && ! $this->event->hasEnded();
+
+        // A moderator pause (TOG-8725): still Published, still visible, taking
+        // no new answers. Kept separate from `open`: a paused event must keep
+        // withdraw controls for members who already answered — folding pause
+        // into `open` would trap them behind the closed banner with no way to
+        // stand down. The blade shows the paused copy only to members with no
+        // stake; holders keep their confirmation and withdraw, and the line
+        // keeps its places and the way out of them.
+        $paused = $live && ! $this->event->isRsvpOpen();
+
         return view('livewire.rsvp-button', [
             'rsvp' => $rsvp,
             'going' => $going,
             'waitlisted' => $waitlisted,
-            // The clock counts, not just the status: a recently finished event is
-            // still Published until the reconcile pass flips it to Past, and
-            // offering a button for it would be a lie the write path refuses.
-            'open' => $this->event->status === EventStatus::Published && ! $this->event->hasEnded(),
+            'open' => $live,
+            'paused' => $paused,
             // Somebody already holding a seat — or a place in line — is never
             // shown a full event: they are the reason it is full (or waiting
             // for one), and they must still be able to stand down or
             // leave the line. Trapping them at the refusal is the bug.
             'atCapacity' => ! $going && ! $waitlisted && $this->isAtCapacity(),
-            // A freed seat while in line: the waitlist does not auto-promote
-            // (that is a race of its own), so the member claims it themselves
-            // through the same locked write as everybody else.
-            'seatOpenForWaitlist' => $waitlisted && $this->event->status === EventStatus::Published && ! $this->event->hasEnded() && ! $this->isAtCapacity(),
+            // True only in the gap the auto-promote cannot cover: the row this
+            // render read says a seat is free while the member is still in
+            // line — a state that can only exist mid-flight (their promotion
+            // has not rendered yet) or when promotion was never reached. The
+            // write takes the seat through the same locked path as everybody
+            // else, first-come first-served against the line. Never while
+            // paused (TOG-8725): claiming is a new answer, and the write path
+            // refuses it — offering the button would be the lie `open` avoids.
+            'seatOpenForWaitlist' => $waitlisted && $this->event->status === EventStatus::Published && ! $this->event->hasEnded() && $this->event->isRsvpOpen() && ! $this->isAtCapacity(),
             // One-based place in line, only when it will be shown.
             'waitlistPosition' => $waitlisted ? $this->waitlistPosition() : null,
             // Committed here, not yet in Discord. A true state, not an error.
-            'syncing' => $rsvp !== null && $rsvp->synced_to_discord_at === null,
+            // A terminally-refused row is never "syncing": the bot answered no
+            // (TOG-6990), so that copy would be a lie. It reads as failed below.
+            'syncing' => $rsvp !== null && $rsvp->synced_to_discord_at === null
+                && $this->event->discord_sync_failed_at === null,
+            // The third state (TOG-6990): saved here, refused over there. The
+            // answer counts — this is never the error banner — but no retry is
+            // coming until somebody changes something, so it must not read as
+            // pending either.
+            'syncFailed' => $rsvp !== null && $rsvp->synced_to_discord_at === null
+                && $this->event->discord_sync_failed_at !== null,
+            // TOG-7976: the announced throttle wait, or null when the last
+            // attempt was not throttled. The blade node stays beside the
+            // control with the button enabled, like rsvp-failed.
+            'rateLimitedMessage' => $this->rateLimitedMessage(),
+            // TOG-9254: the guest links' return-to page, or null for bare
+            // links. Read from the persisted prop, never from the request —
+            // see $returnTo.
+            'returnTo' => $this->returnTo,
         ]);
     }
 

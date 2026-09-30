@@ -10,6 +10,18 @@
                :canonical="route('events.page', $event)"
                :shareDescription="$event->description ?: 'An event at Together We Own.'">
     <div class="mx-auto w-full max-w-3xl px-4 py-10 md:px-6 lg:px-8">
+        {{--
+            The expired-session notice (TOG-8560). A dead-session RSVP write
+            bounces through OAuth and lands back here via url.intended, with
+            `auth_error=expired` reflashed by the login callback — so this
+            page reads the same banner partial as home and profile, or the
+            sentence never renders.
+        --}}
+        @if (session('auth_error'))
+            <div class="mb-6">
+                @include('partials.auth-error')
+            </div>
+        @endif
         <a href="{{ route('events.index') }}"
            class="text-sm text-ink-muted hover:text-ink transition-colors duration-fast ease-out-quick">
             ← All events
@@ -53,8 +65,10 @@
                     @endif
 
                     {{-- Live count: re-reads the aggregate when RsvpButton
-                         broadcasts after a write (TOG-7966). --}}
-                    @livewire('going-count', ['event' => $event], key('going-count-'.$event->event_key))
+                         broadcasts after a write (TOG-7966). The spots-left
+                         signal rides the same live component so it never
+                         goes stale relative to the count beside it. --}}
+                    @livewire('going-count', ['event' => $event, 'showSpotsLeft' => true], key('going-count-'.$event->event_key))
                 </div>
             </div>
 
@@ -103,6 +117,27 @@
                           transition-colors duration-fast ease-out-quick">
                     Add to Google Calendar
                 </a>
+                {{--
+                    Copy-link (TOG-7262). The canonical event URL for guests and
+                    members alike — this page is public and the copied link is
+                    the shareable one, same rule as the share tags. `data-copy-link`
+                    is the contract with resources/js/event-copy-link.js, which
+                    listens at document level so a Livewire RSVP re-render cannot
+                    drop it. Same pattern as the member profile (TOG-6926), kept
+                    event-scoped so either page can change without touching the other.
+                --}}
+                <button type="button"
+                        data-copy-link="{{ route('events.page', $event) }}"
+                        data-testid="event-copy-link"
+                        class="inline-flex items-center justify-center gap-2 min-h-11 px-5 rounded-md
+                               bg-transparent text-ink border border-line-strong
+                               hover:bg-raised hover:border-ink-muted active:bg-surface
+                               transition-colors duration-fast ease-out-quick">
+                    <svg class="size-4 shrink-0" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" aria-hidden="true">
+                        <path d="M6.5 9.5a3 3 0 0 0 4.2 0l2-2a3 3 0 0 0-4.2-4.2l-1 1M9.5 6.5a3 3 0 0 0-4.2 0l-2 2a3 3 0 0 0 4.2 4.2l1-1"/>
+                    </svg>
+                    Copy link
+                </button>
             </div>
 
             {{-- Who's going: member display names for signed-in viewers only.
@@ -134,13 +169,15 @@
 
                 @guest
                     {{-- Not a disabled RSVP button. A guest's next action is to join,
-                         and the events index makes the same pitch the same way. --}}
+                         and the events index makes the same pitch the same way.
+                         `?next=` returns them to this event after the join
+                         journey (TOG-9254). --}}
                     <div data-testid="event-join-pitch">
                         <p class="max-w-prose text-sm text-ink-muted">
                             Game nights get posted here first. Join the Discord and you'll
                             see them before they land on this page.
                         </p>
-                        <a href="{{ route('join') }}"
+                        <a href="{{ route('join', ['next' => route('events.page', $event, false)]) }}"
                            data-testid="discord-join"
                            class="mt-4 inline-flex items-center justify-center gap-2 min-h-11 px-6 rounded-md
                                   bg-brand text-on-brand font-semibold
@@ -186,5 +223,76 @@
                 @endif
             </nav>
         @endif
+
+        {{-- Related events: the next step for a visitor who will not RSVP to
+             this one. Same game first, then the nearest other upcoming events,
+             at most 3 — see EventPageController::relatedEvents(). Hidden
+             entirely when there are no siblings: an empty "related" heading
+             with nothing under it is worse than nothing. Guests get the join
+             pitch with it, members already have the RSVP control above. --}}
+        @if ($relatedEvents->isNotEmpty())
+            <section class="mt-6 rounded-lg bg-surface border border-line p-5 md:p-8"
+                     aria-label="Related events"
+                     data-testid="event-related">
+                <h2 class="text-sm font-semibold text-ink">
+                    More events you might like
+                </h2>
+                <ul class="mt-3 space-y-3">
+                    @foreach ($relatedEvents as $relatedEvent)
+                        <li>
+                            <a href="{{ route('events.page', $relatedEvent) }}"
+                               data-testid="event-related-link"
+                               class="block rounded-lg border border-line bg-surface p-4
+                                      hover:bg-raised transition-colors duration-fast ease-out-quick">
+                                <span class="block truncate text-sm font-medium text-ink">{{ $relatedEvent->title }}</span>
+                                <span class="mt-0.5 block text-sm text-ink-muted">
+                                    <time datetime="{{ $relatedEvent->starts_at->toIso8601String() }}" class="u-numeric">
+                                        {{ $relatedEvent->startsAtLocal()->format('D j M, H:i') }}
+                                    </time>
+                                    @if ($relatedEvent->location)
+                                        <span aria-hidden="true"> · </span>{{ $relatedEvent->location }}
+                                    @endif
+                                </span>
+                            </a>
+                        </li>
+                    @endforeach
+                </ul>
+
+                @guest
+                    <p class="mt-4 max-w-prose text-sm text-ink-muted">
+                        These fill up fast for members. Join the Discord and you'll
+                        hear about the next one before it lands here.
+                    </p>
+                    <a href="{{ route('join', ['next' => route('events.page', $event, false)]) }}"
+                       data-testid="event-related-join"
+                       class="mt-4 inline-flex items-center justify-center gap-2 min-h-11 px-6 rounded-md
+                              bg-brand text-on-brand font-semibold
+                              hover:bg-brand-hover active:bg-brand-active
+                              transition-colors duration-fast ease-out-quick">
+                        Join the Discord
+                    </a>
+                @endguest
+            </section>
+        @endif
     </div>
+    {{--
+        Copy-link toast (TOG-7262). Lives in the page, outside any Livewire
+        component: an RSVP re-render morphs the article and would wipe a toast
+        inside it mid-announcement. Hidden until resources/js/event-copy-link.js
+        fills and reveals it; `role="status"` announces the confirmation
+        without stealing focus.
+    --}}
+    <div class="pointer-events-none fixed inset-x-0 bottom-6 z-50 flex justify-center px-4">
+        <p class="hidden max-w-md rounded-lg border border-line bg-online-quiet p-4 text-sm text-ink shadow-overlay"
+           role="status"
+           data-testid="event-copy-toast"></p>
+    </div>
+    {{--
+        Page script (TOG-7262). A second @vite is fine — the plugin emits tags
+        wherever the directive sits — and `type="module"` defers by default, so
+        this never blocks first paint. Kept off the layout on purpose: the global
+        bundle is pinned import-free (see AssetCompressionTest) and only event
+        pages should download this.
+    --}}
+    @vite('resources/js/event-copy-link.js')
 </x-layouts.app>

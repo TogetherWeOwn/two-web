@@ -43,6 +43,13 @@ class GoingCount extends Component
     public ?int $capacity;
 
     /**
+     * Whether to also render the "N of M spots left" / "Full" signal beside
+     * the count. Off by default: the calendar card only needs the count, and
+     * the extra signal is specific to the shareable event page (TOG-6924).
+     */
+    public bool $showSpotsLeft = false;
+
+    /**
      * What the last write did, from the dispatch that triggered the refresh:
      * `going`, `waitlisted`, `none`, `other`, or null before any write.
      */

@@ -8,6 +8,17 @@
                :canonical="route('profiles.show', $member)"
                :shareDescription="'A member of Together We Own.'">
     {{--
+        The expired-session notice (TOG-8560). DiscordLoginController::callback
+        reflashes `auth_error=expired` when a dead-session write bounced the
+        member through OAuth, and this page is the post-login landing — so it
+        reads the same banner partial as home, or the sentence never renders.
+    --}}
+    @if (session('auth_error'))
+        <div class="mx-auto max-w-6xl px-4 pt-8 md:px-6 lg:px-8">
+            @include('partials.auth-error')
+        </div>
+    @endif
+    {{--
         The post-join confirmation (TOG-6229). JoinController::callback redirects
         here with a `join_result` flash; this page is the only thing that renders
         after it, so if it does not read the flash the member — back from the
@@ -21,6 +32,17 @@
                role="{{ $joinSuccess ? 'status' : 'alert' }}"
                data-testid="join-result">
                 {{ __('join.result.'.session('join_result')) }}
+                @if (session('join_result') === 'already_member')
+                    {{-- TOG-7318: re-invite. One-click success lands on this
+                         page, so already_member members who left the server
+                         need the way back in here. Links the database-free
+                         /discord funnel (see join.blade.php for the reasoning). --}}
+                    <a href="{{ route('discord') }}"
+                       data-testid="reinvite-link"
+                       class="underline">
+                        {{ __('join.reinvite') }}
+                    </a>
+                @endif
             </p>
         </div>
     @endif

@@ -313,7 +313,11 @@ it('clears a previous failure once the retry works', function () {
         ->assertSee("You're in", false);
 });
 
-it('shares the HTTP RSVP allowance and returns Retry-After from a limited Livewire action', function () {
+it('announces the throttle wait when the shared write budget is spent', function () {
+    // TOG-7976: a throttled Livewire click used to rethrow the
+    // ThrottleRequestsException, so the member got Livewire's silent failure
+    // modal instead of words. The budget is still shared with the JSON routes
+    // (the HTTP 429 envelope below is unchanged); only the control now speaks.
     $this->freezeTime();
 
     for ($attempt = 0; $attempt < RsvpRateLimit::MAX_ATTEMPTS; $attempt++) {
@@ -324,18 +328,74 @@ it('shares the HTTP RSVP allowance and returns Retry-After from a limited Livewi
             ->assertSuccessful();
     }
 
-    Livewire::actingAs($this->member)
+    // The JSON route still refuses with the shared 429 envelope (TOG-6788).
+    assertThrottleEnvelope(
+        $this->actingAs($this->member)
+            ->putJson(route('events.rsvp.update', $this->event), [
+                'status' => RsvpStatus::Going->value,
+            ]),
+        RsvpRateLimit::DECAY_SECONDS,
+    );
+
+    // The member is going by now, so this is the withdraw path: the wait is
+    // announced politely beside a control that stays usable.
+    $html = Livewire::actingAs($this->member)
         ->test(RsvpButton::class, ['event' => $this->event])
         ->call('withdraw')
-        ->assertStatus(429)
-        ->assertHeader('Retry-After', RsvpRateLimit::DECAY_SECONDS);
+        ->assertStatus(200)
+        ->assertSeeHtml('data-testid="rsvp-rate-limited"')
+        ->assertSee('Slow down — try again in 60 seconds. Nothing changed, just wait a moment.', false)
+        // COMPONENTS.md §1.1: the control returns to default and stays usable.
+        ->assertSeeHtml('data-testid="rsvp-withdraw"')
+        ->html();
 
+    expect($html)->toContain('role="status"')->not->toContain('role="alert"');
+
+    // Nothing was withdrawn by the throttled click.
+    expect(Rsvp::query()->where('user_id', $this->member->id)->exists())->toBeTrue();
+
+    // Past the decay the same click works and the wait is gone.
     $this->travel(RsvpRateLimit::DECAY_SECONDS + 1)->seconds();
 
     Livewire::actingAs($this->member)
         ->test(RsvpButton::class, ['event' => $this->event])
         ->call('withdraw')
-        ->assertSee("I'm in", false);
+        ->assertSee("I'm in", false)
+        ->assertDontSeeHtml('data-testid="rsvp-rate-limited"');
+});
+
+it('announces the throttle wait on the join path without taking the button', function () {
+    // Same announced node for rsvp(): the copy is neutral ("Nothing changed")
+    // so one node covers both verbs.
+    for ($attempt = 0; $attempt < RsvpRateLimit::MAX_ATTEMPTS; $attempt++) {
+        RsvpRateLimit::hit($this->member);
+    }
+
+    $html = Livewire::actingAs($this->member)
+        ->test(RsvpButton::class, ['event' => $this->event])
+        ->call('rsvp', RsvpStatus::Going->value)
+        ->assertStatus(200)
+        ->assertSeeHtml('data-testid="rsvp-rate-limited"')
+        ->assertSee('Slow down — try again in', false)
+        ->assertSee('Nothing changed, just wait a moment.', false)
+        ->assertSeeHtml('data-testid="rsvp-going"')
+        ->assertDontSee("You're in", false)
+        ->html();
+
+    expect($html)->toContain('role="status"')->not->toContain('role="alert"');
+    expect(Rsvp::query()->where('user_id', $this->member->id)->exists())->toBeFalse();
+});
+
+it('names one second and falls back when the wait has no number', function () {
+    // {N} is the ceiling of Retry-After, min 1; an unusable header selects the
+    // "in a moment" fallback instead of a number (TOG-7928 `copy` doc).
+    Livewire::actingAs($this->member)
+        ->test(RsvpButton::class, ['event' => $this->event])
+        ->set('rateLimited', true)
+        ->set('retryAfterSeconds', 1)
+        ->assertSee('Slow down — try again in 1 second. Nothing changed, just wait a moment.', false)
+        ->set('retryAfterSeconds', null)
+        ->assertSee('Slow down — try again in a moment. Nothing changed, just wait a bit.', false);
 });
 
 it('announces the closed and full states politely, not as alerts', function () {
@@ -438,6 +498,53 @@ it('announces the expired session as an alert, because it interrupted what they 
 });
 
 /* ---------------------------------------------------------------------------
+   Expired-session 419 interceptor (TOG-9354). The sessionExpired branch above
+   only runs when the round trip reaches the component — but a dead session
+   419s in ValidateCsrfToken first (stale data-csrf against a fresh session),
+   so Livewire's handlePageExpiry answers with a native confirm() and the
+   banner stays unreachable. The blade intercepts the 419 per-component and
+   reloads into the guest render, which carries the same login link with the
+   ?next= return. Pinned as shipped markup (like DeferredPrebootGuardTest):
+   the browser behaviour itself is Dusk's ground in EventsRsvpTest.
+   --------------------------------------------------------------------------- */
+
+it('ships the expired-session 419 interceptor on the events page', function () {
+    $html = (string) $this->actingAs($this->member)
+        ->get(route('events.index'))
+        ->assertOk()
+        ->getContent();
+
+    // Non-vacuous: the signed-in member is offered the control the hook guards.
+    expect($html)->toContain('data-testid="rsvp-going"');
+
+    // The @script block travels inside the wire:effects JSON attribute, which
+    // is HTML-escaped — quotes render as &#039;, `>` as `&gt;` — so the hook
+    // name is pinned in its escaped form, not the blade source form.
+    expect($html)->toContain('$wire.$hook(')
+        ->and($html)->toContain('&#039;request&#039;')
+        ->and($html)->toContain('status !== 419')
+        ->and($html)->toContain('preventDefault()')
+        ->and($html)->toContain('window.location.reload()');
+});
+
+it('scopes the interceptor to 419s so other failures keep the failure modal', function () {
+    $html = (string) $this->actingAs($this->member)
+        ->get(route('events.index'))
+        ->assertOk()
+        ->getContent();
+
+    $guard = strpos($html, 'status !== 419');
+    $prevent = strpos($html, 'preventDefault()');
+
+    expect($guard)->not->toBeFalse('interceptor 419 guard missing from events page')
+        ->and($prevent)->not->toBeFalse('interceptor preventDefault missing from events page');
+
+    // The early return stands before the prevention: a non-419 failure never
+    // reaches preventDefault and keeps Livewire's failure modal.
+    expect($prevent)->toBeGreaterThan($guard);
+});
+
+/* ---------------------------------------------------------------------------
    The loading state. It is a real requirement — "an honest loading state" — and
    in Livewire it is `wire:loading` markup, which is asserted as markup.
    --------------------------------------------------------------------------- */
@@ -488,10 +595,15 @@ it('gives the withdraw control the same in-flight treatment as the RSVP', functi
         ->test(RsvpButton::class, ['event' => $this->event])
         ->html();
 
+    // The wait copy itself, hidden up front (TOG-6351) and busy while shown.
+    // Not a bare `aria-busy` check: the button's static `aria-busy="false"`
+    // would pass that without any loading copy at all. Main landed this
+    // contract first as "Removing…"; this slice's duplicate spinner and its
+    // separate copy are gone, and this test pins the contract that survived.
     expect($html)
         ->toContain('wire:target="withdraw"')
-        ->toContain('Removing…')
-        ->toContain('aria-busy');
+        ->toContain('<span wire:loading wire:target="withdraw" aria-busy="true" style="display: none">Removing…</span>')
+        ->toContain("Can't make it");
 });
 
 /* ---------------------------------------------------------------------------

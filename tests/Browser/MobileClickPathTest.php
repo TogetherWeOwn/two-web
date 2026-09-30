@@ -126,8 +126,13 @@ test('the 360px click-path: join, events, RSVP, profile', function () {
         // 3. Answer, and prove the answer survived the round trip.
         $browser->loginAs($member)
             ->visit('/events')
-            ->waitFor('[data-testid="rsvp-going"]')
-            ->assertVisible('[data-testid="rsvp-going"]')
+            ->waitFor('[data-testid="rsvp-going"]');
+
+        // The button renders before the deferred runtime binds it — click
+        // before boot and the tap lands in the unbound window (TOG-7927).
+        waitForLivewireBoot($browser);
+
+        $browser->assertVisible('[data-testid="rsvp-going"]')
             ->click('[data-testid="rsvp-going"]')
             ->waitFor('[data-testid="rsvp-confirmed"]')
             ->assertSeeIn('[data-testid="rsvp-confirmed"]', "You're in")

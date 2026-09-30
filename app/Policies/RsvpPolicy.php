@@ -23,6 +23,23 @@ use App\Models\User;
  */
 class RsvpPolicy
 {
+    /**
+     * The moderator roster on the event admin page (EventResource's RSVP
+     * relation manager) reads through here. Moderators see every answer;
+     * members never reach the panel at all — its own gate turns them away —
+     * so this is moderator-only rather than member-scoped like the answering
+     * rules below.
+     */
+    public function viewAny(User $user): bool
+    {
+        return $user->is_moderator === true;
+    }
+
+    public function view(User $user, Rsvp $rsvp): bool
+    {
+        return $user->is_moderator === true;
+    }
+
     public function create(User $user, Event $event, User $subject): bool
     {
         if (! $user->is($subject)) {
@@ -32,8 +49,11 @@ class RsvpPolicy
         // A draft is not visible and a cancelled event is not happening. Neither is
         // something to say yes to. The clock counts too: reconcile flips finished
         // rows to Past every ~10 min, so a recently finished event is still
-        // Published — and the page already hides its RSVP button (TOG-7273).
-        return $event->status === EventStatus::Published && ! $event->hasEnded();
+        // Published — and the page already hides its RSVP button (TOG-7273). And
+        // a moderator pause (TOG-8725) closes the gate while leaving the event
+        // visible: the service repeats this check on the locked row (409) for
+        // callers that reach it past here.
+        return $event->status === EventStatus::Published && ! $event->hasEnded() && $event->isRsvpOpen();
     }
 
     public function update(User $user, Rsvp $rsvp): bool

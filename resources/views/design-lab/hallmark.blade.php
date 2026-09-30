@@ -114,7 +114,8 @@
                                     <p>{{ $item->body }}</p>
                                 @endif
                                 @if ($item->image_url)
-                                    <img src="{{ $item->image_url }}" alt="" loading="lazy" decoding="async">
+                                    {{-- TOG-7473: referrerpolicy keeps the third-party image host from learning which page a visitor is on. --}}
+                                    <img src="{{ $item->image_url }}" alt="{{ $item->imageAltText() }}" loading="lazy" decoding="async" referrerpolicy="no-referrer">
                                 @endif
                             </article>
                         @endforeach

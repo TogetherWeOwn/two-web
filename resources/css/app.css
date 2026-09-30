@@ -67,6 +67,59 @@
     }
 }
 
+/* Privacy policy leaf (TOG-8609). The policy body is Markdown rendered to HTML
+   by PrivacyController, so its headings/lists/code have no Blade classes.
+   Scoped to .policy-prose: the layout shell and homepage keep their own
+   typography, and a future Markdown page gets its styles by opting into the
+   same class. Type steps come from the vendored scale (two.css) — h2 reads as
+   h3, h3 as h4 — and no hex/rem/px literal lives here, per the system rules. */
+.policy-prose {
+    color: var(--color-ink-muted);
+}
+
+.policy-prose h2 {
+    color: var(--color-ink);
+    font-size: var(--text-2xl);
+    line-height: var(--text-2xl--line-height);
+    letter-spacing: var(--text-2xl--letter-spacing);
+    font-weight: 700;
+    margin-top: calc(var(--spacing) * 8);
+}
+
+.policy-prose h2:first-child {
+    margin-top: 0;
+}
+
+.policy-prose h3 {
+    color: var(--color-ink);
+    font-size: var(--text-xl);
+    line-height: var(--text-xl--line-height);
+    font-weight: 600;
+    margin-top: calc(var(--spacing) * 6);
+}
+
+.policy-prose p,
+.policy-prose ul {
+    margin-top: calc(var(--spacing) * 4);
+}
+
+.policy-prose ul {
+    list-style: disc;
+    padding-left: calc(var(--spacing) * 6);
+}
+
+.policy-prose li + li {
+    margin-top: calc(var(--spacing) * 2);
+}
+
+.policy-prose strong {
+    color: var(--color-ink);
+}
+
+.policy-prose code {
+    color: var(--color-ink);
+}
+
 @source '../**/*.blade.php';
 
 /* Blade views inside vendor/ and the compiled-view cache are gitignored, so
@@ -74,3 +127,48 @@
    the paginator and any packaged Blade component render unstyled. */
 @source '../../vendor/laravel/framework/src/Illuminate/Pagination/resources/views/*.blade.php';
 @source '../../storage/framework/views/*.php';
+
+/* TOG-6932: the public focus pass. The vendored two.css focus treatment is
+   correct on the dark system it was designed for — a near-white ring at
+   17.5:1 on canvas — but the homepage renders on ledger paper, where the same
+   ring measures 1.05:1 and is invisible (WCAG 2.4.13 needs 3:1 against
+   adjacent colours). This layer overrides it per scheme with each scheme's
+   own ink, which two-design's contrast gate already pins at 15.2:1
+   (ledger) and 14.5:1 (taste) on its paper.
+
+   Lives here, not in two.css: that file is vendored from two-design and
+   digest-pinned by tests/Unit/VendoredTokensTest.php. A dark-ground page keeps
+   the vendored ring untouched. */
+:where(.bg-ledger-paper, .bg-taste-paper) :where(a, button, input, select, textarea, summary, [tabindex]):focus-visible {
+    outline-color: var(--color-ledger-ink);
+}
+
+.bg-taste-paper :where(a, button, input, select, textarea, summary, [tabindex]):focus-visible {
+    outline-color: var(--color-taste-ink);
+}
+
+/* The skip link. `sr-only focus:not-sr-only` reveals it on keyboard focus,
+   but revealed as bare text on the page ground it is a 1.4:1 smear on ledger
+   paper; nobody can read the control they just found. This makes the revealed
+   state an opaque pill on the light schemes only: canvas fill, near-white
+   text (16.7:1 on the fill), and the fill itself at 16.6:1 on ledger paper /
+   17.4:1 on taste paper, so the pill reads as one control. The outline sits
+   in the 2px offset gap on the paper (15.2:1 ledger, 14.5:1 taste). Scoped to
+   the light schemes on purpose: on a dark page the canvas fill would equal
+   the ground and the ledger outline would fall to ~1.1:1, replacing the
+   vendored 17.5:1 ring — dark pages keep the vendored ring untouched.
+   `position: relative` makes the `z-index` take effect above the hero. */
+:where(.bg-ledger-paper, .bg-taste-paper) a[href='#main']:focus-visible {
+    background-color: var(--color-canvas);
+    color: var(--color-ink);
+    outline: 2px solid var(--color-ledger-ink);
+    outline-offset: 2px;
+    border-radius: var(--radius-sm);
+    padding: 0.5rem 1rem;
+    position: relative;
+    z-index: 50;
+}
+
+.bg-taste-paper a[href='#main']:focus-visible {
+    outline-color: var(--color-taste-ink);
+}

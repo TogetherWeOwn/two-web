@@ -111,12 +111,12 @@ AGGREGATE="tests"
 # then does not depend on the aggregate's guard *staying* correct through future
 # edits. The cost is that a new job is not required until someone adds it here,
 # which is why check 7 below warns about exactly that.
-REQUIRED_CHECKS=(tests static pest dusk budgets gitleaks)
+REQUIRED_CHECKS=(tests static pest dusk budgets deps-audit gitleaks)
 
 # Every check run a pull request should produce. A check that never reports is not
 # a pass — GitHub blocks on a missing required context and this script used to read
 # an empty result as green, which is the same bug one level up.
-EXPECTED_CHECKS=(static pest dusk budgets tests gitleaks)
+EXPECTED_CHECKS=(static pest dusk budgets deps-audit tests gitleaks)
 
 # Each case: <slug>|<expected failing job>|<expected aggregate state>|<what it proves>
 #
@@ -160,6 +160,7 @@ CASES=(
   "slowserver|budgets|FAILURE|a three-second server response is rejected"
   "lcp|budgets|FAILURE|a client-side LCP breach is rejected"
   "gate|static|NOT_SUCCESS|a pull request that disarms the merge gate is rejected"
+  "audit|deps-audit|FAILURE|a dependency with a high advisory is rejected"
   "secret|gitleaks|SUCCESS|a committed credential is rejected"
 )
 
@@ -169,7 +170,7 @@ pass() { printf '\033[32mPASS: %s\033[0m\n' "$*"; }
 
 # --- static checks ----------------------------------------------------------
 # Everything here is about one failure mode: the gate reports a result that is not
-# the pipeline's result. Opening ten pull requests proves it too, but only after
+# the pipeline's result. Opening eleven pull requests proves it too, but only after
 # the org, the repo and the protection rules exist, and only in about forty
 # minutes. These take no network and half a second, so there is no excuse.
 #
@@ -422,11 +423,11 @@ lint() {
   #    every job in the pipeline. Each entry below must be present, at `error`, at
   #    exactly this number.
   #
-  #    LCP and CLS are the CEO's, in writing. Lowering one is their decision, and
+  #    LCP and CLS are the maintainers', in writing. Lowering one is their decision, and
   #    then it is changed here too, in the same commit that says so — that second
   #    edit is the point, not an obstacle.
   #
-  #    `server-response-time` is not a CEO budget and is not optional either: it is
+  #    `server-response-time` is not a maintainers' budget and is not optional either: it is
   #    the only thing in the pipeline that sees a slow server. Lighthouse runs with
   #    `throttlingMethod: 'simulate'`, and Lantern models one server response time
   #    per origin — the median over every request to it — so on a page that also
@@ -480,7 +481,7 @@ lint() {
     # load-bearing rather than decoration: that same file defaults the option to
     # `'optimistic'`, so deleting it is best-of-3 by another route.
     # Read through `assertMatrix` as well as a plain `assertions` block, because
-    # the budgets are now split by surface: the public pages keep the CEO's 2.0s
+    # the budgets are now split by surface: the public pages keep the maintainers' 2.0s
     # LCP and /admin has its own, looser ceiling (see ci/lighthouserc.cjs for why).
     #
     # What is checked here is the budget that applies to the PUBLIC pages, which is
@@ -814,7 +815,8 @@ print("trivialAllowlist=%s" % ",".join(trivial))
         "resources/css/app.css|76800|15360" \
         "resources/css/filament/admin/theme.css|375000|38000" \
         "resources/css/hallmark.css|15360|4096" \
-        "resources/js/app.js|5120|2048"; do
+        "resources/js/app.js|5120|2048" \
+        "resources/js/event-copy-link.js|4096|2048"; do
         if grep -qxF -- "$bundle_entry" <<< "$bundle_effective"; then
           pass "bundle budget \`$(cut -d'|' -f1 <<< "$bundle_entry")\` caps raw and gzip at $(cut -d'|' -f2 <<< "$bundle_entry")/$(cut -d'|' -f3 <<< "$bundle_entry") bytes"
         else
@@ -866,6 +868,47 @@ print("trivialAllowlist=%s" % ",".join(trivial))
     else
       pass "\`$(echo "$budget_selftest_jobs" | tr '\n' ' ' | sed 's/ $//')\` runs the bundle checker's self-test — a checker that stops failing cannot go quiet"
     fi
+  fi
+
+  # 13. The dependency audit is still an audit (TOG-8405).
+  #
+  #    `composer audit` and `npm audit` gate high/critical advisories from the
+  #    `deps-audit` job, and the predicates live in ci/deps-audit.sh. Four quiet
+  #    ways out, none of which any other job notices: drop the job from the
+  #    aggregate's `needs:` (check 3 catches that too, but names the aggregate —
+  #    this names the audit), delete the enforcement step from the job while the
+  #    script stays in place, soften the script's threshold, or drop the
+  #    predicate's self-test from `static` and let the checker go quiet.
+  local deps_block
+  deps_block="$(job_block "$WORKFLOW" "deps-audit")" || deps_block=''
+
+  if [ -z "$deps_block" ]; then
+    fail "job \`deps-audit\` was not found in ${WORKFLOW}. Check 13 expects it to exist and to audit composer.lock and package-lock.json: advisories arrive without a commit to this repo, so a job that stops existing is a gate that stops gating, silently."
+    rc=1
+  elif has_line "$deps_block" 'deps-audit.sh --run'; then
+    pass "\`deps-audit\` runs the dependency audit — the lockfiles are still gated"
+  else
+    fail "job \`deps-audit\` no longer runs \`deps-audit.sh --run\`. ci/deps-audit.sh still gates high/critical advisories, but nothing executes it — an audit with no enforcement, silently."
+    rc=1
+  fi
+
+  # The predicate's own self-test must still run in `static`: the audit needs
+  # the live feeds so it only executes in `deps-audit`, and a checker that
+  # quietly stopped failing is indistinguishable from clean lockfiles unless
+  # something offline proves it still fails. Same argument as check 9's.
+  local deps_selftest_jobs deps_selftest_job deps_selftest_blk
+  deps_selftest_jobs=$(while read -r deps_selftest_job; do
+    [ -n "$deps_selftest_job" ] || continue
+    deps_selftest_blk=$(job_block "$WORKFLOW" "$deps_selftest_job")
+    if has_line "$deps_selftest_blk" 'deps-audit.sh --selftest'; then
+      job_reported_name "$WORKFLOW" "$deps_selftest_job"
+    fi
+  done <<< "$(job_ids "$WORKFLOW")")
+  if [ -z "$deps_selftest_jobs" ]; then
+    fail "no job in ${WORKFLOW} runs \`deps-audit.sh --selftest\`. Nothing then catches an audit predicate that has quietly stopped failing: the live audit only ever executes in \`deps-audit\`, against the live feeds, so a neutered predicate and clean lockfiles look identical from every job in the pipeline."
+    rc=1
+  else
+    pass "\`$(echo "$deps_selftest_jobs" | tr '\n' ' ' | sed 's/ $//')\` runs the audit predicate's self-test — a predicate that stops failing cannot go quiet"
   fi
 
   return "$rc"
@@ -1115,33 +1158,35 @@ assert_selftest() {
 
   # <name>|<ok|reject>|<expected job>|<aggregate expectation>|<expect_green>|<checks>
   local scenarios=(
-    "ordinary-failure|ok|static|FAILURE|no|static=FAILURE;pest=SUCCESS;dusk=SUCCESS;budgets=SUCCESS;tests=FAILURE;gitleaks=SUCCESS"
-    "aggregate-stayed-green|reject|static|FAILURE|no|static=FAILURE;pest=SUCCESS;dusk=SUCCESS;budgets=SUCCESS;tests=SUCCESS;gitleaks=SUCCESS"
-    "aggregate-skipped-when-it-should-be-red|reject|static|FAILURE|no|static=FAILURE;pest=SUCCESS;dusk=SUCCESS;budgets=SUCCESS;tests=SKIPPED;gitleaks=SUCCESS"
-    "wrong-job-went-red|reject|dusk|FAILURE|no|static=FAILURE;pest=SUCCESS;dusk=SUCCESS;budgets=SUCCESS;tests=FAILURE;gitleaks=SUCCESS"
-    "nothing-red-at-all|reject|static|FAILURE|no|static=SUCCESS;pest=SUCCESS;dusk=SUCCESS;budgets=SUCCESS;tests=SUCCESS;gitleaks=SUCCESS"
+    "ordinary-failure|ok|static|FAILURE|no|static=FAILURE;pest=SUCCESS;dusk=SUCCESS;budgets=SUCCESS;deps-audit=SUCCESS;tests=FAILURE;gitleaks=SUCCESS"
+    "aggregate-stayed-green|reject|static|FAILURE|no|static=FAILURE;pest=SUCCESS;dusk=SUCCESS;budgets=SUCCESS;deps-audit=SUCCESS;tests=SUCCESS;gitleaks=SUCCESS"
+    "aggregate-skipped-when-it-should-be-red|reject|static|FAILURE|no|static=FAILURE;pest=SUCCESS;dusk=SUCCESS;budgets=SUCCESS;deps-audit=SUCCESS;tests=SKIPPED;gitleaks=SUCCESS"
+    "wrong-job-went-red|reject|dusk|FAILURE|no|static=FAILURE;pest=SUCCESS;dusk=SUCCESS;budgets=SUCCESS;deps-audit=SUCCESS;tests=FAILURE;gitleaks=SUCCESS"
+    "nothing-red-at-all|reject|static|FAILURE|no|static=SUCCESS;pest=SUCCESS;dusk=SUCCESS;budgets=SUCCESS;deps-audit=SUCCESS;tests=SUCCESS;gitleaks=SUCCESS"
     "nothing-reported|reject|static|FAILURE|no|"
-    "one-check-never-arrived|reject|static|FAILURE|no|static=FAILURE;pest=SUCCESS;dusk=SUCCESS;budgets=SUCCESS;tests=FAILURE"
+    "one-check-never-arrived|reject|static|FAILURE|no|static=FAILURE;pest=SUCCESS;dusk=SUCCESS;budgets=SUCCESS;deps-audit=SUCCESS;tests=FAILURE"
     # The observed conclusions from run 32324926996 — the gate holding, correctly.
-    "gate-disarmed-aggregate-skipped|ok|static|NOT_SUCCESS|no|static=FAILURE;pest=SUCCESS;dusk=SUCCESS;budgets=SUCCESS;tests=SKIPPED;gitleaks=SUCCESS"
+    "gate-disarmed-aggregate-skipped|ok|static|NOT_SUCCESS|no|static=FAILURE;pest=SUCCESS;dusk=SUCCESS;budgets=SUCCESS;deps-audit=SUCCESS;tests=SKIPPED;gitleaks=SUCCESS"
     # The aggregate ran and passed over a red need: a real guard defect, still caught.
-    "gate-disarmed-aggregate-passed|reject|static|NOT_SUCCESS|no|static=FAILURE;pest=SUCCESS;dusk=SUCCESS;budgets=SUCCESS;tests=SUCCESS;gitleaks=SUCCESS"
+    "gate-disarmed-aggregate-passed|reject|static|NOT_SUCCESS|no|static=FAILURE;pest=SUCCESS;dusk=SUCCESS;budgets=SUCCESS;deps-audit=SUCCESS;tests=SUCCESS;gitleaks=SUCCESS"
     # NOT_SUCCESS must not become "anything goes": the lint job still has to go red.
-    "gate-disarmed-lint-missed-it|reject|static|NOT_SUCCESS|no|static=SUCCESS;pest=SUCCESS;dusk=SUCCESS;budgets=SUCCESS;tests=SKIPPED;gitleaks=SUCCESS"
+    "gate-disarmed-lint-missed-it|reject|static|NOT_SUCCESS|no|static=SUCCESS;pest=SUCCESS;dusk=SUCCESS;budgets=SUCCESS;deps-audit=SUCCESS;tests=SKIPPED;gitleaks=SUCCESS"
     # The secret scan holding: `gitleaks` red on a pull request where ci.yml is
     # entirely green, because `gitleaks` is in another workflow. This is the only
     # shape in which a green `${AGGREGATE}` is an acceptable answer.
-    "secret-committed-gitleaks-red|ok|gitleaks|SUCCESS|no|static=SUCCESS;pest=SUCCESS;dusk=SUCCESS;budgets=SUCCESS;tests=SUCCESS;gitleaks=FAILURE"
+    "secret-committed-gitleaks-red|ok|gitleaks|SUCCESS|no|static=SUCCESS;pest=SUCCESS;dusk=SUCCESS;budgets=SUCCESS;deps-audit=SUCCESS;tests=SUCCESS;gitleaks=FAILURE"
     # And the failure this case exists for: the scan stopped catching anything.
     # Nothing else in the pipeline reddens on a committed credential, so a green
     # `gitleaks` here has to be rejected on its own.
-    "secret-committed-nothing-caught-it|reject|gitleaks|SUCCESS|no|static=SUCCESS;pest=SUCCESS;dusk=SUCCESS;budgets=SUCCESS;tests=SUCCESS;gitleaks=SUCCESS"
+    "secret-committed-nothing-caught-it|reject|gitleaks|SUCCESS|no|static=SUCCESS;pest=SUCCESS;dusk=SUCCESS;budgets=SUCCESS;deps-audit=SUCCESS;tests=SUCCESS;gitleaks=SUCCESS"
     # SUCCESS must not become "the aggregate is not my problem". A breakage that
     # also took ci.yml down is not evidence about the secret scan, whatever else
     # it proves — the same reason break_dusk must stay invisible to `pest`.
-    "secret-case-also-broke-ci|reject|gitleaks|SUCCESS|no|static=FAILURE;pest=SUCCESS;dusk=SUCCESS;budgets=SUCCESS;tests=FAILURE;gitleaks=FAILURE"
-    "clean-all-green|ok|${AGGREGATE}|SUCCESS|yes|static=SUCCESS;pest=SUCCESS;dusk=SUCCESS;budgets=SUCCESS;tests=SUCCESS;gitleaks=SUCCESS"
-    "clean-one-skipped|reject|${AGGREGATE}|SUCCESS|yes|static=SUCCESS;pest=SUCCESS;dusk=SKIPPED;budgets=SUCCESS;tests=SUCCESS;gitleaks=SUCCESS"
+    "secret-case-also-broke-ci|reject|gitleaks|SUCCESS|no|static=FAILURE;pest=SUCCESS;dusk=SUCCESS;budgets=SUCCESS;deps-audit=SUCCESS;tests=FAILURE;gitleaks=FAILURE"
+    "clean-all-green|ok|${AGGREGATE}|SUCCESS|yes|static=SUCCESS;pest=SUCCESS;dusk=SUCCESS;budgets=SUCCESS;deps-audit=SUCCESS;tests=SUCCESS;gitleaks=SUCCESS"
+    "clean-one-skipped|reject|${AGGREGATE}|SUCCESS|yes|static=SUCCESS;pest=SUCCESS;dusk=SKIPPED;budgets=SUCCESS;deps-audit=SUCCESS;tests=SUCCESS;gitleaks=SUCCESS"
+    "audit-failure|ok|deps-audit|FAILURE|no|static=SUCCESS;pest=SUCCESS;dusk=SUCCESS;budgets=SUCCESS;deps-audit=FAILURE;tests=FAILURE;gitleaks=SUCCESS"
+    "audit-red-aggregate-green|reject|deps-audit|FAILURE|no|static=SUCCESS;pest=SUCCESS;dusk=SUCCESS;budgets=SUCCESS;deps-audit=FAILURE;tests=SUCCESS;gitleaks=SUCCESS"
   )
 
   for entry in "${scenarios[@]}"; do
@@ -1172,6 +1217,7 @@ assert_selftest() {
 pest=SUCCESS
 dusk=SUCCESS
 budgets=SUCCESS
+deps-audit=SUCCESS
 tests=SKIPPED
 gitleaks=SUCCESS" static NOT_SUCCESS no "gate-disarmed-lint-job-not-required" 2>&1
   ); then
@@ -1189,11 +1235,12 @@ gitleaks=SUCCESS" static NOT_SUCCESS no "gate-disarmed-lint-job-not-required" 2>
   # conclusions must be rejected.
   n=$((n + 1))
   if out=$(
-    REQUIRED_CHECKS=(tests static pest dusk budgets)
+    REQUIRED_CHECKS=(tests static pest dusk budgets deps-audit)
     assert_checks "static=SUCCESS
 pest=SUCCESS
 dusk=SUCCESS
 budgets=SUCCESS
+deps-audit=SUCCESS
 tests=SUCCESS
 gitleaks=FAILURE" gitleaks SUCCESS no "secret-committed-gitleaks-not-required" 2>&1
   ); then
@@ -1237,7 +1284,7 @@ wait_selftest() {
   # 0 on the poll named by <expect>, or return 1 if <expect> is `timeout`.
   #
   # <name>|<expect: poll index, 1-based | timeout>|<polls>
-  local all='static=SUCCESS,pest=SUCCESS,dusk=SUCCESS,budgets=SUCCESS,tests=SUCCESS,gitleaks=SUCCESS'
+  local all='static=SUCCESS,pest=SUCCESS,dusk=SUCCESS,budgets=SUCCESS,deps-audit=SUCCESS,tests=SUCCESS,gitleaks=SUCCESS'
   local scenarios=(
     # The ordinary case: everything settled on the first read.
     "all-settled-immediately|1|${all}"
@@ -1247,28 +1294,28 @@ wait_selftest() {
     # The weak condition — "everything I can see is done" — returns here, and the
     # assertions then fail a `gitleaks` that was about to run and pass. It must
     # wait for the name.
-    "absent-check-is-not-a-finished-branch|2|static=SUCCESS,pest=SUCCESS,dusk=SUCCESS,budgets=SUCCESS,tests=SUCCESS;${all}"
+    "absent-check-is-not-a-finished-branch|2|static=SUCCESS,pest=SUCCESS,dusk=SUCCESS,budgets=SUCCESS,deps-audit=SUCCESS,tests=SUCCESS;${all}"
 
     # The condition the Actions run-status used to supply. Every expected name is
     # present, so presence alone would return — but one is still running. Reading
     # a PENDING check as a conclusion is how a half-finished pipeline gets reported
     # as a finished one.
-    "pending-check-is-not-a-conclusion|2|static=SUCCESS,pest=SUCCESS,dusk=SUCCESS,budgets=SUCCESS,tests=PENDING,gitleaks=SUCCESS;${all}"
+    "pending-check-is-not-a-conclusion|2|static=SUCCESS,pest=SUCCESS,dusk=SUCCESS,budgets=SUCCESS,deps-audit=SUCCESS,tests=PENDING,gitleaks=SUCCESS;${all}"
 
     # Both gaps at once, closing one poll at a time — the real shape of a branch
     # coming up: checks appear pending, conclude, and the second workflow arrives
     # last.
-    "checks-arrive-and-conclude-over-several-polls|4|static=PENDING;static=SUCCESS,pest=PENDING,dusk=PENDING,budgets=PENDING,tests=PENDING;static=SUCCESS,pest=SUCCESS,dusk=SUCCESS,budgets=SUCCESS,tests=PENDING;${all}"
+    "checks-arrive-and-conclude-over-several-polls|4|static=PENDING;static=SUCCESS,pest=PENDING,dusk=PENDING,budgets=PENDING,deps-audit=PENDING,tests=PENDING;static=SUCCESS,pest=SUCCESS,dusk=SUCCESS,budgets=SUCCESS,deps-audit=SUCCESS,tests=PENDING;${all}"
 
-    # A red branch is a finished branch. Nine of the ten cases end here, so a wait
+    # A red branch is a finished branch. Ten of the eleven cases end here, so a wait
     # that only accepts SUCCESS would time out on every one of them and report the
     # gate as dead while it is working.
-    "failure-is-a-conclusion|1|static=FAILURE,pest=SUCCESS,dusk=SUCCESS,budgets=SUCCESS,tests=FAILURE,gitleaks=SUCCESS"
+    "failure-is-a-conclusion|1|static=FAILURE,pest=SUCCESS,dusk=SUCCESS,budgets=SUCCESS,deps-audit=SUCCESS,tests=FAILURE,gitleaks=SUCCESS"
 
     # And SKIPPED, which is what the `gate` case produces for the aggregate: the
     # breakage deletes `if: always()`, so `tests` never runs. Skipped is a
     # conclusion; waiting for it to become something else waits forever.
-    "skipped-is-a-conclusion|1|static=FAILURE,pest=SUCCESS,dusk=SUCCESS,budgets=SUCCESS,tests=SKIPPED,gitleaks=SUCCESS"
+    "skipped-is-a-conclusion|1|static=FAILURE,pest=SUCCESS,dusk=SUCCESS,budgets=SUCCESS,deps-audit=SUCCESS,tests=SKIPPED,gitleaks=SUCCESS"
 
     # A check nobody asked about must not hold the wait up. A new job in ci.yml is
     # for check 7 in lint() to complain about, not for this to block on.
@@ -1277,11 +1324,11 @@ wait_selftest() {
     # A branch whose push never landed reports nothing, forever. It has to time out
     # rather than return, because returning would hand assert_checks an empty set
     # that reads identically to a branch that was gated and passed. This is the
-    # TOG-20 `workflows` shape: one case silently missing from a run of ten.
+    # TOG-20 `workflows` shape: one case silently missing from a run of eleven.
     "nothing-ever-reports|timeout|;;;"
 
     # And the stall: checks exist, they simply never finish. Same requirement.
-    "never-concludes|timeout|static=PENDING,pest=PENDING,dusk=PENDING,budgets=PENDING,tests=PENDING,gitleaks=PENDING;;;"
+    "never-concludes|timeout|static=PENDING,pest=PENDING,dusk=PENDING,budgets=PENDING,deps-audit=PENDING,tests=PENDING,gitleaks=PENDING;;;"
   )
 
   for entry in "${scenarios[@]}"; do
@@ -1606,7 +1653,7 @@ break_secret() {
 break_lcp() {
   TOUCHED=(public/ci-verify-hero.bmp resources/views/home.blade.php)
   # An oversized hero image above the fold. This is the case that actually exercises
-  # the CEO's LCP < 2.0s budget, and it exists because `slowserver` above does not:
+  # the maintainers' LCP < 2.0s budget, and it exists because `slowserver` above does not:
   # what reddens `budgets` there is `server-response-time`. Without this case the
   # headline budget has no live proof that it fires at all, and a broken
   # `largest-contentful-paint` assertion would be invisible to every job in the
@@ -1668,6 +1715,41 @@ break_lcp() {
     return 1
   }
   sed -i '0,/<h1>/s##<img src="/ci-verify-hero.bmp" width="900" height="620" alt="A deliberately oversized hero image">\n    <h1>#' resources/views/home.blade.php
+}
+
+break_audit() {
+  TOUCHED=(package-lock.json)
+  # A known-critically-vulnerable package, added to the lockfile only — nothing
+  # imports it, so `npm ci` stays green, the build stays green, `pest`/`dusk`
+  # never see it, and only `deps-audit` goes red. The lockfile entry is real:
+  # `npm audit` reads it and reports minimist 1.2.5's critical
+  # prototype-pollution advisory (GHSA-xvch-5gv4-984h).
+  #
+  # Text insertion, not a JSON round-trip: node writes 2-space indent while
+  # this lockfile is 4-space, so a parse-and-stringify rewrites all 4400 lines
+  # and the "one deliberate defect" commit stops being one. The entry lands
+  # between magic-string and nanoid, where `node_modules/minimist` sorts. No
+  # `integrity` field: nothing verifies it on install, and the audit reads
+  # version + resolved only. Verified: `npm ci` exits 0 on this tree
+  # ("up to date"), and `npm audit --audit-level=high` exits 1 naming
+  # minimist critical.
+  #
+  # No `npm install`: that would rewrite half the lockfile and the diff would
+  # stop being one deliberate defect for the same reason.
+  #
+  # minimist 1.2.5 is the pin, not 1.2.8: 1.2.8 is the fixed release, so
+  # pinning it would open a PR that is not broken. If the advisory is ever
+  # withdrawn, this case stops breaching — the run then fails loudly on the
+  # empty diff guard in open_pr, not quietly as a pass.
+  grep -q '^        "node_modules/nanoid": {$' package-lock.json || {
+    fail "break_audit: no nanoid entry in package-lock.json to place minimist above. The anchor moved; fix this case rather than deleting it."
+    return 1
+  }
+  sed -i 's#^        "node_modules/nanoid": {#        "node_modules/minimist": {\n            "version": "1.2.5",\n            "resolved": "https://registry.npmjs.org/minimist/-/minimist-1.2.5.tgz"\n        },\n        "node_modules/nanoid": {#' package-lock.json
+  grep -q '^            "resolved": "https://registry.npmjs.org/minimist/-/minimist-1.2.5.tgz"$' package-lock.json || {
+    fail "break_audit: the minimist insertion did not land. The sed anchor moved; fix this case rather than deleting it."
+    return 1
+  }
 }
 
 break_gate() {
@@ -1811,7 +1893,7 @@ if [ "$MODE" != "--run" ]; then
   exit 0
 fi
 
-# Before ten pull requests and forty minutes of runner time, half a second of
+# Before eleven pull requests and forty minutes of runner time, half a second of
 # reading the file.
 log "Static checks on the gate"
 lint || { fail "the gate is misconfigured. Fix ${WORKFLOW} first — the live run would only tell you the same thing, slower."; exit 1; }
@@ -1889,7 +1971,7 @@ REPO_SLUG=$(repo_slug || true)
   exit 1
 }
 
-# Prove the credential can read results *before* opening ten pull requests. A
+# Prove the credential can read results *before* opening eleven pull requests. A
 # token with push access but without `Checks: read` gets all the way through the
 # run and then reads nothing back, which is indistinguishable from a pipeline that
 # never ran — and the two diagnoses point in opposite directions. Half a second
@@ -2041,7 +2123,7 @@ open_pr() {
 }
 
 # Every PR is opened before any waiting starts, so the runs happen in parallel
-# rather than end to end. Ten sequential CI runs is most of a morning.
+# rather than end to end. Eleven sequential CI runs is most of a morning.
 log "Opening the broken pull requests"
 for entry in "${CASES[@]}"; do
   IFS='|' read -r slug job aggregate why <<< "$entry"
