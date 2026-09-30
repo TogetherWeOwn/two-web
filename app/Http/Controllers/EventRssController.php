@@ -38,9 +38,9 @@ final class EventRssController
             ->orderBy('starts_at')
             ->get();
 
-        // The feed's content changes only when an event in scope does, so the
-        // newest `updated_at` is the content clock — and the `lastBuildDate`
-        // the body carries. Stamping `now()` here instead would make every body
+        // The newest in-scope `updated_at` supplies `lastBuildDate`. An empty
+        // scope has no content timestamp, so the builder omits that optional
+        // element. Stamping `now()` instead would make unchanged empty bodies
         // unique and the validator below useless; see `EventRss::for()`.
         $built = $events->max('updated_at');
 
