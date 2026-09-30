@@ -78,26 +78,101 @@ usage() {
 
 # Read one KEY from .env without sourcing it: sourcing executes whatever the
 # file contains, and .env on a real box holds secrets that must not be
-# reinterpreted by a backup script. Handles `KEY=value`, `KEY="quoted value"`
-# and `export KEY=value`; ignores comments and blank lines.
+# reinterpreted by a backup script. Handles `KEY=value`, `KEY="quoted value"`,
+# `export KEY=value` and trailing `#` comments, reading them the way the
+# application (dotenv) does: a quoted value ends at its closing quote and an
+# unquoted value ends at a `#` preceded by whitespace. A line with no valid
+# value (unterminated quote, or anything but blanks and a comment after the
+# closing quote) exits nonzero and warns, so callers fall back to the default
+# instead of comparing a value the application reads differently — and
+# restore-proof refuses outright (see its guard).
 env_get() {
-  local key="$1" line val
+  local key="$1" line val parsed
   [ -f .env ] || return 0
   line="$(grep -E "^[[:space:]]*(export[[:space:]]+)?${key}=" .env | tail -n 1 || true)"
   [ -n "$line" ] || return 0
   val="${line#*=}"
-  val="$(printf '%s' "$val" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' -e 's/^"\(.*\)"$/\1/' -e "s/^'\(.*\)'$/\1/")"
-  printf '%s' "$val"
+  val="$(printf '%s' "$val" | sed -e 's/^[[:space:]]*//')"
+  if ! parsed="$(dotenv_unquote "$val")"; then
+    echo "pg-backup: warning: ignoring unparseable ${key} line in .env — expected 'KEY=value', a quoted value, or a trailing '# comment'." >&2
+    return 1
+  fi
+  printf '%s' "$parsed"
+}
+
+# Print the dotenv value of a raw right-hand side (leading blanks already
+# stripped). Exits nonzero when the line carries no valid dotenv value.
+# Double-quoted values honour backslash escapes when finding the closing
+# quote; single-quoted values are literal. Escape *expansion* is deliberately
+# not performed: the value is returned as written, and restore-proof refuses
+# any dotenv database value dotenv would expand differently.
+dotenv_unquote() {
+  local raw="$1" q rest inner closed tail
+  q="${raw:0:1}"
+  case "$q" in
+    '"'|"'")
+      rest="${raw:1}"
+      inner=""
+      closed=0
+      while [ -n "$rest" ]; do
+        if [ "$q" = '"' ]; then
+          case "$rest" in
+            '\'*)
+              inner="${inner}${rest:0:2}"
+              rest="${rest:2}"
+              continue
+              ;;
+          esac
+        fi
+        case "$rest" in
+          "$q"*)
+            rest="${rest:1}"
+            closed=1
+            break
+            ;;
+          *)
+            inner="${inner}${rest:0:1}"
+            rest="${rest:1}"
+            ;;
+        esac
+      done
+      [ "$closed" -eq 1 ] || return 1
+      # After the closing quote only blanks and one trailing comment fit.
+      # (Herestring, not `printf %s |`: with an empty tail printf emits zero
+      # bytes, which is no line for grep to match.)
+      tail="$rest"
+      grep -Eq '^[[:space:]]*(#.*)?$' <<< "$tail" || return 1
+      printf '%s' "$inner"
+      ;;
+    '#')
+      # A comment where the value would be: dotenv reads this as empty.
+      printf '%s' ""
+      ;;
+    *)
+      # Unquoted: the value ends at a `#` preceded by whitespace; a `#`
+      # without preceding whitespace is part of the value. Trailing blanks go.
+      printf '%s' "$raw" | sed -e 's/[[:space:]][[:space:]]*#.*$//' -e 's/[[:space:]]*$//'
+      ;;
+  esac
 }
 
 # Environment first, .env second, compose defaults last. The `:-` form (not
 # `:=` on an unconditional assignment) is what keeps a real environment
 # variable from being overridden by the file.
-DB_HOST="${DB_HOST:-$(env_get DB_HOST)}"
-DB_PORT="${DB_PORT:-$(env_get DB_PORT)}"
-DB_DATABASE="${DB_DATABASE:-$(env_get DB_DATABASE)}"
-DB_USERNAME="${DB_USERNAME:-$(env_get DB_USERNAME)}"
-DB_PASSWORD="${DB_PASSWORD:-$(env_get DB_PASSWORD)}"
+# Provenance for the restore-proof guard: dotenv prefers a real environment
+# variable over the file, and the guard must evaluate the winning source.
+# (`:-` treats set-but-empty as unset, so this test matches the resolution.)
+DB_DATABASE_FROM_ENV=0
+if [ -n "${DB_DATABASE:-}" ]; then DB_DATABASE_FROM_ENV=1; fi
+# `|| true`: an unparseable line warns and falls back to the default here, so
+# file-only commands (rotate, promote-weekly) survive a broken line the way
+# they always have. restore-proof re-parses DB_DATABASE itself and refuses
+# outright, so the fallback never masks an alias there.
+DB_HOST="${DB_HOST:-$(env_get DB_HOST || true)}"
+DB_PORT="${DB_PORT:-$(env_get DB_PORT || true)}"
+DB_DATABASE="${DB_DATABASE:-$(env_get DB_DATABASE || true)}"
+DB_USERNAME="${DB_USERNAME:-$(env_get DB_USERNAME || true)}"
+DB_PASSWORD="${DB_PASSWORD:-$(env_get DB_PASSWORD || true)}"
 : "${DB_HOST:=127.0.0.1}"
 : "${DB_PORT:=5432}"
 : "${DB_DATABASE:=two_web}"
@@ -265,9 +340,56 @@ cmd_promote_weekly() {
 }
 
 cmd_restore_proof() {
-  # Check before arming cleanup or touching docker: both dropdb paths must
+  # Evaluate the effective source name the way the application does, then
+  # refuse before arming cleanup or touching docker: both dropdb paths must
   # target a scratch database, never the source whose backup we are proving.
-  if [ "$DB_DATABASE" = "$SCRATCH_DB" ]; then
+  # A dotenv line this script cannot parse the same way would compare one
+  # name while the application connects to another, so ambiguity fails
+  # closed here instead of falling back to the compose default.
+  local src_db db_line db_rhs db_inner
+  if [ "$DB_DATABASE_FROM_ENV" -eq 1 ]; then
+    src_db="$DB_DATABASE"
+  elif [ -f .env ] && grep -Eq '^[[:space:]]*(export[[:space:]]+)?DB_DATABASE=' .env; then
+    db_line="$(grep -E '^[[:space:]]*(export[[:space:]]+)?DB_DATABASE=' .env | tail -n 1)"
+    db_rhs="$(printf '%s' "${db_line#*=}" | sed -e 's/^[[:space:]]*//')"
+    src_db="$(env_get DB_DATABASE 2>/dev/null)" || {
+      echo "pg-backup: refusing: cannot parse the DB_DATABASE line in .env — set a plain 'DB_DATABASE=<name>' before proving a restore." >&2
+      return 1
+    }
+    # dotenv resolves $VAR/${VAR} inside unquoted and double-quoted values
+    # (single-quoted values stay literal); this script does not expand them,
+    # so such a line would compare a different name than the application
+    # connects to. Values reaching libpq keep their backslash escapes, so
+    # unescape \" sequences the same way before looking for expansion too.
+    db_inner="$(dotenv_unquote "$db_rhs" 2>/dev/null || true)"
+    case "$db_rhs" in
+      "'"*) ;;
+      '"'*) db_inner="$(printf '%s' "$db_inner" | sed -e 's/\\"/"/g')" ;;
+    esac
+    case "$db_inner" in
+      *'$'*)
+        echo "pg-backup: refusing: .env DB_DATABASE uses variable expansion, which restore-proof does not evaluate — set a literal database name." >&2
+        return 1
+        ;;
+    esac
+    if [ "$src_db" != "$DB_DATABASE" ]; then
+      echo "pg-backup: refusing: the .env DB_DATABASE line is ambiguous — set a plain 'DB_DATABASE=<name>' before proving a restore." >&2
+      return 1
+    fi
+  else
+    src_db="$DB_DATABASE"
+  fi
+  # The libpq clients this script shells out to accept keyword/value and URI
+  # connection strings in place of a database name, so a value that merely
+  # differs textually from the scratch name can still address it. Only plain
+  # names reach the comparison.
+  case "$src_db" in
+    *'='*|*'://'*|*[[:space:]]*)
+      echo "pg-backup: refusing: DB_DATABASE must be a plain database name, not a connection string or URI." >&2
+      return 1
+      ;;
+  esac
+  if [ "$src_db" = "$SCRATCH_DB" ]; then
     echo "pg-backup: refusing: DB_DATABASE must differ from scratch database '${SCRATCH_DB}'." >&2
     return 1
   fi

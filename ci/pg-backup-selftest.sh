@@ -32,6 +32,14 @@
 #   backup-failed         pg_dump exits nonzero          -> no dump/temp or success
 #   password-not-in-argv  the secret never appears in any docker argv
 #   proof-source-alias    source equals scratch (env/.env) -> exit 1, no docker calls
+#   proof-alias-comment   dotenv quoted value + trailing `#` comment -> same
+#   proof-alias-conninfo  `dbname=…` connection string (env/.env) -> exit 1,
+#                         names the connection-string rule, no docker calls
+#   proof-alias-uri       `postgresql://…` URI -> same
+#   proof-alias-unparse   unterminated quote in .env -> exit 1, parse refusal,
+#                         no docker calls
+#   proof-alias-expansion dotenv `$VAR` expansion -> exit 1, expansion refusal,
+#                         no docker calls
 #   proof-ok              distinct source, equal counts -> PROOF OK, scratch dropped
 #   proof-mismatch        one count differs             -> PROOF FAILED, exit 1
 #   proof-corrupt         pg_restore exits 1            -> nonzero, scratch dropped
@@ -342,6 +350,104 @@ for source in env dotenv; do
     printf '%s\n' "$(< "$dir/docker.log")" | sed 's/^/        /'
   fi
 done
+
+# The application (dotenv) strips a trailing `#` comment after a quoted value,
+# so a commented alias must refuse exactly like a literal one — before any
+# docker call, including cleanup.
+dir="$(fixture proofalias-comment)"
+seed_dump "$dir"
+printf 'DB_DATABASE="two_web_restore_proof" # local database\n' > "$dir/.env"
+out="$(cd "$dir" && env -u DB_DATABASE PATH="$STUB_DIR:$PATH" STUB_LOG="$dir/docker.log" \
+  DB_HOST=127.0.0.1 ./bin/pg-backup.sh restore-proof "$dir/backups/seed.dump" 2>&1)"; status=$?
+if [ "$status" -eq 1 ] \
+    && grep -qF "DB_DATABASE must differ from scratch database 'two_web_restore_proof'" <<< "$out" \
+    && [ ! -s "$dir/docker.log" ]; then
+  pass "proof-alias-comment"
+else
+  fail "proof-alias-comment: expected exit 1 naming the alias and no docker calls (got ${status})"
+  printf '%s\n' "$out" | sed 's/^/        /'
+  printf '%s\n' "$(< "$dir/docker.log")" | sed 's/^/        /'
+fi
+
+# libpq accepts keyword/value and URI connection strings where this script
+# passes `-d`, so values that merely differ textually from the scratch name
+# can still address it. Refuse them by rule — from the environment and from
+# .env — before any docker call.
+for source in env dotenv; do
+  dir="$(fixture "proofalias-conninfo-${source}")"
+  seed_dump "$dir"
+  : > "$dir/docker.log"
+  if [ "$source" = env ]; then
+    out="$(cd "$dir" && PATH="$STUB_DIR:$PATH" STUB_LOG="$dir/docker.log" \
+      DB_HOST=127.0.0.1 DB_DATABASE='dbname=two_web_restore_proof' \
+      ./bin/pg-backup.sh restore-proof "$dir/backups/seed.dump" 2>&1)"; status=$?
+  else
+    printf "DB_DATABASE='dbname=two_web_restore_proof'\n" > "$dir/.env"
+    out="$(cd "$dir" && env -u DB_DATABASE PATH="$STUB_DIR:$PATH" STUB_LOG="$dir/docker.log" \
+      DB_HOST=127.0.0.1 ./bin/pg-backup.sh restore-proof "$dir/backups/seed.dump" 2>&1)"; status=$?
+  fi
+  if [ "$status" -eq 1 ] \
+      && grep -qF "must be a plain database name, not a connection string or URI" <<< "$out" \
+      && [ ! -s "$dir/docker.log" ]; then
+    pass "proof-alias-conninfo-${source}"
+  else
+    fail "proof-alias-conninfo-${source}: expected exit 1 naming the connection-string rule and no docker calls (got ${status})"
+    printf '%s\n' "$out" | sed 's/^/        /'
+    printf '%s\n' "$(< "$dir/docker.log")" | sed 's/^/        /'
+  fi
+done
+
+dir="$(fixture proofalias-uri)"
+seed_dump "$dir"
+out="$(cd "$dir" && PATH="$STUB_DIR:$PATH" STUB_LOG="$dir/docker.log" \
+  DB_HOST=127.0.0.1 DB_DATABASE='postgresql://127.0.0.1:5432/two_web' \
+  ./bin/pg-backup.sh restore-proof "$dir/backups/seed.dump" 2>&1)"; status=$?
+if [ "$status" -eq 1 ] \
+    && grep -qF "must be a plain database name, not a connection string or URI" <<< "$out" \
+    && [ ! -s "$dir/docker.log" ]; then
+  pass "proof-alias-uri"
+else
+  fail "proof-alias-uri: expected exit 1 naming the connection-string rule and no docker calls (got ${status})"
+  printf '%s\n' "$out" | sed 's/^/        /'
+  printf '%s\n' "$(< "$dir/docker.log")" | sed 's/^/        /'
+fi
+
+# An .env database line this script cannot parse the same way as the
+# application must fail closed: comparing a different name than the
+# application connects to is how the alias slips through.
+dir="$(fixture proofalias-unparse)"
+seed_dump "$dir"
+printf 'DB_DATABASE="two_web_restore_proof\n' > "$dir/.env"
+out="$(cd "$dir" && env -u DB_DATABASE PATH="$STUB_DIR:$PATH" STUB_LOG="$dir/docker.log" \
+  DB_HOST=127.0.0.1 ./bin/pg-backup.sh restore-proof "$dir/backups/seed.dump" 2>&1)"; status=$?
+if [ "$status" -eq 1 ] \
+    && grep -qF "cannot parse the DB_DATABASE line in .env" <<< "$out" \
+    && [ ! -s "$dir/docker.log" ]; then
+  pass "proof-alias-unparse"
+else
+  fail "proof-alias-unparse: expected exit 1 naming the parse refusal and no docker calls (got ${status})"
+  printf '%s\n' "$out" | sed 's/^/        /'
+  printf '%s\n' "$(< "$dir/docker.log")" | sed 's/^/        /'
+fi
+
+# dotenv expands $VAR inside unquoted and double-quoted values while this
+# script deliberately does not — so such a line compares a different name
+# than the application connects to. Single-quoted values stay literal and
+# take the plain-name path instead.
+dir="$(fixture proofalias-expansion)"
+seed_dump "$dir"
+printf 'DB_DATABASE="two_web_${SUFFIX:-restore_proof}"\n' > "$dir/.env"
+out="$(cd "$dir" && env -u DB_DATABASE PATH="$STUB_DIR:$PATH" STUB_LOG="$dir/docker.log" \
+  DB_HOST=127.0.0.1 ./bin/pg-backup.sh restore-proof "$dir/backups/seed.dump" 2>&1)"; status=$?
+if [ "$status" -eq 1 ] \
+    && grep -qF "uses variable expansion" <<< "$out" \
+    && [ ! -s "$dir/docker.log" ]; then
+  pass "proof-alias-expansion"
+else
+  fail "proof-alias-expansion: expected exit 1 naming the expansion refusal and no docker calls (got ${status})"
+  printf '%s\n' "$out" | sed 's/^/        /'
+  printf '%s\n' "$(< "$dir/docker.log")" | sed 's/^/        /'
+fi
 
 # Happy path: three tables, equal counts. Asserts the verdict, the per-table
 # listing (a PROOF OK with no table detail proves nothing to a reader), and
