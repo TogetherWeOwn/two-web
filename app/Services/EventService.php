@@ -333,6 +333,12 @@ class EventService
                 throw EventNotOpenException::forTransition($locked, $to);
             }
 
+            // Reconcile closed this event; publishing it again would resurrect
+            // a finished meeting and queue an upsert Discord no longer needs.
+            if ($to === EventStatus::Published && $locked->status === EventStatus::Past) {
+                throw EventNotOpenException::forTransition($locked, $to);
+            }
+
             if ($locked->status !== $to) {
                 $locked->status = $to;
                 $locked->save();
