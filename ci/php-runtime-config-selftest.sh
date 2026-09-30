@@ -85,11 +85,20 @@ pass "nginx emits X-Robots-Tag only for staging.togetherweown.com"
 # must appear exactly once with exactly the documented value, so a later
 # template edit cannot silently drop HSTS or loosen framing back to SAMEORIGIN.
 check_header() {
-  # Fixed-string match on the full directive: header values carry parentheses
-  # and semicolons that must not be read as regex.
+  # Literal whole-line comparison: ignore commented directives without reading
+  # parentheses and semicolons in header values as regex.
   local name="$1" value="$2" line count
   line="add_header ${name} \"${value}\""
-  count="$(grep -F -c -- "${line}" "$CONFIG")"
+  count="$(awk -v directive="$line" '
+    {
+      line = $0
+      sub(/\r$/, "", line)
+      sub(/^[[:blank:]]+/, "", line)
+      sub(/[[:blank:]]*(#.*)?$/, "", line)
+      if (line == directive ";" || line == directive " always;") count++
+    }
+    END { print count + 0 }
+  ' "$CONFIG")"
   if [ "$count" -ne 1 ]; then
     fail "nginx.template.conf must emit ${line} exactly once (found ${count})"
     exit 1
