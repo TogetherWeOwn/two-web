@@ -70,9 +70,12 @@ test('a second tab re-renders to the guest pitch after sign-out elsewhere', func
             ->assertPathIs('/')
             ->assertSeeLink('Log in with Discord');
 
-        // Back to tab A: still showing the stale authenticated render.
+        // Back to tab A. No assertion on the stale authenticated render
+        // here: the sign-out broadcast above fires tab A's `storage`
+        // listener, which reloads it into the guest render at once — whether
+        // that reload has already landed is timing, and asserting either way
+        // is the TOG-10141 flake. Both orderings converge below.
         $browser->driver->switchTo()->window($tabA);
-        $browser->assertVisible('[data-testid="rsvp-going"]');
         // Ring the doorbell; the fetch, verdict and reload are real. `script`
         // returns the evaluation result, not the browser, so it stands alone.
         $browser->script('window.dispatchEvent(new Event("focus"));');

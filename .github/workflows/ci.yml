@@ -9,6 +9,10 @@ on:
   pull_request:
   push:
     branches: [main]
+  # Dispatched by the release workflow (TOG-10036) on release-please branches:
+  # PRs opened with GITHUB_TOKEN trigger no workflows, so the required checks
+  # would never run on the release PR without this path.
+  workflow_dispatch:
 
 # A second push to the same PR cancels the first. Never cancel `main` — its result
 # is what the staging deploy keys off.
@@ -49,7 +53,7 @@ jobs:
       # preinstalled, but every other job here pins the version and this should not
       # be the exception — an unpinned interpreter is exactly the kind of thing that
       # works until somebody upgrades the host. No install step follows it; seconds.
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: ${{ env.NODE_VERSION }}
 
@@ -165,6 +169,15 @@ jobs:
       # already green, which is far too late to stop the pull request that breaks it.
       - name: Deploy guard self-test
         run: ./ci/deploy-target-selftest.sh
+
+      # The deployment-records prune (TOG-9273): every merge to `main` creates
+      # a Deployment record and nothing deleted them, so a weekly scheduled
+      # workflow keeps the newest 30 per environment. The interesting case is
+      # a prune that deletes the wrong end of the list or reads an API error
+      # as an empty environment, so it needs no secret, no network and no
+      # server — a stub `gh` answers from fixtures, offline, in seconds.
+      - name: Deployment prune self-test
+        run: ./ci/prune-deployments-selftest.sh
 
       # The Nixpacks runtime setting that prevents PHP from disclosing its version
       # lives in nginx.template.conf. Keep its exact FastCGI scope pinned offline so
@@ -329,7 +342,7 @@ jobs:
           "$php_bin" "$RUNNER_TEMP/composer-pinned" --version
 
       - name: Cache Composer packages
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: vendor
           key: composer-${{ env.PHP_VERSION }}-${{ hashFiles('composer.lock') }}
@@ -421,7 +434,7 @@ jobs:
           "$php_bin" "$RUNNER_TEMP/composer-pinned" --version
 
       - name: Cache Composer packages
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: vendor
           key: composer-${{ env.PHP_VERSION }}-${{ hashFiles('composer.lock') }}
@@ -530,13 +543,13 @@ jobs:
           [ "$("$php_bin" -r 'echo PHP_MAJOR_VERSION, ".", PHP_MINOR_VERSION;')" = "$PHP_VERSION" ] || { echo "::error::pinned PHP is $("$php_bin" -v | head -1), not PHP ${PHP_VERSION} — refusing to run on the wrong interpreter (TOG-5877)"; exit 1; }
           "$php_bin" "$RUNNER_TEMP/composer-pinned" --version
 
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: npm
 
       - name: Cache Composer packages
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: vendor
           key: composer-${{ env.PHP_VERSION }}-${{ hashFiles('composer.lock') }}
@@ -763,13 +776,13 @@ jobs:
           printf 'opcache.enable=1\nopcache.enable_cli=1\nopcache.validate_timestamps=0\n' > "$dir/zz-opcache-budgets.ini"
           echo "PHP_INI_SCAN_DIR=:$dir" >> "$GITHUB_ENV"
 
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: npm
 
       - name: Cache Composer packages
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: vendor
           key: composer-${{ env.PHP_VERSION }}-${{ hashFiles('composer.lock') }}
@@ -1049,7 +1062,7 @@ jobs:
       - name: Attest the runner
         run: ./ci/attest-runner.sh
 
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: ${{ env.NODE_VERSION }}
 

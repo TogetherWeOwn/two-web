@@ -302,6 +302,28 @@
                     going.focus({ preventScroll: true });
                 }
             });
+
+            // TOG-9354: the round trip above never reaches the component when
+            // the session died underneath the page (SESSION_LIFETIME). The
+            // POST dies first in ValidateCsrfToken — the page holds a stale
+            // data-csrf token against a fresh session — answering 419, and
+            // Livewire's handlePageExpiry answers that with a native
+            // confirm(), so the branded session-expired banner below stays
+            // unreachable. Intercept the 419 before Livewire's default:
+            // prevent the confirm and reload into the guest render, which
+            // carries the same login link with the ?next= return. 419-only
+            // on purpose: any other failure still gets Livewire's failure
+            // modal. No loop: the reloaded guest page issues no POST.
+            $wire.$hook('request', ({ fail }) => {
+                fail(({ status, preventDefault }) => {
+                    if (status !== 419) {
+                        return;
+                    }
+
+                    preventDefault();
+                    window.location.reload();
+                });
+            });
         </script>
     @endscript
 </div>

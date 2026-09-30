@@ -35,7 +35,7 @@ class EventsTable
                 TextColumn::make('game')
                     ->toggleable(),
                 TextColumn::make('starts_at')
-                    ->label('Starts')
+                    ->label('Starts (UTC)')
                     ->dateTime('D j M Y, H:i', 'UTC')
                     ->sortable(),
                 TextColumn::make('status')

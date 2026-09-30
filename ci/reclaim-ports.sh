@@ -56,7 +56,15 @@ for port in "$@"; do
   # `lsof` is not installed on the runners and `fuser` is in psmisc, which may
   # not be either. `ss` is part of iproute2 and is always present. Parse the pid
   # out of `users:(("php",pid=1234,fd=3))`.
-  pids="$(ss -lptnH "sport = :${port}" 2>/dev/null \
+  # An inspection failure is not an empty listing. Check ss before parsing:
+  # grep legitimately returns 1 when a successful inspection has no PIDs.
+  listeners="$(ss -lptnH "sport = :${port}" 2>/dev/null)"
+  inspection_status=$?
+  if [ "$inspection_status" -ne 0 ]; then
+    echo "::error::reclaim-ports: listener inspection failed for port ${port} (ss exited ${inspection_status}); refusing cleanup." >&2
+    exit 1
+  fi
+  pids="$(printf '%s\n' "$listeners" \
     | grep -oE 'pid=[0-9]+' | cut -d= -f2 | sort -u)"
 
   [ -n "$pids" ] || continue
