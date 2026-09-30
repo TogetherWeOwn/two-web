@@ -157,7 +157,7 @@ it('shows per-game errors before either profile trap signal', function (string $
     'both signals' => [true, 'https://spam.example'],
 ]);
 
-it('silently swallows valid games under either profile trap signal', function (bool $fast, string $decoy) {
+it('silently swallows valid games under either profile trap signal', function (array $games, bool $fast, string $decoy) {
     $this->freezeTime();
     $member = User::factory()->create();
     $profile = Profile::factory()->for($member)->create([
@@ -166,8 +166,6 @@ it('silently swallows valid games under either profile trap signal', function (b
         'timezone' => 'Europe/London',
     ]);
     $before = $profile->fresh()->getAttributes();
-    $games = array_map(fn (int $i) => str_pad("Game {$i}", 80, 'g'), range(1, 20));
-
     $edit = Livewire::actingAs($member)
         ->test(MemberProfile::class, ['member' => $member, 'stats' => memberStatsStub($member->discord_id)])
         ->call('edit')
@@ -192,6 +190,9 @@ it('silently swallows valid games under either profile trap signal', function (b
     expect($profile->fresh()->getAttributes())->toBe($before)
         ->and(Profile::query()->count())->toBe(1);
 })->with([
+    '80-character names' => [array_map(fn (int $i) => str_pad("Game {$i}", 80, 'g'), range(1, 20))],
+    'accented names' => [array_map(fn (int $i) => "ÅGame {$i}", range(1, 20))],
+])->with([
     'fast fill only' => [true, ''],
     'honeypot only' => [false, 'https://spam.example'],
     'both signals' => [true, 'https://spam.example'],

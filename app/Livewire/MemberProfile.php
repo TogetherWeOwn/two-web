@@ -274,7 +274,7 @@ class MemberProfile extends Component
         // Complete per-game validation before either trap or restored-draft
         // handling can consume the input or replace its field errors.
         $games = [];
-        foreach (preg_split('/\R/', $validated['gamesText'] ?? '') ?: [] as $game) {
+        foreach (preg_split('/\R/u', $validated['gamesText'] ?? '') ?: [] as $game) {
             $game = trim($game);
 
             if ($game !== '' && ! in_array($game, $games, true)) {
