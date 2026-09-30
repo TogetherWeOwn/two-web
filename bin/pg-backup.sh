@@ -76,23 +76,109 @@ usage() {
   exit 2
 }
 
-# Read one KEY from .env without sourcing it: sourcing executes whatever the
-# file contains, and .env on a real box holds secrets that must not be
-# reinterpreted by a backup script. Handles `KEY=value`, `KEY="quoted value"`
-# and `export KEY=value`; ignores comments and blank lines.
+# Never source .env. Support the single-line subset of the pinned
+# vlucas/phpdotenv parser: export/quoted names, quoted values and # comments.
+# Refuse unsupported syntax rather than compare a name the app reads differently.
+# In particular, validate EVERY entry before selecting a key: a DB_DATABASE-
+# looking line inside another key's multiline value is not a new assignment.
+# Return 1 for an absent key, 2 for an unsafe file; connecting commands preserve
+# the refusal diagnostic, while rotate/promote-weekly remain file-only.
+dotenv_rhs_for() {
+  local key="$1" line name rhs out found=0 has_value
+  local LC_ALL=C
+  [ -f .env ] || return 1
+  # Bash read drops NUL bytes; dotenv does not. Don't silently alter the file.
+  if ! tr -d '\000' < .env | cmp -s - .env; then
+    echo "pg-backup: refusing: cannot parse .env containing NUL bytes — use single-line assignments." >&2
+    return 2
+  fi
+  while IFS= read -r line || [ -n "$line" ]; do
+    line="${line%$'\r'}" # CRLF is supported; embedded CR is another entry in dotenv.
+    case "$line" in
+      *$'\r'*|*$'\f'*)
+        echo "pg-backup: refusing: cannot parse .env containing unsupported control bytes — use single-line assignments." >&2
+        return 2
+        ;;
+    esac
+    line="$(printf '%s' "$line" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
+    case "$line" in ''|'#'*) continue ;; esac
+    has_value=0
+    case "$line" in
+      *'='*) name="${line%%=*}"; rhs="${line#*=}"; has_value=1 ;;
+      *) name="$line"; rhs="" ;;
+    esac
+    name="$(printf '%s' "$name" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
+    case "$name" in
+      export[[:space:]]*)
+        name="$(printf '%s' "$name" | sed 's/^export[[:space:]][[:space:]]*//')"
+        ;;
+    esac
+    if [ "${#name}" -ge 3 ]; then
+      case "$name" in '"'*'"'|"'"*"'") name="${name:1:${#name}-2}" ;; esac
+    fi
+    case "$name" in
+      ''|*[!a-zA-Z0-9_.]*)
+        echo "pg-backup: refusing: the .env file has a name dotenv itself rejects or this script cannot parse — use ASCII letters, digits, dots and underscores." >&2
+        return 2
+        ;;
+    esac
+    [ "$has_value" -eq 1 ] || continue # dotenv's valueless entries don't set a value.
+    rhs="$(printf '%s' "$rhs" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
+    if ! dotenv_unquote "$rhs" >/dev/null; then
+      echo "pg-backup: refusing: cannot parse the ${name} line in .env — multiline values, double-quoted escapes and malformed values are unsupported; use a single-line literal." >&2
+      return 2
+    fi
+    if [ "$name" = "$key" ]; then out="$rhs"; found=1; fi
+  done < .env
+  if [ "$found" -eq 1 ]; then printf '%s' "$out"; return 0; fi
+  return 1
+}
+
+# Only return values whose quote/comment boundaries are unambiguous. Reject
+# double-quoted escapes instead of partially emulating dotenv's transducer.
+dotenv_unquote() {
+  local raw="$1" q rest inner="" closed=0 val
+  q="${raw:0:1}"
+  case "$q" in
+    '"'|"'")
+      rest="${raw:1}"
+      while [ -n "$rest" ]; do
+        if [ "$q" = '"' ] && [ "${rest:0:1}" = '\' ]; then return 1; fi
+        if [ "${rest:0:1}" = "$q" ]; then
+          rest="${rest:1}"; closed=1; break
+        fi
+        inner="${inner}${rest:0:1}"
+        rest="${rest:1}"
+      done
+      [ "$closed" -eq 1 ] || return 1
+      grep -Eq '^[[:space:]]*(#.*)?$' <<< "$rest" || return 1
+      printf '%s' "$inner"
+      ;;
+    *)
+      val="$(printf '%s' "$raw" | sed -e 's/#.*$//' -e 's/[[:space:]]*$//')"
+      case "$val" in *[[:space:]]*|*'"'*|*"'"*) return 1 ;; esac
+      printf '%s' "$val"
+      ;;
+  esac
+}
+
 env_get() {
-  local key="$1" line val
-  [ -f .env ] || return 0
-  line="$(grep -E "^[[:space:]]*(export[[:space:]]+)?${key}=" .env | tail -n 1 || true)"
-  [ -n "$line" ] || return 0
-  val="${line#*=}"
-  val="$(printf '%s' "$val" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' -e 's/^"\(.*\)"$/\1/' -e "s/^'\(.*\)'$/\1/")"
-  printf '%s' "$val"
+  local rhs
+  rhs="$(dotenv_rhs_for "$1" 2>/dev/null)" || return 0
+  dotenv_unquote "$rhs"
+}
+
+require_parseable_dotenv_db() {
+  local rc
+  if dotenv_rhs_for DB_DATABASE >/dev/null; then return 0; else rc=$?; fi
+  [ "$rc" -ne 2 ] # An absent key is safe; an invalid file is not.
 }
 
 # Environment first, .env second, compose defaults last. The `:-` form (not
 # `:=` on an unconditional assignment) is what keeps a real environment
 # variable from being overridden by the file.
+DB_DATABASE_FROM_ENV=0
+if [ -n "${DB_DATABASE:-}" ]; then DB_DATABASE_FROM_ENV=1; fi
 DB_HOST="${DB_HOST:-$(env_get DB_HOST)}"
 DB_PORT="${DB_PORT:-$(env_get DB_PORT)}"
 DB_DATABASE="${DB_DATABASE:-$(env_get DB_DATABASE)}"
@@ -162,6 +248,7 @@ table_counts() {
 }
 
 cmd_backup() {
+  require_parseable_dotenv_db || return 1
   require_local_docker
   local out="${1:-}"
   if [ -z "$out" ]; then
@@ -267,6 +354,32 @@ cmd_promote_weekly() {
 cmd_restore_proof() {
   # Check before arming cleanup or touching docker: both dropdb paths must
   # target a scratch database, never the source whose backup we are proving.
+  require_parseable_dotenv_db || return 1
+  local rhs value
+  if [ "$DB_DATABASE_FROM_ENV" -eq 0 ] && rhs="$(dotenv_rhs_for DB_DATABASE)"; then
+    # Dotenv expands $VAR in unquoted/double-quoted values. Never compare the
+    # literal text with a name the application could expand into the scratch DB.
+    value="$(dotenv_unquote "$rhs")"
+    case "$rhs" in
+      "'"*) ;;
+      *)
+        case "$value" in
+          *'$'*)
+            echo "pg-backup: refusing: .env DB_DATABASE uses variable expansion — set a literal database name." >&2
+            return 1
+            ;;
+        esac
+        ;;
+    esac
+  fi
+  # libpq accepts connection strings and URIs as -d arguments; different text
+  # can still resolve to the scratch DB. Only a plain name may reach the guard.
+  case "$DB_DATABASE" in
+    *'='*|*'://'*|*[[:space:]]*)
+      echo "pg-backup: refusing: DB_DATABASE must be a plain database name, not a connection string or URI." >&2
+      return 1
+      ;;
+  esac
   if [ "$DB_DATABASE" = "$SCRATCH_DB" ]; then
     echo "pg-backup: refusing: DB_DATABASE must differ from scratch database '${SCRATCH_DB}'." >&2
     return 1
