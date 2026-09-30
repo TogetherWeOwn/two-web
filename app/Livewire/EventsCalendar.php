@@ -141,13 +141,19 @@ class EventsCalendar extends Component
         // second resolve whether the first one's read failed is always "no",
         // which would silently turn every error state into the
         // never-scheduled one.
+        $term = trim($this->search);
         $discord = app(DiscordEventsSource::class);
         $discordRows = collect($discord->upcoming())
             // The view already filters to scheduled/active within 90 days, but
             // the boundary is the bot's clock, not ours — re-check the end
             // against now so a just-started event cannot linger here forever
             // if the collector goes dark.
-            ->filter(fn (Event $event): bool => $event->ends_at >= now());
+            ->filter(fn (Event $event): bool => $event->ends_at >= now())
+            // Transient Discord rows never reach visible()'s SQL search. Match
+            // the same literal title/description fragments before merging them.
+            ->filter(fn (Event $event): bool => $term === ''
+                || mb_stripos($event->title, $term) !== false
+                || mb_stripos((string) $event->description, $term) !== false);
         $discordFailed = $discord->lastReadFailed();
 
         $upcoming = $this->upcoming($discordRows);
@@ -160,7 +166,7 @@ class EventsCalendar extends Component
         }
         // A blank search is no search: spaces alone must not narrow the page to
         // nothing, and must not swap the empty states for the search one.
-        $searching = trim($this->search) !== '';
+        $searching = $term !== '';
         // While searching, matching past events show without opening the drawer:
         // a match hidden behind a closed drawer reads as "no results".
         $showPast = $this->showingPast || $searching;
