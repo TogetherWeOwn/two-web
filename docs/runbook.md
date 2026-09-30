@@ -521,37 +521,80 @@ is no dashboard and no table to query; the log line is the store. This
 section is the documented provider path: how a reviewer triggers a
 violation on staging and finds it.
 
-**Read it on staging, verbatim.** Same box access as any outage read
-(quick-reference step 3 below):
+**Read it on staging.** Same box access as any outage read
+(quick-reference step 3 below). The single-file query requires
+`LOG_CHANNEL=single`, or `LOG_CHANNEL=stack` with `LOG_STACK=single`:
 
 ```bash
 grep 'csp.report.violation' /var/www/two-web/storage/logs/laravel.log | tail -30
-# [2026-09-29 14:19:38] local.WARNING: csp.report.violation {"blocked_uri":"inline","violated_directive":"script-src","document_uri":"...","source_file":"...","line_number":1}
+# Illustrative row; browsers may include the directive's source list:
+# [2026-09-29 14:19:38] staging.WARNING: csp.report.violation {"blocked_uri":"https://csp-probe.invalid","violated_directive":"connect-src","document_uri":"...","source_file":"...","line_number":1}
 ```
 
-What the fields mean: `violated_directive` names the policy clause that
-fired (`script-src` and friends); `blocked_uri` is what the browser refused
-(`inline` for an inline script); `document_uri` is the page that produced
-the report. A burst of `script-src` / `inline` rows on a page with no inline
-script of ours is the signal to tune the policy, not a user to chase —
-reports carry no user id, no session, and no IP beyond what the log line
+For `LOG_CHANNEL=daily`, or `LOG_CHANNEL=stack` with `LOG_STACK=daily`,
+the handler writes dated files, not `laravel.log`. Query retained days:
+
+```bash
+grep 'csp.report.violation' /var/www/two-web/storage/logs/laravel-????-??-??.log | tail -30
+```
+
+For other configured channels, read their actual destination; an absent or
+stale `laravel.log` does not mean no violations. `violated_directive` names
+the policy clause that fired; `blocked_uri` names the violating resource
+(not necessarily blocked in report-only mode); `document_uri` is the page
+that produced the report. Cross-origin URLs may be reduced to their origin.
+Reports carry no user id, no session, and no IP beyond what the log line
 itself holds.
 
-**Trigger one on purpose.** Flip `CSP_REPORT_ONLY=true` on staging (Coolify
-env config, [`docs/env.md` §15](env.md#15-csp-report-only-mode)), load any
-page, then fire a violation from devtools — appending an inline script
-suffices (`document.body.appendChild(Object.assign(document.createElement('script'),{textContent:'void 0'}))`).
-Report-only mode logs it without blocking anything. Then run the grep above.
-Flip the flag back when done: report-only left on is an unenforced policy,
-and `docs/env.md` §15 says so.
+**Trigger one on purpose (authorized staging operators only).** This is an
+operator procedure, not permission for agents to probe staging or production.
+Save the original CSP, sampling and logging settings first. Both accepted
+reports and `csp.report.dropped_oversize` use `Log::warning`: the destination
+must include warnings (`LOG_LEVEL=warning`, `notice`, `info` or `debug`).
+`LOG_LEVEL=error` (also `critical`, `alert`, `emergency`) hides both rows.
+For a deterministic drill, use `CSP_REPORT_SAMPLE_RATE=1.0`.
+
+1. Set `CSP_REPORT_ONLY=true` in staging's Coolify env config
+   ([`docs/env.md` §15](env.md#15-csp-report-only-mode)), with the logging
+   threshold above. Apply those settings by redeploying the staging target;
+   the deployment rebuilds cached configuration with `php artisan config:cache`.
+   On a directly managed box, run `php artisan config:cache` in the active
+   release with the updated environment. Editing `.env` alone is not enough.
+2. Reload an HTML page (not `/up`, JSON or a redirect) with browser cache
+   disabled. Inspect that document's actual response headers in DevTools
+   Network: require `Content-Security-Policy-Report-Only`, containing
+   `connect-src 'self'` and `report-uri /csp-reports`, and no enforcing
+   `Content-Security-Policy` header. Stop if a proxy still emits enforcement
+   or the report-only header is absent; do not assume the env value is active.
+3. On that page, run this in DevTools Console:
+
+   ```js
+   fetch('https://csp-probe.invalid/csp-probe', {mode: 'no-cors', credentials: 'omit', referrerPolicy: 'no-referrer'}).catch(() => {});
+   ```
+
+   The shipped `connect-src 'self'` forbids this cross-origin connection.
+   `.invalid` is reserved and cannot resolve to a public service; the fetch
+   fails separately at DNS, but report-only CSP still reports the policy
+   violation. It sends no credentials or referrer. An inline script is NOT
+   a valid trigger: the shipped `script-src` allows `'unsafe-inline'`.
+   Find the browser's `POST /csp-reports` (204) in Network, then query the
+   configured log destination above for `connect-src` / `https://csp-probe.invalid`.
+   Console warnings alone do not prove the sink received or logged a report.
+4. Flip the flag back to `CSP_REPORT_ONLY=false` to restore enforcement and
+   restore any temporary sampling/logging settings. Redeploy the staging
+   target again, or run `php artisan config:cache` again on the active release
+   with the restored environment. Reload the HTML document with cache disabled
+   and verify its actual response headers: `Content-Security-Policy` present,
+   `Content-Security-Policy-Report-Only` absent. Do not leave until enforcement
+   is confirmed; report-only left on is an unenforced policy.
 
 **The bounds, stated plainly.** `CSP_REPORT_SAMPLE_RATE=0.0` means valid
-reports are parsed but never logged (blind) — the grep finds nothing and
-that is configuration, not absence of violations. Oversize bodies log under
-`csp.report.dropped_oversize`, not here, so a flood shows up as drops, not
-violations. Log retention is [TOG-8728](/TOG/issues/TOG-8728) (backlog, not
-this card): whatever rotates `laravel.log` bounds how far back this grep
-reaches.
+reports are parsed but never logged (blind) — an empty query can be sampling,
+logging threshold, destination or failed delivery, not absence of violations.
+Oversize bodies log under `csp.report.dropped_oversize`, not the violation key,
+so query that key in the same destination to find drops. Retention work is
+[TOG-8728](/TOG/issues/TOG-8728) (not this card): existing rotation and, for
+`daily`, `LOG_DAILY_DAYS` (default 14) bound how far back the query reaches.
 
 Pinned by `tests/Unit/CspReportQueryDocTest.php`, which asserts this section
 still names the grep string, the trigger, and the bounds.

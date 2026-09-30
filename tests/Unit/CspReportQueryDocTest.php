@@ -1,5 +1,8 @@
 <?php
 
+use App\Http\Middleware\AddContentSecurityPolicy;
+use Illuminate\Http\Request;
+
 // CSP violation reports are log lines, not rows (TOG-8403): POST /csp-reports
 // logs a sampled `csp.report.violation` row and stores nothing, so the runbook
 // owns the only find path — the grep, the staging trigger, and the bounds.
@@ -10,25 +13,68 @@
 
 $docs = 'docs/runbook.md';
 
-it('names the exact log grep that finds violation reports', function () use ($docs) {
+it('names the exact log queries and their channel prerequisites', function () use ($docs) {
     $source = file_get_contents(base_path($docs));
 
-    // The documented provider path: the log key in grep form plus the file it
-    // lives in. Pinned on the command, not the bare key — `csp.report.violation`
-    // alone also appears in the sink's own feature test, so the key by itself
-    // would pass with this section deleted.
-    expect($source)->toContain("grep 'csp.report.violation'");
-    expect($source)->toContain('storage/logs/laravel.log');
+    expect($source)->toContain("grep 'csp.report.violation' /var/www/two-web/storage/logs/laravel.log | tail -30");
+    expect($source)->toContain('`LOG_CHANNEL=single`, or `LOG_CHANNEL=stack` with `LOG_STACK=single`');
+    expect($source)->toContain('`LOG_CHANNEL=daily`, or `LOG_CHANNEL=stack` with `LOG_STACK=daily`');
+    expect($source)->toContain("grep 'csp.report.violation' /var/www/two-web/storage/logs/laravel-????-??-??.log | tail -30");
 });
 
-it('documents how to trigger a violation on staging on purpose', function () use ($docs) {
+it('pins a trigger forbidden by the shipped report-only policy', function () use ($docs) {
     $source = file_get_contents(base_path($docs));
 
-    // The observe switch plus the flip-back rule: without the trigger the
-    // section is a grep with nothing to find; without the flip-back it blesses
-    // an unenforced policy as a steady state.
-    expect($source)->toContain('CSP_REPORT_ONLY=true');
-    expect($source)->toContain('Flip the flag back');
+    // Pin executable text, not just the toggle: removing the old inline
+    // example passed this test, and unsafe-inline allowed it anyway.
+    expect($source)->toContain("fetch('https://csp-probe.invalid/csp-probe', {mode: 'no-cors', credentials: 'omit', referrerPolicy: 'no-referrer'}).catch(() => {});");
+    expect($source)->toContain('"blocked_uri":"https://csp-probe.invalid","violated_directive":"connect-src"');
+    expect($source)->toContain('An inline script is NOT');
+
+    config()->set('csp.report_only', true);
+    $response = (new AddContentSecurityPolicy)->handle(
+        Request::create('https://togetherweown.test'),
+        fn () => response('<html></html>', 200, ['Content-Type' => 'text/html']),
+    );
+    $policy = $response->headers->get('Content-Security-Policy-Report-Only');
+
+    expect($policy)->toContain("connect-src 'self';");
+    expect($policy)->not->toContain('csp-probe.invalid');
+    expect($policy)->toContain('report-uri /csp-reports');
+});
+
+it('requires cached configuration rebuilds and header checks in both directions', function () use ($docs) {
+    $source = file_get_contents(base_path($docs));
+    $enable = strpos($source, '1. Set `CSP_REPORT_ONLY=true`');
+    $restore = strpos($source, '4. Flip the flag back to `CSP_REPORT_ONLY=false`');
+
+    expect($enable)->not->toBeFalse();
+    expect($restore)->not->toBeFalse();
+    $enableSteps = substr($source, $enable, $restore - $enable);
+    $restoreSteps = substr($source, $restore, strpos($source, '**The bounds, stated plainly.**', $restore) - $restore);
+
+    // Scope each pin to its direction so a lone cache command cannot cover
+    // both enabling reports and restoring enforcement.
+    expect($enableSteps)->toContain('redeploying the staging target');
+    expect($enableSteps)->toContain('`php artisan config:cache`');
+    expect($enableSteps)->toContain('actual response headers');
+    expect($enableSteps)->toContain('require `Content-Security-Policy-Report-Only`');
+    expect($enableSteps)->toContain('no enforcing');
+    expect($enableSteps)->toContain('`Content-Security-Policy` header');
+    expect($restoreSteps)->toContain('Redeploy the staging');
+    expect($restoreSteps)->toContain('`php artisan config:cache` again');
+    expect($restoreSteps)->toContain('actual response headers: `Content-Security-Policy` present');
+    expect($restoreSteps)->toContain('`Content-Security-Policy-Report-Only` absent');
+    expect($restoreSteps)->toContain('restore any temporary sampling/logging settings');
+});
+
+it('requires warning-level logging and full sampling for the drill', function () use ($docs) {
+    $source = file_get_contents(base_path($docs));
+
+    expect($source)->toContain('reports and `csp.report.dropped_oversize` use `Log::warning`');
+    expect($source)->toContain('`LOG_LEVEL=warning`, `notice`, `info` or `debug`');
+    expect($source)->toContain('`LOG_LEVEL=error` (also `critical`, `alert`, `emergency`) hides both rows');
+    expect($source)->toContain('`CSP_REPORT_SAMPLE_RATE=1.0`');
 });
 
 it('documents the bounds: sampling blindness, drops, and retention', function () use ($docs) {
