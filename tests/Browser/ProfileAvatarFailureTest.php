@@ -41,7 +41,7 @@ it('keeps a readable, sized profile avatar fallback when the image is unavailabl
                     new URL(document.querySelector('[data-testid="profile-avatar-img"]').currentSrc).origin === location.origin
                 JS, true)
                 ->assertPresent('[data-testid="profile-avatar-img"]')
-                ->assertNotVisible('[data-testid="profile-avatar-img"]')
+                ->assertMissing('[data-testid="profile-avatar-img"]')
                 ->assertScript('document.querySelector(\'[data-testid="profile-avatar-img"]\').hidden', true);
         } else {
             $browser->assertMissing('[data-testid="profile-avatar-img"]');
@@ -61,7 +61,7 @@ it('keeps a readable, sized profile avatar fallback when the image is unavailabl
         expect($box['height'])->toBeGreaterThanOrEqual(95)->toBeLessThanOrEqual(97);
         expect($box['display'])->toBe('flex');
 
-        $browser->assertSeeIn('h1', 'River')
+        $browser->assertSeeIn('h1', 'RIVER')
             ->assertSee('@river-avatar-regression')
             ->assertSee('Usually in co-op after work.')
             ->assertSee('Minecraft')
