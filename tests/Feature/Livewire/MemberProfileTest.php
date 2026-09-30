@@ -980,15 +980,70 @@ it('retains a restored draft on an immediate save and accepts a later retry', fu
         ->timezone->toBe('Europe/London');
 });
 
-it('still swallows a filled honeypot on a restored draft', function () {
-    $this->freezeTime();
+it('keeps a restored draft through a queued edit (TOG-9355 review)', function () {
+    // The Edit/Add controls stay in the DOM while the restoreDraft round
+    // trip is outstanding (Livewire defers the morph), so a click queued
+    // behind the restore runs after it. Server-side that ordering is
+    // restore-then-edit — the queued edit must not refill over the
+    // recovered draft after the browser consumed its only stored copy.
     $member = User::factory()->create();
+    Profile::factory()->for($member)->create(['bio' => 'Before']);
 
     Livewire::actingAs($member)
         ->test(MemberProfile::class, ['member' => $member, 'stats' => profileStats($member->discord_id)])
+        ->call('restoreDraft', 'Recovered', "Chess\nCo-op", 'Europe/London')
+        ->call('edit')
+        ->assertSet('editing', true)
+        ->assertSet('draftRestored', true)
+        ->assertSet('bio', 'Recovered')
+        ->assertSet('gamesText', "Chess\nCo-op")
+        ->assertSet('timezone', 'Europe/London')
+        ->assertSeeHtml('data-testid="profile-draft-restored"');
+
+    expect($member->profile()->sole()->bio)->toBe('Before');
+});
+
+it('answers an early restored save the same with an empty or filled decoy', function () {
+    // TOG-9355 review: inside the same server-locked floor, both decoy
+    // states get the same recoverable refusal — splitting them would be a
+    // honeypot oracle. Past the floor the filled decoy still takes the
+    // ordinary silent-trap path.
+    $this->freezeTime();
+    $member = User::factory()->create();
+    Profile::factory()->for($member)->create(['bio' => 'Before']);
+
+    foreach ([false, true] as $filled) {
+        $component = Livewire::actingAs($member)
+            ->test(MemberProfile::class, ['member' => $member, 'stats' => profileStats($member->discord_id)])
+            ->call('restoreDraft', 'Recovered', '', '');
+        if ($filled) {
+            $component->set('website', 'filled decoy');
+        }
+
+        $this->travel(500)->milliseconds();
+        $component->call('save')
+            ->assertHasErrors(['bio'])
+            ->assertSet('saved', false)
+            ->assertSet('editing', true)
+            ->assertSet('draftRestored', true)
+            ->assertSet('bio', 'Recovered');
+        expect($member->profile()->sole()->bio)->toBe('Before');
+    }
+});
+
+it('still swallows a filled honeypot on a restored draft past the floor', function () {
+    $this->freezeTime();
+    $member = User::factory()->create();
+
+    $component = Livewire::actingAs($member)
+        ->test(MemberProfile::class, ['member' => $member, 'stats' => profileStats($member->discord_id)])
         ->call('restoreDraft', 'Bot draft', '', '')
-        ->set('website', 'filled decoy')
-        ->call('save')
+        ->set('website', 'filled decoy');
+
+    // Inside the floor both decoy states refuse identically (see above);
+    // age past it so the filled decoy reaches the silent trap.
+    $this->travel(SpamTrap::MIN_FILL_MS + 1000)->milliseconds();
+    $component->call('save')
         ->assertHasNoErrors()
         ->assertSet('saved', true)
         ->assertSet('editing', false);

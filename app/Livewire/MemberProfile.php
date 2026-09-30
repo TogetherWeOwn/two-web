@@ -136,6 +136,18 @@ class MemberProfile extends Component
     {
         Gate::authorize('updateProfile', $this->member);
 
+        // TOG-9355: already open is a no-op, with no refill and no
+        // re-dispatch. The Edit/Add controls stay in the DOM while a
+        // restoreDraft round trip is outstanding (Livewire defers the morph),
+        // so a click queued behind the restore runs after it and would
+        // otherwise clear draftRestored and fillForm() over the recovered
+        // draft — after the browser already consumed its only stored copy. A
+        // forged repeat open is equally harmless: the stamp from the real
+        // open stands.
+        if ($this->editing) {
+            return;
+        }
+
         $this->saved = false;
         $this->saveFailed = false;
         $this->sessionExpired = false;
@@ -248,12 +260,14 @@ class MemberProfile extends Component
         $validated = $this->validate(static::validationRules());
 
         // A restored form is already filled when it opens. Refuse an early
-        // human retry without consuming the recovered text or claiming a save.
-        // The server-set stamp is not backdated: no write gets past the floor,
-        // and a filled decoy still takes the ordinary silent-trap path below.
-        if ($this->draftRestored
-            && ! SpamTrap::honeypotFilled($this->website)
-            && SpamTrap::tooFast($this->formOpenedAt)) {
+        // retry without consuming the recovered text or claiming a save. The
+        // refusal is decoy-independent on purpose (TOG-9355 review): an
+        // empty decoy and a filled one are both inside the same server-locked
+        // floor, so both get the same recoverable answer — splitting them
+        // would be a honeypot oracle. Past the floor the filled decoy takes
+        // the ordinary silent-trap path below. The server-set stamp is not
+        // backdated: no write gets past the floor.
+        if ($this->draftRestored && SpamTrap::tooFast($this->formOpenedAt)) {
             $this->addError('bio', 'Please wait a moment and save again. Your changes are still here.');
 
             return;
