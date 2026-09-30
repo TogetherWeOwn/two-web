@@ -265,6 +265,12 @@ cmd_promote_weekly() {
 }
 
 cmd_restore_proof() {
+  # Check before arming cleanup or touching docker: both dropdb paths must
+  # target a scratch database, never the source whose backup we are proving.
+  if [ "$DB_DATABASE" = "$SCRATCH_DB" ]; then
+    echo "pg-backup: refusing: DB_DATABASE must differ from scratch database '${SCRATCH_DB}'." >&2
+    return 1
+  fi
   require_local_docker
   local dump="${1:-}"
   if [ -z "$dump" ]; then

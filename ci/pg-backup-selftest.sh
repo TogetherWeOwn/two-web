@@ -31,7 +31,8 @@
 #   backup-empty          pg_dump prints nothing        -> exit 1, no file kept
 #   backup-failed         pg_dump exits nonzero          -> no dump/temp or success
 #   password-not-in-argv  the secret never appears in any docker argv
-#   proof-ok              equal counts                  -> PROOF OK, scratch dropped
+#   proof-source-alias    source equals scratch (env/.env) -> exit 1, no docker calls
+#   proof-ok              distinct source, equal counts -> PROOF OK, scratch dropped
 #   proof-mismatch        one count differs             -> PROOF FAILED, exit 1
 #   proof-corrupt         pg_restore exits 1            -> nonzero, scratch dropped
 #   proof-missing-dump    explicit path that is absent  -> exit 1, names it
@@ -315,14 +316,47 @@ fi
 
 printf '\n\033[1m==> The restore proof proves, and cleans up\033[0m\n'
 
+# Aliasing would let both the initial dropdb and EXIT cleanup delete the source.
+# Refuse environment and quoted/exported .env values before any docker call,
+# including cleanup. Seed a valid dump so missing input cannot mask the guard.
+for source in env dotenv; do
+  dir="$(fixture "proofalias-${source}")"
+  seed_dump "$dir"
+  : > "$dir/docker.log"
+  if [ "$source" = env ]; then
+    out="$(cd "$dir" && PATH="$STUB_DIR:$PATH" STUB_LOG="$dir/docker.log" \
+      DB_HOST=127.0.0.1 DB_DATABASE=two_web_restore_proof \
+      ./bin/pg-backup.sh restore-proof "$dir/backups/seed.dump" 2>&1)"; status=$?
+  else
+    printf 'export DB_DATABASE="two_web_restore_proof"\n' > "$dir/.env"
+    out="$(cd "$dir" && env -u DB_DATABASE PATH="$STUB_DIR:$PATH" STUB_LOG="$dir/docker.log" \
+      DB_HOST=127.0.0.1 ./bin/pg-backup.sh restore-proof "$dir/backups/seed.dump" 2>&1)"; status=$?
+  fi
+  if [ "$status" -eq 1 ] \
+      && grep -qF "DB_DATABASE must differ from scratch database 'two_web_restore_proof'" <<< "$out" \
+      && [ ! -s "$dir/docker.log" ]; then
+    pass "proof-source-alias-${source}"
+  else
+    fail "proof-source-alias-${source}: expected exit 1 naming the alias and no docker calls (got ${status})"
+    printf '%s\n' "$out" | sed 's/^/        /'
+    printf '%s\n' "$(< "$dir/docker.log")" | sed 's/^/        /'
+  fi
+done
+
 # Happy path: three tables, equal counts. Asserts the verdict, the per-table
 # listing (a PROOF OK with no table detail proves nothing to a reader), and
 # that both the scratch database and the container-side dump copy were removed.
 dir="$(fixture proofok)"
 seed_dump "$dir"
-out="$(run_script "$dir" restore-proof "$dir/backups/seed.dump" 2>&1)"; status=$?
+# A distinct environment value still wins over an aliased .env value.
+printf 'DB_DATABASE=two_web_restore_proof\n' > "$dir/.env"
+out="$(cd "$dir" && PATH="$STUB_DIR:$PATH" STUB_LOG="$dir/docker.log" \
+  DB_HOST=127.0.0.1 DB_DATABASE=custom_source \
+  ./bin/pg-backup.sh restore-proof "$dir/backups/seed.dump" 2>&1)"; status=$?
 if [ "$status" -eq 0 ] && grep -qF "PROOF OK" <<< "$out" \
     && grep -qF "cache 3" <<< "$out" && grep -qF "migrations 2" <<< "$out" \
+    && grep -qF -- "-d custom_source" "$dir/docker.log" \
+    && grep -qF "createdb" "$dir/docker.log" && grep -qF "pg_restore" "$dir/docker.log" \
     && grep -qF "dropdb" "$dir/docker.log" && grep -qF "restore-proof.dump" "$dir/docker.log"; then
   pass "proof-ok"
 else
