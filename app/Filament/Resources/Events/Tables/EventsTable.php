@@ -8,12 +8,14 @@ use App\Models\Event;
 use App\Services\EventService;
 use Filament\Actions\Action;
 use Filament\Actions\EditAction;
+use Filament\Notifications\Notification;
 use Filament\Tables\Columns\IconColumn;
 use Filament\Tables\Columns\TextColumn;
 use Filament\Tables\Filters\SelectFilter;
 use Filament\Tables\Filters\TernaryFilter;
 use Filament\Tables\Table;
 use Illuminate\Database\Eloquent\Builder;
+use Illuminate\Validation\ValidationException;
 
 class EventsTable
 {
@@ -137,7 +139,19 @@ class EventsTable
                     ->modalDescription(fn (Event $record): string => $record->isSeriesParent()
                         ? 'Publishing announces the whole series to Discord — every instance that exists goes live and members can RSVP on each one.'
                         : 'Publishing announces the event to Discord. Members can RSVP from that moment.')
-                    ->action(fn (Event $record, EventService $service) => $service->publish($record))
+                    ->action(function (Event $record, EventService $service): void {
+                        try {
+                            $service->publish($record);
+                        } catch (ValidationException $exception) {
+                            // This confirmation has no fields for inline errors.
+                            Notification::make()
+                                ->title($exception->getMessage())
+                                ->danger()
+                                ->send();
+
+                            throw $exception;
+                        }
+                    })
                     ->icon('heroicon-o-megaphone')
                     ->color('success'),
                 Action::make('cancel')
