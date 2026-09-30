@@ -265,16 +265,6 @@ Measured against a production-shaped build: `composer install --no-dev`,
 `APP_DEBUG=false`, config/route/view caches warm, real built assets. Measuring a
 debug build flatters us and then production surprises us.
 
-The budget tools are exact devDependencies in `package.json`; their full dependency
-graph and integrity hashes live in `package-lock.json`. `budgets` installs them
-with the existing `npm ci --include=dev`, never a second unsaved `npm install`.
-That second install re-resolved the app's locked `source-map-js@1.2.1` to a
-just-published `1.2.2` whose tarball returned 404, making current main red before
-any measurement (TOG-10708). `node ci/budget-tooling-selftest.mjs` reproduces that
-failure against a loopback-only fixture registry and proves the locked install
-works without resolving newer metadata, while a missing locked tarball still
-fails. `npx --no-install lhci` cannot silently fetch a replacement tool.
-
 Three Lighthouse runs per URL, median asserted — see the flake policy on why that
 is sampling and not a retry.
 
