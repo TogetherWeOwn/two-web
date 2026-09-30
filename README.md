@@ -50,20 +50,41 @@ It downloads a self-contained PHP 8.3 and Composer into `.tooling/bin`
 usable PHP. Add the printed line to your `PATH` and the rest of the README works
 unchanged.
 
+> **Agents:** use this script for the PHP toolchain only. Its closing database
+> advice — pointing `.env` at any Postgres you can reach — is superseded by the
+> [agent setup](#database-setup-agents-developers-and-ci) below and must not be
+> followed. The script itself is unchanged; this note overrides its database
+> guidance for agents.
+
 ### Database setup: agents, developers and CI
 
 **Agents:** database tests and database probes may use only `agent-testdb:5432`
 with user `agent_test` and an empty password, or disposable CI service containers.
-For this repository, configure the approved agent test service as:
+Set all six values in the process environment of the command you run — a `.env`
+file alone does not do it:
 
-```dotenv
-DB_CONNECTION=pgsql
-DB_HOST=agent-testdb
-DB_PORT=5432
-DB_DATABASE=two_web_test
-DB_USERNAME=agent_test
-DB_PASSWORD=
+```bash
+DB_CONNECTION=pgsql \
+DB_HOST=agent-testdb \
+DB_PORT=5432 \
+DB_DATABASE=two_web_test \
+DB_USERNAME=agent_test \
+DB_PASSWORD= \
+composer test
 ```
+
+A real environment variable (for example a `DB_HOST` inherited from the worker)
+overrides the same name from a `.env` file, while `config/database.php` reads
+that resolved environment and `phpunit.xml` forces only the connection and the
+database name. A `.env`-only setup therefore leaves any inherited host and
+credentials in control. Exporting `DB_PASSWORD=` (empty) matters: it clears an
+inherited password instead of leaving the worker's credential active. Likewise,
+put a per-worktree `DB_DATABASE=two_web_test_<something>` here, not only in
+`.env` — the forced `phpunit.xml` name overrides a `.env`-only suffix and the
+run would silently use the shared `two_web_test` instead. `composer test`
+clears a stale cached config itself before running Pest; if you invoke
+`phpunit` or `pest` directly instead, run `php artisan config:clear` first —
+a cached config ignores environment changes entirely.
 
 The shared service's default database is `agent_test`, but this suite requires
 `two_web_test` (or a per-worktree `two_web_test_<something>` database). Provision
