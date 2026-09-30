@@ -4,12 +4,21 @@
 set -uo pipefail
 export BASH_ENV=/dev/null
 
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+setup_fail() { printf 'FAIL  fixture setup: %s\n' "$1" >&2; exit 2; }
+# Nested setup-failure tests stop before running cases; avoid recursive tests if
+# a regression accidentally lets their setup succeed.
+case "${1:-}" in
+    ''|--fixture-only) ;;
+    *) setup_fail 'unexpected argument' ;;
+esac
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)" || setup_fail 'resolve root'
 SMOKE_SCRIPT="${SMOKE_SCRIPT:-$ROOT/bin/smoke-staging.sh}"
-WORK="$(mktemp -d "${PAPERCLIP_RUN_SCRATCH_DIR:-${TMPDIR:-/tmp}}/smoke-staging-selftest.XXXXXX")"
+WORK="$(mktemp -d "${PAPERCLIP_RUN_SCRATCH_DIR:-${TMPDIR:-/tmp}}/smoke-staging-selftest.XXXXXX")" \
+    || setup_fail 'mktemp'
+[ -n "$WORK" ] && [ -d "$WORK" ] || setup_fail 'mktemp directory missing'
 trap 'rm -rf "$WORK"' EXIT
 
-cat > "$WORK/curl" <<'STUB'
+cat > "$WORK/curl" <<'STUB' || setup_fail 'write fake curl'
 #!/bin/sh
 set -u
 url=""; output=""; headers=""; writeout=""; cookie=""
@@ -75,7 +84,10 @@ if [ -n "$writeout" ]; then
 fi
 exit "$status"
 STUB
-chmod +x "$WORK/curl"
+chmod +x "$WORK/curl" || setup_fail 'chmod fake curl'
+[ -x "$WORK/curl" ] || setup_fail 'fake curl not executable'
+selected_curl="$(PATH="$WORK:$PATH" sh -c 'command -v curl')" || setup_fail 'resolve fake curl'
+[ "$selected_curl" = "$WORK/curl" ] || setup_fail 'fake curl not selected'
 
 rc=0; n=0
 run_case() {
@@ -109,5 +121,64 @@ for target in hostile safe; do
 done
 run_case hostile leak 1 'hostile host leaks into the HTML'
 run_case safe missing-link 1 'one-click href does not forward next=/events'
+
+setup_failure_cases() {
+    local bin="$WORK/setup-bin" mode reason out status
+    local real_mktemp real_cat real_chmod
+    real_mktemp="$(command -v mktemp)" || setup_fail 'resolve mktemp'
+    real_cat="$(command -v cat)" || setup_fail 'resolve cat'
+    real_chmod="$(command -v chmod)" || setup_fail 'resolve chmod'
+    mkdir "$bin" || setup_fail 'create setup-test fixtures'
+    cat > "$bin/dispatch" <<'STUB' || setup_fail 'write setup-test fixtures'
+#!/bin/sh
+case "${0##*/}" in
+    curl)
+        printf 'fallback\n' >> "$FALLBACK_LOG"
+        exit 99 ;;
+    mktemp)
+        [ "$SETUP_FAILURE" != mktemp ] || exit 1
+        exec "$REAL_MKTEMP" "$@" ;;
+    cat)
+        [ "$SETUP_FAILURE" != write ] || exit 1
+        exec "$REAL_CAT" "$@" ;;
+    chmod)
+        case "$SETUP_FAILURE" in
+            chmod) exit 1 ;;
+            nonexecutable) exit 0 ;;
+        esac
+        exec "$REAL_CHMOD" "$@" ;;
+    *) exit 99 ;;
+esac
+STUB
+    chmod +x "$bin/dispatch" || setup_fail 'chmod setup-test fixtures'
+    for mode in curl mktemp cat chmod; do
+        ln -s dispatch "$bin/$mode" || setup_fail 'link setup-test fixtures'
+    done
+    # Inherited curl is always a non-network sentinel, even if setup regresses.
+    for mode in mktemp write chmod nonexecutable; do
+        case "$mode" in
+            mktemp) reason='mktemp' ;;
+            write) reason='write fake curl' ;;
+            chmod) reason='chmod fake curl' ;;
+            nonexecutable) reason='fake curl not executable' ;;
+        esac
+        : > "$bin/fallback.log" || setup_fail 'reset fallback log'
+        out="$(PATH="$bin:$PATH" SETUP_FAILURE="$mode" FALLBACK_LOG="$bin/fallback.log" \
+            REAL_MKTEMP="$real_mktemp" REAL_CAT="$real_cat" REAL_CHMOD="$real_chmod" \
+            "$BASH" "${BASH_SOURCE[0]}" --fixture-only 2>&1)"
+        status=$?
+        n=$((n + 1))
+        if [ "$status" -eq 2 ] && [ ! -s "$bin/fallback.log" ] \
+            && grep -qFx "FAIL  fixture setup: $reason" <<< "$out" \
+            && ! grep -q '^PASS  ' <<< "$out"; then
+            printf 'PASS  setup/%s (zero fallback curl calls)\n' "$mode"
+        else
+            printf 'FAIL  setup/%s: expected exit 2, setup error, no PASS and zero fallback calls; got exit %s\n%s\n' \
+                "$mode" "$status" "$out" >&2
+            rc=1
+        fi
+    done
+}
+if [ "${1:-}" != --fixture-only ]; then setup_failure_cases; fi
 printf '\n%d cases, result %d\n' "$n" "$rc"
 exit "$rc"
