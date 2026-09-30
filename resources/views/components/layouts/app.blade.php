@@ -79,6 +79,19 @@
 </head>
 <body class="{{ $bodyScheme }}h-full">
     <a href="#main" class="sr-only focus:not-sr-only">Skip to content</a>
+    {{-- Session-free funnel pages must not render a tokenless logout form. --}}
+    @if (request()->hasSession() && auth()->check())
+        <nav aria-label="Your account" class="mx-auto flex max-w-6xl items-center justify-end gap-3 px-6 py-3" data-testid="member-account-controls">
+            <a href="{{ route('profile') }}" class="inline-flex min-h-11 items-center text-sm underline underline-offset-4 hover:no-underline">Your profile</a>
+            <form method="POST" action="{{ route('logout') }}">
+                @csrf
+                <button type="submit"
+                        class="inline-flex min-h-11 items-center justify-center rounded-md px-3 text-sm underline underline-offset-4 hover:no-underline">
+                    Sign out
+                </button>
+            </form>
+        </nav>
+    @endif
     <main id="main">
         {{ $slot }}
     </main>
