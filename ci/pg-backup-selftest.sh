@@ -29,6 +29,7 @@
 #                         keeps this suite from touching the repo's .env)
 #   backup-writes         dump file lands with content, temp file is gone
 #   backup-empty          pg_dump prints nothing        -> exit 1, no file kept
+#   backup-failed         pg_dump exits nonzero          -> no dump/temp or success
 #   password-not-in-argv  the secret never appears in any docker argv
 #   proof-ok              equal counts                  -> PROOF OK, scratch dropped
 #   proof-mismatch        one count differs             -> PROOF FAILED, exit 1
@@ -273,6 +274,21 @@ if [ "$status" -eq 1 ] && grep -qF "dump is empty" <<< "$out" && [ -z "$leftover
   pass "backup-empty"
 else
   fail "backup-empty: expected exit 1 naming the empty dump and no file kept (got ${status})"
+  printf '%s\n' "$out" | sed 's/^/        /'
+  [ -n "$leftover" ] && printf '        leftover: %s\n' "$leftover"
+fi
+
+# A failed pg_dump must stop before publishing the dump or reporting success,
+# and the EXIT trap must remove the temporary output opened by the redirect.
+dir="$(fixture backupfailed)"
+out="$(cd "$dir" && PATH="$STUB_DIR:$PATH" STUB_LOG="$dir/docker.log" \
+  STUB_DUMP_FAIL=1 ./bin/pg-backup.sh backup 2>&1)"; status=$?
+leftover="$(ls "$dir"/backups/*.dump "$dir"/backups/*.tmp.* 2>/dev/null || true)"
+if [ "$status" -ne 0 ] && grep -qFx "pg_dump: connection failed" <<< "$out" \
+    && [ -z "$leftover" ] && ! grep -qF "pg-backup: wrote " <<< "$out"; then
+  pass "backup-failed"
+else
+  fail "backup-failed: expected nonzero exit naming the connection failure, no dump/temp file, and no wrote-success message (got ${status})"
   printf '%s\n' "$out" | sed 's/^/        /'
   [ -n "$leftover" ] && printf '        leftover: %s\n' "$leftover"
 fi
