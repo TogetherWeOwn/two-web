@@ -299,6 +299,40 @@ it('keeps an open editor on the page when a second tab signs out for real', func
             ->assertInputValue('timezone', 'Europe/London');
         expect($member->profile()->first())->toBeNull();
 
+        // TOG-9355 review: the post-logout Save/Cancel sends the stale
+        // CSRF token and gets a 419 without any before-auth reload firing
+        // first. The 419 hook must stash and stay too — Save/Cancel is not
+        // an explicit login click. Point the handoff at the real OAuth
+        // redirect so the regression is meaningful: the old hook navigated
+        // here, where the pinned Discord driver's prompt=none could
+        // silently complete an existing grant and sign the shared browser
+        // back in. The 419 is async, so give a would-be navigation time to
+        // land before asserting its absence (same negative pattern as the
+        // broadcast test).
+        $browser->script(<<<'JS'
+            document.querySelector('[data-profile-id]').dataset.loginUrl = '/auth/discord/redirect?next=%2Fprofile';
+        JS);
+        $browser->press('Save')
+            ->pause(1500)
+            ->assertPathIs('/profile')
+            ->assertVisible('[data-testid="profile-edit-form"]')
+            ->assertInputValue('bio', 'Cross-tab sign-out draft')
+            ->assertScript("JSON.parse(sessionStorage.getItem('{$key}')).bio", 'Cross-tab sign-out draft');
+
+        // Sign-out → focus → 419: a later focus probe describes the same
+        // dead session and must stay, then a post-probe Cancel must stay
+        // too.
+        $browser->script('window.dispatchEvent(new Event("focus"));');
+        $browser->pause(1500)
+            ->assertPathIs('/profile')
+            ->assertVisible('[data-testid="profile-edit-form"]');
+        $browser->press('Cancel')
+            ->pause(1500)
+            ->assertPathIs('/profile')
+            ->assertVisible('[data-testid="profile-edit-form"]')
+            ->assertInputValue('bio', 'Cross-tab sign-out draft');
+        expect($member->profile()->first())->toBeNull();
+
         $browser->driver->switchTo()->window($tabB);
         $browser->driver->close();
         $browser->driver->switchTo()->window($tabA);

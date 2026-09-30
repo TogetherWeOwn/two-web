@@ -300,3 +300,26 @@ test('419 without an open form goes to login without inventing a draft', () => {
     assert.equal(p.storage.size, 0);
     assert.equal(p.navigations.length, 1);
 });
+
+for (const probe of [false, true]) {
+    test(`explicit sign-out then ${probe ? 'focus then ' : ''}419 Save/Cancel request cannot auto-start OAuth`, async () => {
+        // TOG-9355 review: after another tab signs out, Save/Cancel sends
+        // the stale CSRF token and gets a 419 without any before-auth
+        // reload firing first. The hook must stash and stay — Save/Cancel
+        // is not an explicit login click, and the pinned Discord driver's
+        // prompt=none could otherwise silently sign the shared browser
+        // back in. Quiet-expiry 419s keep login recovery (first test).
+        const p = page();
+        p.authExpiry('storage');
+        await settle();
+        assert.deepEqual(p.navigations, [], 'broadcast itself must stay');
+        if (probe) {
+            p.authExpiry('focus');
+            await settle();
+            assert.deepEqual(p.navigations, [], 'sticky layout state must stay');
+        }
+        assert.equal(p.fail(419), true, 'suppress generic 419 handling');
+        assert.equal(JSON.parse(p.storage.get(key)).bio, input.bio, 'preserve typed input');
+        assert.deepEqual(p.navigations, [], 'Save/Cancel is not an explicit login click');
+    });
+}

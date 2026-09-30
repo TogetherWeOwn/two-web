@@ -516,9 +516,21 @@
             // be replaced; the replacement page needs it. keepDraft is
             // synchronous DOM capture, so it lands before a slow restore
             // response in either branch.
+            //
+            // TOG-9355 review: the 419 request hook below is an independent
+            // navigation path — after another tab signs out, Save/Cancel sends
+            // the stale CSRF token and gets a 419 without any before-auth
+            // reload firing first. Remember an explicit sign-out for the page
+            // lifetime so that hook can stash and stay too, instead of
+            // auto-starting OAuth where prompt=none could silently sign the
+            // shared browser back in. Quiet expiry keeps login recovery.
             let authAbandoned = false;
+            let explicitSignOut = false;
             document.addEventListener('two:before-auth-reload', (event) => {
                 authAbandoned = true;
+                if (event.detail?.reason === 'signed-out') {
+                    explicitSignOut = true;
+                }
                 if (!$wire.el.isConnected || !$wire.el.querySelector('[data-testid="profile-edit-form"]')) {
                     return;
                 }
@@ -533,6 +545,13 @@
                 window.location.assign($wire.el.dataset.loginUrl);
             });
 
+            // After an explicit sign-out in another tab, Save/Cancel is
+            // not an explicit login action: stash and stay on the open
+            // form instead of auto-starting OAuth, where the pinned
+            // Discord driver's prompt=none could silently complete an
+            // existing grant and sign the shared browser back in with no
+            // login click (TOG-9355 review). Quiet-expiry 419s keep the
+            // login recovery below.
             $wire.$hook('request', ({ fail }) => {
                 fail(({ status, preventDefault }) => {
                     if (status !== 419) {
@@ -540,7 +559,7 @@
                     }
 
                     preventDefault();
-                    if (keepDraft()) {
+                    if (keepDraft() && !explicitSignOut) {
                         window.location.assign($wire.el.dataset.loginUrl);
                     }
                 });
