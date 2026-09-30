@@ -872,6 +872,57 @@ it('applies the same literal search to local and Discord titles and descriptions
     'literal backslash' => ['description', 'Use squad\\name.', '\\'],
 ]);
 
+it('preserves PostgreSQL ordinary and final sigma matching across both sources', function (string $field, string $copy, string $term, bool $matches) {
+    $local = upcomingEvent(['title' => 'Local sigma', 'description' => null, $field => $copy]);
+    $discord = sundaySquadEvent();
+    $discord->fill(['title' => 'Discord sigma', 'description' => null, $field => $copy]);
+    mockDiscordEvents([$discord]);
+
+    Livewire::test(EventsCalendar::class)
+        ->set('search', $term)
+        ->assertViewHas('upcoming', fn ($events): bool => $matches
+            ? $events->count() === 2 && $events->first()->is($local) && $events->last() === $discord
+            : $events->isEmpty())
+        ->assertViewHas('hasVisibleResults', $matches);
+
+    $this->assertDatabaseHas('event_search_logs', [
+        'normalized_query' => app(EventSearchLogger::class)->normalize($term),
+        'result_count' => $matches ? 2 : 0,
+    ]);
+})->with([
+    'uppercase title versus ordinary sigma' => ['title', 'ΟΣ', 'οσ', true],
+    'uppercase title versus final sigma' => ['title', 'ΟΣ', 'ος', false],
+    'uppercase description versus ordinary sigma' => ['description', 'ΟΣ', 'οσ', true],
+    'uppercase description versus final sigma' => ['description', 'ΟΣ', 'ος', false],
+    'final sigma title stays distinct from ordinary sigma' => ['title', 'ος', 'οσ', false],
+    'final sigma description matches literally' => ['description', 'ος', 'ος', true],
+]);
+
+it('matches Discord search copy in one read without persisting transient rows', function () {
+    $events = [];
+
+    for ($index = 0; $index < 12; $index++) {
+        $event = sundaySquadEvent();
+        $event->setAttribute('event_key', 'discord:'.(1545955994972987422 + $index));
+        $events[] = $event;
+    }
+
+    // Filtering retains the source keys; the SQL matches must use those keys,
+    // not offsets in the remaining list after an expired row is removed.
+    $events[0]->ends_at = now()->subMinute();
+    mockDiscordEvents($events);
+    $component = Livewire::test(EventsCalendar::class);
+
+    DB::enableQueryLog();
+    $component->set('search', 'squad')
+        ->assertViewHas('upcoming', fn ($rows): bool => $rows->count() === 11 && $rows->first() === $events[1] && $rows->last() === $events[11]);
+    $queries = collect(DB::getQueryLog());
+    DB::disableQueryLog();
+
+    expect($queries->filter(fn (array $query): bool => str_contains($query['query'], '"discord_search"')))->toHaveCount(1);
+    $this->assertDatabaseCount('events', 0);
+});
+
 it('filters both sources when opening a shareable search URL', function () {
     upcomingEvent(['description' => null]);
     mockDiscordEvents([sundaySquadEvent()]);
