@@ -1168,6 +1168,62 @@ it('never retires the stored draft on a failed save', function () {
     expect($member->profile()->sole()->bio)->toBe('Before');
 });
 
+it('keeps the restored marker across a failed save so a later cancel retires the stored copy', function () {
+    // TOG-9355 review (P2 on 04e32dbc): save() cleared draftRestored before
+    // the writer ran, so restore → failed write → Cancel never dispatched
+    // the retire signal and refresh resurrected the discarded input. The
+    // marker must survive the failed write; the explicit discard retires it.
+    $member = User::factory()->create();
+    Profile::factory()->for($member)->create(['bio' => 'Before']);
+    MemberProfile::$profileWriter = static fn () => throw new RuntimeException('boom');
+
+    try {
+        $component = Livewire::actingAs($member)
+            ->test(MemberProfile::class, ['member' => $member, 'stats' => profileStats($member->discord_id)])
+            ->call('restoreDraft', 'Recovered', '', '')
+            ->tap(fn () => pausePastFillFloor())
+            ->call('save')
+            ->assertSet('saveFailed', true)
+            ->assertSet('editing', true)
+            ->assertSet('draftRestored', true)
+            ->assertNotDispatched('profile-draft-retired');
+
+        $component->call('cancel')
+            ->assertSet('editing', false)
+            ->assertSet('draftRestored', false)
+            ->assertDispatched('profile-draft-retired');
+    } finally {
+        MemberProfile::$profileWriter = null;
+    }
+
+    expect($member->profile()->sole()->bio)->toBe('Before');
+});
+
+it('retires the stored copy when a genuine save retries after a failed save', function () {
+    // The failed first attempt keeps the marker (and the stored copy); the
+    // genuine retry is the terminal success that spends both.
+    $member = User::factory()->create();
+    Profile::factory()->for($member)->create(['bio' => 'Before']);
+    MemberProfile::$profileWriter = static fn () => throw new RuntimeException('boom');
+
+    $component = Livewire::actingAs($member)
+        ->test(MemberProfile::class, ['member' => $member, 'stats' => profileStats($member->discord_id)])
+        ->call('restoreDraft', 'Recovered', '', '')
+        ->tap(fn () => pausePastFillFloor())
+        ->call('save')
+        ->assertSet('saveFailed', true)
+        ->assertSet('draftRestored', true)
+        ->assertNotDispatched('profile-draft-retired');
+
+    MemberProfile::$profileWriter = null;
+
+    $component->call('save')
+        ->assertSet('saved', true)
+        ->assertDispatched('profile-draft-retired');
+
+    expect($member->profile()->sole()->bio)->toBe('Recovered');
+});
+
 it('renders a page-specific login return and the scoped 419 recovery hook', function () {
     $member = User::factory()->create();
 

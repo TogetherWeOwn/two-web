@@ -328,7 +328,12 @@ class MemberProfile extends Component
 
         $this->saveFailed = false;
         $this->sessionExpired = false;
-        $this->draftRestored = false;
+        // TOG-9355 review: draftRestored is NOT cleared here. A write
+        // failure below must leave the marker set, or a later Cancel reads
+        // a spent flag and skips the retire signal — refresh then
+        // resurrects the discarded input. It clears only on the terminal
+        // success below (the trap-swallow and explicit-cancel paths clear
+        // their own copies alongside their retire signals).
 
         // TOG-9855: strict '' comparison — trim("0") is "0" but "0" ?: null
         // is null in PHP, which swallowed a bio of exactly "0" into NULL.
@@ -354,6 +359,7 @@ class MemberProfile extends Component
         $this->member->setRelation('profile', $profile);
         $this->editing = false;
         $this->saved = true;
+        $this->draftRestored = false;
         $this->fillForm();
         // TOG-9355 review: a restore that failed earlier kept the stored
         // copy, but nothing retired it after the genuine save — the next
