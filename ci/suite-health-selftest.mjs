@@ -72,6 +72,61 @@ const failedOnlyReport = run(['--input', failedOnlyInput, '--format', 'json']);
 const failedOnlyJson = JSON.parse(failedOnlyReport.stdout);
 expect('a failure without a later pass is not called a flake', failedOnlyReport.status === 0 && failedOnlyJson.summary.distinctFlakyTestCount === 0, failedOnlyReport.stderr || failedOnlyReport.stdout);
 
+function permutations(runs) {
+    if (runs.length === 0) {
+        return [[]];
+    }
+    return runs.flatMap((run, index) => permutations(runs.filter((_, candidateIndex) => candidateIndex !== index))
+        .map((rest) => [run, ...rest]));
+}
+
+const failureA = {
+    name: 'dusk',
+    status: 'completed',
+    conclusion: 'failure',
+    startedAt: '2026-09-07T10:00:00Z',
+    completedAt: '2026-09-07T10:01:00Z',
+    failedTests: ['failure A'],
+};
+const success = {
+    name: 'dusk',
+    status: 'completed',
+    conclusion: 'success',
+    startedAt: '2026-09-07T10:05:00Z',
+    completedAt: '2026-09-07T10:06:00Z',
+};
+const failureB = {
+    ...failureA,
+    startedAt: '2026-09-07T10:10:00Z',
+    completedAt: '2026-09-07T10:11:00Z',
+    failedTests: ['failure B'],
+};
+const chronologyCases = [
+    { name: 'success then failure has no flakes', runs: [success, failureB], expected: [] },
+    { name: 'failure then success recovers only that failure', runs: [failureA, success], expected: ['failure A'] },
+    { name: 'failure A, success, failure B recovers A only', runs: [failureA, success, failureB], expected: ['failure A'] },
+    { name: 'equal completion times are not a later pass', runs: [failureA, { ...success, completedAt: failureA.completedAt }], expected: [] },
+    { name: 'start times order attempts without completion times', runs: [{ ...failureA, completedAt: null }, { ...success, completedAt: null }, { ...failureB, completedAt: null }], expected: ['failure A'] },
+];
+
+for (const [caseIndex, scenario] of chronologyCases.entries()) {
+    for (const [permutationIndex, duskRuns] of permutations(scenario.runs).entries()) {
+        const input = JSON.parse(await readFile(EXAMPLE, 'utf8'));
+        input.pulls[0].checkRuns = [
+            ...input.pulls[0].checkRuns.filter((run) => run.name !== 'dusk'),
+            ...duskRuns,
+        ];
+        const path = join(work, `chronology-${caseIndex}-${permutationIndex}.json`);
+        await writeFile(path, JSON.stringify(input));
+        const result = run(['--input', path, '--format', 'json']);
+        const report = JSON.parse(result.stdout);
+        expect(`${scenario.name} (permutation ${permutationIndex + 1})`, result.status === 0
+            && JSON.stringify(report.pulls[0].flakyTests) === JSON.stringify(scenario.expected)
+            && JSON.stringify(report.flakes.map((flake) => flake.test)) === JSON.stringify(scenario.expected)
+            && report.summary.distinctFlakyTestCount === scenario.expected.length, result.stderr || result.stdout);
+    }
+}
+
 const missingJourney = JSON.parse(await readFile(MANIFEST, 'utf8'));
 missingJourney.journeys[0].tests = [];
 const missingJourneyManifest = join(work, 'missing-journey.json');
