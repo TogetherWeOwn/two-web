@@ -18,6 +18,7 @@ it('rejects fractional capacity when creating an event without saving a truncate
             'starts_at' => '2026-10-01 20:00',
             'ends_at' => '2026-10-01 22:00',
             'timezone' => 'Europe/London',
+            'location' => 'Voice: General',
             'capacity' => $capacity,
         ])
         ->call('create')
@@ -55,6 +56,7 @@ it('preserves integer and unlimited capacity when creating an event', function (
             'starts_at' => '2026-10-01 20:00',
             'ends_at' => '2026-10-01 22:00',
             'timezone' => 'Europe/London',
+            'location' => 'Voice: General',
             'capacity' => $capacity,
         ])
         ->call('create')
