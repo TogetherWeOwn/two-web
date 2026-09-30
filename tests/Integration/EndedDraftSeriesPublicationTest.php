@@ -6,6 +6,7 @@ use App\Jobs\SyncEventToDiscord;
 use App\Models\Event;
 use App\Services\EventService;
 use Illuminate\Bus\UniqueLock;
+use Illuminate\Database\Events\QueryExecuted;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Event as Events;
@@ -81,3 +82,58 @@ it('preflights every locked instance before dispatch and queues the complete cor
         File::deleteDirectory($cachePath);
     }
 })->with(['array', 'file']);
+
+it('rejects a series instance that expires while acquiring the child locks', function (string $expiringInstance) {
+    $beforeLocks = now()->setDate(2026, 9, 30)->setTime(12, 0);
+    $afterLocks = $beforeLocks->copy()->addSeconds(2);
+    $this->travelTo($beforeLocks);
+    config(['cache.default' => 'array', 'queue.default' => 'database']);
+
+    $parent = Event::factory()->draft()->create([
+        'recurrence_frequency' => RecurrenceFrequency::Weekly,
+        'recurrence_count' => 3,
+        'recurrence_index' => 1,
+    ]);
+    $validChild = Event::factory()->draft()->create([
+        'parent_event_id' => $parent->getKey(),
+        'recurrence_index' => 2,
+    ]);
+    $lastChild = Event::factory()->draft()->create([
+        'parent_event_id' => $parent->getKey(),
+        'recurrence_index' => 3,
+    ]);
+    $expiring = $expiringInstance === 'parent' ? $parent : $lastChild;
+    $expiring->update([
+        'starts_at' => $beforeLocks->copy()->subHour(),
+        'ends_at' => $beforeLocks->copy()->addSecond(),
+    ]);
+    $updates = [];
+    Events::listen('eloquent.updated: '.Event::class, function (Event $event) use (&$updates): void {
+        $updates[] = $event->event_key;
+    });
+    $lockQueryReturned = false;
+    DB::listen(function (QueryExecuted $query) use (&$lockQueryReturned, $afterLocks): void {
+        if (! $lockQueryReturned && str_contains($query->sql, 'parent_event_id') && str_contains($query->sql, 'for update')) {
+            // Simulate time spent waiting for the child locks, not SQL contention.
+            // QueryExecuted runs after the real locked SELECT returns.
+            $lockQueryReturned = true;
+            $this->travelTo($afterLocks);
+        }
+    });
+
+    expect(fn () => app(EventService::class)->publish($parent))
+        ->toThrow(ValidationException::class);
+
+    expect($lockQueryReturned)->toBeTrue()
+        ->and($updates)->toBe([])
+        ->and($parent->fresh()->status)->toBe(EventStatus::Draft)
+        ->and($validChild->fresh()->status)->toBe(EventStatus::Draft)
+        ->and($lastChild->fresh()->status)->toBe(EventStatus::Draft)
+        ->and(DB::table('jobs')->count())->toBe(0);
+
+    foreach ([$parent, $validChild, $lastChild] as $instance) {
+        $lock = Cache::lock(UniqueLock::getKey(new SyncEventToDiscord($instance->event_key)), 300);
+        expect($lock->get())->toBeTrue('expired publication left an instance locked');
+        $lock->release();
+    }
+})->with(['parent', 'child']);
