@@ -23,6 +23,9 @@
 #                    without `actions:read` can read it (TOG-2847)
 #   private          RUNNER_ENVIRONMENT=self-hosted       -> exit 1  (the misrouted case)
 #   private-spoofed  self-hosted *named* like a hosted runner -> exit 1  (name alone is not proof)
+#   env-unset        named runner, RUNNER_ENVIRONMENT absent -> exit 1 (unknown)
+#   env-unsupported  named runner, unsupported environment -> exit 1 (names the value)
+#   rejected cases   ...and none emits a success ::notice
 #   unset            RUNNER_NAME absent, i.e. not in CI   -> exit 1  (refuse, do not guess)
 #   empty            RUNNER_NAME set but empty            -> exit 1
 #   args             called with an argument              -> exit 2
@@ -64,6 +67,11 @@ run_case() {
     printf '%s\n' "$out" | sed 's/^/        /'
     return
   fi
+  if [ "$want" -ne 0 ] && grep -qF -- "::notice" <<< "$out"; then
+    fail "$slug: rejected runner emitted a success notice"
+    printf '%s\n' "$out" | sed 's/^/        /'
+    return
+  fi
   pass "$slug"
 }
 
@@ -90,6 +98,13 @@ run_case private 1 "ran on a self-hosted runner" \
 # check on its own. GitHub sets RUNNER_ENVIRONMENT; the name is just a string.
 run_case private-spoofed 1 "ran on a self-hosted runner" \
   RUNNER_NAME=gh-ubuntu-abc123 RUNNER_ENVIRONMENT=self-hosted GITHUB_JOB=static
+
+printf '\n\033[1m==> A named runner without a supported environment is rejected\033[0m\n'
+
+run_case env-unset 1 "ran on a unknown runner (RUNNER_NAME=gh-ubuntu-abc123)" \
+  RUNNER_NAME=gh-ubuntu-abc123 GITHUB_JOB=static
+run_case env-unsupported 1 "ran on a unsupported runner (RUNNER_NAME=gh-ubuntu-abc123)" \
+  RUNNER_NAME=gh-ubuntu-abc123 RUNNER_ENVIRONMENT=unsupported GITHUB_JOB=static
 
 printf '\n\033[1m==> Outside Actions it refuses rather than guesses\033[0m\n'
 
