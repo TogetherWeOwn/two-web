@@ -1091,6 +1091,83 @@ it('discards a restored draft when the member cancels', function () {
         ->assertSet('bio', 'Before');
 });
 
+it('retires the stored draft on a genuine save so refresh cannot resurrect it', function () {
+    // TOG-9355 review: a restore that failed earlier kept the stored copy,
+    // but the later genuine save never retired it — the next page load
+    // restored the obsolete draft over the newer saved text. The save
+    // dispatches the retire signal; the shipped script consumes it.
+    $member = User::factory()->create();
+    Profile::factory()->for($member)->create(['bio' => 'Before']);
+
+    Livewire::actingAs($member)
+        ->test(MemberProfile::class, ['member' => $member, 'stats' => profileStats($member->discord_id)])
+        ->call('restoreDraft', 'Recovered', "Chess\nCo-op", 'Europe/London')
+        ->tap(fn () => pausePastFillFloor())
+        ->call('save')
+        ->assertSet('saved', true)
+        ->assertDispatched('profile-draft-retired');
+
+    expect($member->profile()->sole()->bio)->toBe('Recovered');
+});
+
+it('retires the stored draft on an explicit cancel', function () {
+    // Same stale path through cancel: discarding a restored draft must
+    // also retire the stored copy, or refresh reopens the input just
+    // discarded.
+    $member = User::factory()->create();
+    Profile::factory()->for($member)->create(['bio' => 'Before']);
+
+    Livewire::actingAs($member)
+        ->test(MemberProfile::class, ['member' => $member, 'stats' => profileStats($member->discord_id)])
+        ->call('restoreDraft', 'Unsent', '', '')
+        ->call('cancel')
+        ->assertSet('editing', false)
+        ->assertDispatched('profile-draft-retired');
+
+    expect($member->profile()->sole()->bio)->toBe('Before');
+});
+
+it('keeps the stored draft when cancelling a form that never restored one', function () {
+    // Cancelling a manually-opened form after a failed restore must not
+    // retire the stashed copy the member never saw — that is the P2 loss
+    // through the sibling path.
+    $member = User::factory()->create();
+    Profile::factory()->for($member)->create(['bio' => 'Before']);
+
+    Livewire::actingAs($member)
+        ->test(MemberProfile::class, ['member' => $member, 'stats' => profileStats($member->discord_id)])
+        ->call('edit')
+        ->set('bio', 'Typed by hand')
+        ->call('cancel')
+        ->assertSet('editing', false)
+        ->assertNotDispatched('profile-draft-retired');
+
+    expect($member->profile()->sole()->bio)->toBe('Before');
+});
+
+it('never retires the stored draft on a failed save', function () {
+    // A write failure keeps the form open with input intact — and must keep
+    // the stored copy too, so a refresh can still retry the restore.
+    $member = User::factory()->create();
+    Profile::factory()->for($member)->create(['bio' => 'Before']);
+    MemberProfile::$profileWriter = static fn () => throw new RuntimeException('boom');
+
+    try {
+        Livewire::actingAs($member)
+            ->test(MemberProfile::class, ['member' => $member, 'stats' => profileStats($member->discord_id)])
+            ->call('restoreDraft', 'Recovered', '', '')
+            ->tap(fn () => pausePastFillFloor())
+            ->call('save')
+            ->assertSet('saveFailed', true)
+            ->assertSet('editing', true)
+            ->assertNotDispatched('profile-draft-retired');
+    } finally {
+        MemberProfile::$profileWriter = null;
+    }
+
+    expect($member->profile()->sole()->bio)->toBe('Before');
+});
+
 it('renders a page-specific login return and the scoped 419 recovery hook', function () {
     $member = User::factory()->create();
 

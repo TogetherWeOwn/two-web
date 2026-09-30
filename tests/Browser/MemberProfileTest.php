@@ -104,6 +104,53 @@ it('recovers deferred profile input after a real CSRF 419 and page round trip', 
         ->timezone->toBe('Europe/London');
 });
 
+it('does not resurrect a retired draft over a genuine save after refresh', function () {
+    $member = User::factory()->create();
+
+    $this->browse(function (Browser $browser) use ($member) {
+        $browser->loginAs($member)
+            ->visit('/profile');
+
+        // Reproduce the failed-first-restore state directly: a stored copy
+        // the member never saw (the restore threw, e.g. offline), then the
+        // member opens the form by hand and saves genuinely. The save must
+        // retire the stored copy — otherwise refresh resurrects the obsolete
+        // text over the newer saved text.
+        $key = "two:profile-draft:{$member->getKey()}";
+        $browser->script(<<<JS
+            sessionStorage.setItem('{$key}', JSON.stringify({
+                version: 1,
+                savedAt: Date.now(),
+                bio: 'Stale draft text',
+                gamesText: '',
+                timezone: '',
+            }));
+        JS);
+
+        $browser->press('Add profile details')
+            ->waitFor('[data-testid="profile-edit-form"]')
+            ->type('bio', 'Genuine save')
+            // Same human-fill pause as the other save journeys: the
+            // server-locked fill floor applies to hand-opened forms too.
+            ->pause(SpamTrap::MIN_FILL_MS + 500)
+            ->press('Save')
+            ->waitFor('[data-testid="profile-saved"]')
+            // Deterministic red/green: without the retire signal the only
+            // stored copy survives the genuine save.
+            ->assertScript("sessionStorage.getItem('{$key}')", null)
+            ->refresh()
+            ->waitForText('Genuine save')
+            // Give a buggy restore round trip time to land before asserting
+            // its absence: the banner renders only when a stored copy exists.
+            ->pause(1000)
+            ->assertSee('Genuine save')
+            ->assertDontSee('Stale draft text')
+            ->assertMissing('[data-testid="profile-draft-restored"]');
+    });
+
+    expect($member->profile()->sole()->bio)->toBe('Genuine save');
+});
+
 it('preserves unsent profile input when auth sync navigates before save', function (string $source) {
     $member = User::factory()->create();
 

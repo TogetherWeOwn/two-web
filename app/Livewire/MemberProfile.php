@@ -180,6 +180,12 @@ class MemberProfile extends Component
 
         Gate::authorize('updateProfile', $this->member);
 
+        // TOG-9355 review: read the restored flag BEFORE clearing it —
+        // cancelling a manually-opened form after a failed restore must not
+        // destroy the stashed copy the member never saw, or the P2 loss
+        // returns through the sibling path. Only a consumed draft retires.
+        $retireDraft = $this->draftRestored;
+
         $this->saveFailed = false;
         $this->resetValidation();
         $this->editing = false;
@@ -189,6 +195,12 @@ class MemberProfile extends Component
         // TOG-6957: closing the form unmounts the focused Cancel control.
         // Refocus the Edit profile button after the round trip.
         $this->dispatch('profile-state-changed')->self();
+        // Explicit discard of a restored draft retires the stored copy too,
+        // or refresh reopens the input just cancelled. Same terminal signal
+        // as the genuine-save path.
+        if ($retireDraft) {
+            $this->dispatch('profile-draft-retired')->self();
+        }
     }
 
     /**
@@ -277,13 +289,16 @@ class MemberProfile extends Component
             // Mirror the genuine path's resets: the trap must end in the
             // exact success state, including no stale failure/expired banners
             // (main's TOG-8137 flags postdate the slice). Converging the two
-            // responses also keeps the trap oracle-free.
+            // responses also keeps the trap oracle-free — that includes the
+            // draft-retire signal below, so a stored copy cannot distinguish
+            // the swallow from a write on the next page load.
             $this->saveFailed = false;
             $this->sessionExpired = false;
             $this->draftRestored = false;
             $this->editing = false;
             $this->saved = true;
             $this->fillForm();
+            $this->dispatch('profile-draft-retired')->self();
 
             return;
         }
@@ -340,6 +355,14 @@ class MemberProfile extends Component
         $this->editing = false;
         $this->saved = true;
         $this->fillForm();
+        // TOG-9355 review: a restore that failed earlier kept the stored
+        // copy, but nothing retired it after the genuine save — the next
+        // page load restored the obsolete draft over the newer saved text.
+        // The signal fires only on terminal discard (genuine or trap-swallow
+        // save, explicit cancel): never on a write failure, a validation
+        // refusal, or the early restored-save retry, where the stored copy
+        // must stay recoverable.
+        $this->dispatch('profile-draft-retired')->self();
     }
 
     public function render(): View

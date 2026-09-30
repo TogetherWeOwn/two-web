@@ -544,6 +544,21 @@
                 }
             });
 
+            // TOG-9355 review: a restore that failed earlier kept the stored
+            // copy, but the later genuine save or explicit cancel never
+            // retired it — the next page load restored the obsolete draft
+            // over the newer saved text (or reopened cancelled input). The
+            // server dispatches profile-draft-retired only on those terminal
+            // discards — never on a write failure, validation refusal, or
+            // early restored-save retry — so consuming it here keeps the only
+            // stored copy recoverable until it is truly spent. sessionStorage
+            // is per-tab, so the saving tab retires exactly its own copy.
+            $wire.on('profile-draft-retired', () => {
+                try {
+                    sessionStorage.removeItem(draftKey);
+                } catch {}
+            });
+
             const restoreDraft = async () => {
                 let draft;
                 try {

@@ -19,6 +19,7 @@ function page({ stored = null, owner = true, storageFails = false, restoreFails 
     let request;
     let click;
     let pendingRestore = null;
+    const listeners = {};
     const restores = [];
     const navigations = [];
     const document = Object.assign(new EventTarget(), { visibilityState: 'visible' });
@@ -37,7 +38,8 @@ function page({ stored = null, owner = true, storageFails = false, restoreFails 
             },
             addEventListener(name, handler) { if (name === 'click') click = handler; },
         },
-        on() {},
+        on(name, handler) { (listeners[name] ??= []).push(handler); },
+        emit(name) { for (const handler of listeners[name] ?? []) handler(); },
         $hook(name, handler) { if (name === 'request') request = handler; },
         restoreDraft(...values) {
             restores.push(values);
@@ -62,6 +64,7 @@ function page({ stored = null, owner = true, storageFails = false, restoreFails 
     runInNewContext(authScript, context);
     return {
         storage, warning, restores, navigations,
+        emit(name) { wire.emit(name); },
         resolveRestore() {
             assert.ok(pendingRestore, 'no pending restore');
             pendingRestore();
@@ -206,6 +209,58 @@ for (const source of ['focus', 'visibility', 'pageshow', 'storage']) {
         assert.equal(returned.storage.has(key), false);
     });
 }
+
+test('a retired draft no longer restores over a genuine save', async () => {
+    const expired = page();
+    assert.equal(expired.fail(419), true);
+    // The first restore attempt fails (offline), so the only stored copy
+    // stays. The member types the content manually and saves genuinely —
+    // the save dispatches profile-draft-retired, retiring that copy.
+    const returned = page({ stored: expired.storage.get(key), restoreFails: true });
+    await settle();
+    assert.equal(returned.restores.length, 1);
+    assert.equal(returned.storage.has(key), true);
+    returned.emit('profile-draft-retired');
+    assert.equal(returned.storage.has(key), false);
+    // The next load in the same tab sees no stored copy: nothing restores
+    // over the newer saved text.
+    const later = page({ stored: returned.storage.get(key) ?? null, form: false });
+    await settle();
+    assert.equal(later.restores.length, 0);
+    assert.equal(later.storage.size, 0);
+});
+
+test('a retired draft stays discarded after an explicit cancel', async () => {
+    const expired = page();
+    assert.equal(expired.fail(419), true);
+    // Same failed-first-restore setup; the member discards the form instead
+    // of saving. Cancel dispatches the same retire signal, or refresh
+    // reopens the input just cancelled.
+    const returned = page({ stored: expired.storage.get(key), restoreFails: true });
+    await settle();
+    assert.equal(returned.restores.length, 1);
+    assert.equal(returned.storage.has(key), true);
+    returned.emit('profile-draft-retired');
+    assert.equal(returned.storage.has(key), false);
+    const later = page({ stored: returned.storage.get(key) ?? null, form: false });
+    await settle();
+    assert.equal(later.restores.length, 0);
+    assert.equal(later.storage.size, 0);
+});
+
+test('a failed save never retires the only stored copy', async () => {
+    const expired = page();
+    assert.equal(expired.fail(419), true);
+    const returned = page({ stored: expired.storage.get(key), restoreFails: true });
+    await settle();
+    assert.equal(returned.restores.length, 1);
+    assert.equal(returned.storage.has(key), true);
+    // No retire event: a failed save dispatches nothing, so the next load
+    // in the same tab can still retry the restore.
+    const later = page({ stored: returned.storage.get(key) ?? null });
+    await settle();
+    assert.deepEqual(Array.from(later.restores[0] ?? []), Object.values(input));
+});
 
 test('419 without an open form goes to login without inventing a draft', () => {
     const p = page({ form: false });
