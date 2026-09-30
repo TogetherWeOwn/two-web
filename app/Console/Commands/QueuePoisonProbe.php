@@ -63,11 +63,16 @@ class QueuePoisonProbe extends Command
 
         $marker = 'poison-probe-'.now()->format('YmdHis').'-'.substr((string) str()->uuid(), 0, 8);
 
-        PoisonProbeJob::dispatch($marker);
+        // A queue per drill keeps ordinary work and concurrent probes out of
+        // the one-shot worker. The marker also identifies its failed row.
+        $queue = $marker;
+        PoisonProbeJob::dispatch($marker)->onConnection($connection)->onQueue($queue);
 
         $before = $this->failedCount();
 
         $exit = $this->callSilent('queue:work', [
+            'connection' => $connection,
+            '--queue' => $queue,
             '--once' => true,
             '--tries' => 1,
             '--sleep' => 0,
@@ -75,6 +80,8 @@ class QueuePoisonProbe extends Command
         ]);
 
         $failed = DB::table(config('queue.failed.table', 'failed_jobs'))
+            ->where('connection', $connection)
+            ->where('queue', $queue)
             ->where('payload', 'like', '%'.$marker.'%')
             ->orderByDesc('id')
             ->first();
