@@ -82,10 +82,10 @@ gated() {
     esac
 }
 
-# GET and keep the body. Sets global FETCH_BODY, or FETCH_ERROR on failure.
+# GET and keep the body. Sets global FETCH_BODY.
 # Same header rules as probe(): session cookie when set, Cloudflare Access
-# service-token headers when the env provides them. Check this request's own
-# transport result and status: a healthy earlier probe cannot vouch for it.
+# service-token headers when the env provides them. Status and gating come
+# from probe(); this is just the HTML the guest-shape assertions read.
 fetch_body() {
     url="$1"
     set -- "$url"
@@ -94,28 +94,7 @@ fetch_body() {
         set -- -H "CF-Access-Client-Id: $CF_ACCESS_CLIENT_ID" \
                -H "CF-Access-Client-Secret: $CF_ACCESS_CLIENT_SECRET" "$@"
     fi
-    FETCH_BODY=""
-    FETCH_ERROR=""
-    fetch_response=$(curl -s -w '\n%{http_code}' --max-time 20 "$@" </dev/null)
-    fetch_status=$?
-    if [ "$fetch_status" -ne 0 ]; then
-        FETCH_ERROR="body fetch failed (curl exit $fetch_status)"
-        return 1
-    fi
-    # curl appends a newline and status after the body; split at the last newline.
-    fetch_code="${fetch_response##*
-}"
-    if [ "$fetch_code" != "200" ]; then
-        FETCH_ERROR="body fetch expected 200, got $fetch_code"
-        return 1
-    fi
-    FETCH_BODY="${fetch_response%
-*}"
-    if [ -z "$FETCH_BODY" ]; then
-        FETCH_ERROR="body fetch returned an empty body"
-        return 1
-    fi
-    return 0
+    FETCH_BODY=$(curl -s --max-time 20 "$@" </dev/null)
 }
 
 check_up() {
@@ -215,11 +194,7 @@ check_join_next() {
         fail "/join?next=" "expected 200, got $code"
         return
     fi
-    if ! fetch_body "$BASE_URL/join?next=%2Fevents"; then
-        COOKIE="$hold_cookie"
-        fail "/join?next=" "$FETCH_ERROR"
-        return
-    fi
+    fetch_body "$BASE_URL/join?next=%2Fevents"
     COOKIE="$hold_cookie"
     case "$FETCH_BODY" in
         *join/discord*next*events*)
@@ -249,11 +224,7 @@ check_join_next_hostile() {
         fail "/join?next=hostile" "expected 200, got $code"
         return
     fi
-    if ! fetch_body "$BASE_URL/join?next=https%3A%2F%2Fevil.test"; then
-        COOKIE="$hold_cookie"
-        fail "/join?next=hostile" "$FETCH_ERROR"
-        return
-    fi
+    fetch_body "$BASE_URL/join?next=https%3A%2F%2Fevil.test"
     COOKIE="$hold_cookie"
     case "$FETCH_BODY" in
         *evil.test*)

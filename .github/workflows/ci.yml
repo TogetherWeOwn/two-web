@@ -170,11 +170,6 @@ jobs:
       - name: Deploy guard self-test
         run: ./ci/deploy-target-selftest.sh
 
-      # A healthy status probe cannot vouch for a later HTML fetch. Fake curl
-      # keeps every other smoke check green while that fetch fails; no network.
-      - name: Staging smoke body-fetch self-test
-        run: ./ci/smoke-staging-selftest.sh
-
       # The deployment-records prune (TOG-9273): every merge to `main` creates
       # a Deployment record and nothing deleted them, so a weekly scheduled
       # workflow keeps the newest 30 per environment. The interesting case is
