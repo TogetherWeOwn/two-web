@@ -175,10 +175,43 @@ it('round-trips a bio of exactly "0" instead of storing null', function () {
         ->set('bio', '0')
         ->call('save')
         ->assertSet('editing', false)
-        ->assertSee('Profile saved.');
+        ->assertSee('Profile saved.')
+        ->assertSeeHtml('<p class="mt-3 max-w-prose whitespace-pre-line text-base text-ink">0</p>')
+        ->assertDontSee('You have not added a bio yet.')
+        ->assertDontSee('New here. More soon.');
 
     expect($member->profile()->first())->bio->toBe('0');
 });
+
+it('displays a stored zero-only bio on a fresh profile render', function (bool $isOwner) {
+    $member = User::factory()->create(['display_name' => 'River']);
+    Profile::factory()->for($member)->create(['bio' => '0', 'games' => [], 'timezone' => null]);
+    $viewer = $isOwner ? $member : User::factory()->create();
+
+    Livewire::actingAs($viewer)
+        ->test(MemberProfile::class, ['member' => $member->fresh(), 'stats' => profileStats($member->discord_id)])
+        ->assertSeeHtml('<p class="mt-3 max-w-prose whitespace-pre-line text-base text-ink">0</p>')
+        ->assertDontSee('You have not added a bio yet.')
+        ->assertDontSee('River has not added a bio yet.')
+        ->assertDontSee('New here. More soon.');
+})->with([true, false]);
+
+it('keeps the About empty copy for absent bios', function (?string $bio, bool $isNewMember, bool $isOwner) {
+    $member = User::factory()->create(['display_name' => 'River']);
+    Profile::factory()->for($member)->create([
+        'bio' => $bio,
+        'games' => $isNewMember ? [] : ['Minecraft'],
+        'timezone' => null,
+    ]);
+    $viewer = $isOwner ? $member : User::factory()->create();
+    $emptyCopy = $isNewMember
+        ? 'New here. More soon.'
+        : ($isOwner ? 'You have not added a bio yet.' : 'River has not added a bio yet.');
+
+    Livewire::actingAs($viewer)
+        ->test(MemberProfile::class, ['member' => $member->fresh(), 'stats' => profileStats($member->discord_id)])
+        ->assertSee($emptyCopy);
+})->with([null, ''])->with([true, false])->with([true, false]);
 
 it('keeps the form open when the profile write fails and does not leak the reason', function () {
     $member = User::factory()->create();
