@@ -208,16 +208,19 @@ function analysePull(pull) {
     const duskPresent = Boolean(dusk);
     const duskGreen = dusk?.status === 'completed' && dusk.conclusion === 'success';
 
-    const failedTests = new Set();
+    const flakyTests = new Set();
     const duskRuns = pull.checkRuns.filter((candidate) => candidate.name === 'dusk');
     for (const run of duskRuns) {
         if (run.conclusion === 'failure') {
-            for (const test of run.failedTests) {
-                failedTests.add(test);
+            const laterSuccessfulDuskRun = duskRuns.some((candidate) => candidate.conclusion === 'success'
+                && Date.parse(candidate.completedAt ?? candidate.startedAt) > Date.parse(run.completedAt ?? run.startedAt));
+            if (laterSuccessfulDuskRun) {
+                for (const test of run.failedTests) {
+                    flakyTests.add(test);
+                }
             }
         }
     }
-    const laterSuccessfulDuskRun = duskRuns.some((run) => run.conclusion === 'success');
 
     return {
         number: pull.number,
@@ -231,7 +234,7 @@ function analysePull(pull) {
         duskGreen,
         missingChecks,
         incompleteTiming,
-        flakyTests: laterSuccessfulDuskRun ? [...failedTests].sort() : [],
+        flakyTests: [...flakyTests].sort(),
     };
 }
 
