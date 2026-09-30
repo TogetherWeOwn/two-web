@@ -109,6 +109,13 @@ Rules that follow from the contract:
   `DB_DATABASE=two_web_test` (or a unique `two_web_test_<something>`), or use
   disposable CI service containers with their test-only credentials. The agent
   service's default database `agent_test` is not a valid name for this suite.
+  Isolate every configured connection at process level: explicitly set
+  `BOT_DB_HOST=agent-testdb`, `BOT_DB_PORT=5432`,
+  `BOT_DB_DATABASE` to the same disposable test database, `BOT_DB_USERNAME=agent_test`
+  and an empty `BOT_DB_PASSWORD` too. The default database-name guard does not
+  guard the separate `bot` connection; homepage tests can query it, and even a
+  failed staging/production read is a prohibited probe. Use disposable bot-view
+  fixtures or no-I/O test doubles, never live bot data.
   See the [README setup](../README.md#database-setup-agents-developers-and-ci).
 - If a test needs Redis, use `redis://agent-testredis:6379` or a disposable CI
   service container. This app does not otherwise require Redis.

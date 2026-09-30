@@ -60,8 +60,8 @@ unchanged.
 
 **Agents:** database tests and database probes may use only `agent-testdb:5432`
 with user `agent_test` and an empty password, or disposable CI service containers.
-Set all six values in the process environment of the command you run — a `.env`
-file alone does not do it:
+Set all default and bot connection values in the process environment of the
+command you run — a `.env` file alone does not do it:
 
 ```bash
 DB_CONNECTION=pgsql \
@@ -70,6 +70,11 @@ DB_PORT=5432 \
 DB_DATABASE=two_web_test \
 DB_USERNAME=agent_test \
 DB_PASSWORD= \
+BOT_DB_HOST=agent-testdb \
+BOT_DB_PORT=5432 \
+BOT_DB_DATABASE=two_web_test \
+BOT_DB_USERNAME=agent_test \
+BOT_DB_PASSWORD= \
 composer test
 ```
 
@@ -85,6 +90,17 @@ run would silently use the shared `two_web_test` instead. `composer test`
 clears a stale cached config itself before running Pest; if you invoke
 `phpunit` or `pest` directly instead, run `php artisan config:clear` first —
 a cached config ignores environment changes entirely.
+
+Isolate **every configured connection**, not only the default one. The `bot`
+connection reads its own `BOT_DB_*` values, and homepage tests can query it even
+when the default connection passes the database-name guard. Set all five bot
+values explicitly too, including `BOT_DB_PASSWORD=` to clear an inherited
+password. The example sends both connections to the same approved disposable
+test database; if you select a per-worktree database, set both `DB_DATABASE` and
+`BOT_DB_DATABASE` to that name. Never leave the bot connection pointing at an
+inherited staging or production host: even a failed read is a prohibited probe.
+Tests that need bot views must use disposable fixtures on the approved test
+service or a no-I/O test double, never live bot data.
 
 The shared service's default database is `agent_test`, but this suite requires
 `two_web_test` (or a per-worktree `two_web_test_<something>` database). Provision
