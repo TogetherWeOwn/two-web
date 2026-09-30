@@ -12,12 +12,13 @@ const authScript = layout.match(/<script data-testid="auth-tab-sync">([\s\S]*?)<
 const key = 'two:profile-draft:42';
 const input = { bio: 'Unsent <bio>\nsecond line', gamesText: 'Chess\nCo-op', timezone: 'Europe/London' };
 
-function page({ stored = null, owner = true, storageFails = false, restoreFails = false, form = true } = {}) {
+function page({ stored = null, owner = true, storageFails = false, restoreFails = false, manualRestore = false, form = true } = {}) {
     const storage = new Map(stored === null ? [] : [[key, stored]]);
     const nodes = Object.fromEntries(Object.entries(input).map(([name, value]) => [name, { value }]));
     const warning = { hidden: true, focus() { this.focused = true; } };
     let request;
     let click;
+    let pendingRestore = null;
     const restores = [];
     const navigations = [];
     const document = Object.assign(new EventTarget(), { visibilityState: 'visible' });
@@ -40,6 +41,9 @@ function page({ stored = null, owner = true, storageFails = false, restoreFails 
         $hook(name, handler) { if (name === 'request') request = handler; },
         restoreDraft(...values) {
             restores.push(values);
+            if (manualRestore) {
+                return new Promise((resolve) => { pendingRestore = resolve; });
+            }
             return restoreFails ? Promise.reject(new Error('offline')) : Promise.resolve();
         },
     };
@@ -58,6 +62,10 @@ function page({ stored = null, owner = true, storageFails = false, restoreFails 
     runInNewContext(authScript, context);
     return {
         storage, warning, restores, navigations,
+        resolveRestore() {
+            assert.ok(pendingRestore, 'no pending restore');
+            pendingRestore();
+        },
         authExpiry(source) {
             if (source === 'focus') window.dispatchEvent(new Event('focus'));
             else if (source === 'visibility') document.dispatchEvent(new Event('visibilitychange'));
@@ -181,6 +189,23 @@ test('a detached profile cannot interfere with the current pages auth reload', a
     assert.deepEqual(p.navigations, ['reload']);
     assert.equal(p.storage.size, 0);
 });
+
+for (const source of ['focus', 'visibility', 'pageshow', 'storage']) {
+    test(`${source} auth navigation during a pending restore retains the only stored copy`, async () => {
+        const p = page({ stored: draft(), manualRestore: true, form: false });
+        assert.equal(p.restores.length, 1);
+        p.authExpiry(source);
+        await settle();
+        assert.deepEqual(p.navigations, ['reload']);
+        p.resolveRestore();
+        await settle();
+        assert.equal(p.storage.has(key), true);
+        const returned = page({ stored: p.storage.get(key) });
+        await settle();
+        assert.deepEqual(Array.from(returned.restores[0] ?? []), Object.values(input));
+        assert.equal(returned.storage.has(key), false);
+    });
+}
 
 test('419 without an open form goes to login without inventing a draft', () => {
     const p = page({ form: false });

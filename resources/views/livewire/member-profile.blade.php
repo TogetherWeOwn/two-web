@@ -502,7 +502,17 @@
             // before a save ever sends a request. Preserve input before those
             // reloads too, and go through login rather than a guest render that
             // cannot restore this owner's draft. Ignore unmounted components.
+            //
+            // TOG-9355: either branch starts abandoning this document — the
+            // layout reloads when no form is open, this listener stashes then
+            // navigates to login when one is. A restore still in flight must
+            // not consume the only stored copy for a document about to be
+            // replaced; the replacement page needs it. keepDraft is
+            // synchronous DOM capture, so it lands before a slow restore
+            // response in either branch.
+            let authAbandoned = false;
             document.addEventListener('two:before-auth-reload', (event) => {
+                authAbandoned = true;
                 if (!$wire.el.isConnected || !$wire.el.querySelector('[data-testid="profile-edit-form"]')) {
                     return;
                 }
@@ -556,7 +566,13 @@
 
                 try {
                     await $wire.restoreDraft(draft.bio, draft.gamesText, draft.timezone);
-                    sessionStorage.removeItem(draftKey);
+                    // A restore that resolves after auth-driven abandonment
+                    // started is landing in a document about to be replaced.
+                    // Keep the stored copy so the replacement page restores;
+                    // consuming it here orphans the unsaved recovered form.
+                    if (!authAbandoned) {
+                        sessionStorage.removeItem(draftKey);
+                    }
                 } catch {
                     // An interrupted restore must not consume the only copy.
                     // A later page load can retry; never auto-save a draft.
