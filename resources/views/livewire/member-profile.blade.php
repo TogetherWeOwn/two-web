@@ -498,16 +498,22 @@
                 }
             };
 
-            // Focus/visibility checks and another tab's logout can navigate
-            // before a save ever sends a request. Preserve input before those
-            // reloads too, and go through login rather than a guest render that
-            // cannot restore this owner's draft. Ignore unmounted components.
+            // Auth rechecks and another tab's logout can fire before a save
+            // ever sends a request. Preserve input before those reloads too.
+            // A quiet expiry goes through login rather than a guest render
+            // that cannot restore this owner's draft; an explicit sign-out
+            // in another tab stashes the draft and stays on the open form —
+            // never auto-starting OAuth, where the pinned Discord driver's
+            // prompt=none could silently complete an existing grant and sign
+            // the shared browser back in with no login click (TOG-9355
+            // review). Only an explicit login action leaves this page after
+            // a sign-out. Ignore unmounted components.
             //
-            // TOG-9355: either branch starts abandoning this document — the
-            // layout reloads when no form is open, this listener stashes then
-            // navigates to login when one is. A restore still in flight must
-            // not consume the only stored copy for a document about to be
-            // replaced; the replacement page needs it. keepDraft is
+            // TOG-9355: the expiry branch starts abandoning this document —
+            // the layout reloads when no form is open, this listener stashes
+            // then navigates to login when one is. A restore still in flight
+            // must not consume the only stored copy for a document about to
+            // be replaced; the replacement page needs it. keepDraft is
             // synchronous DOM capture, so it lands before a slow restore
             // response in either branch.
             let authAbandoned = false;
@@ -518,9 +524,13 @@
                 }
 
                 event.preventDefault();
-                if (keepDraft()) {
-                    window.location.assign($wire.el.dataset.loginUrl);
+                if (!keepDraft()) {
+                    return;
                 }
+                if (event.detail?.reason === 'signed-out') {
+                    return;
+                }
+                window.location.assign($wire.el.dataset.loginUrl);
             });
 
             $wire.$hook('request', ({ fail }) => {

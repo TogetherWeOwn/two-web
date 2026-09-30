@@ -147,10 +147,21 @@
 
                 let checking = false;
 
-                function reloadAfterAuthChange() {
+                // An explicit sign-out seen in this page lifetime sticks:
+                // later probes describe the same dead session, never a quiet
+                // expiry, so editors keep requiring an explicit login after
+                // it (TOG-9355 review). Without this, the first focus after a
+                // cross-tab sign-out would report 'expired' and auto-start
+                // OAuth — the exact navigation the sign-out path refuses.
+                let signedOut = false;
+
+                function reloadAfterAuthChange(reason) {
                     // Editors may preserve unsent input or refuse navigation
                     // when storage is unavailable. Other pages still reload.
-                    const beforeReload = new CustomEvent('two:before-auth-reload', { cancelable: true });
+                    // The reason tells editors apart: an explicit sign-out in
+                    // another tab must never auto-start OAuth (TOG-9355
+                    // review), while a quiet expiry may go through login.
+                    const beforeReload = new CustomEvent('two:before-auth-reload', { cancelable: true, detail: { reason } });
                     if (document.dispatchEvent(beforeReload)) {
                         window.location.reload();
                     }
@@ -169,7 +180,7 @@
                         if (res.ok) {
                             const body = await res.json();
                             if (body && body.authenticated === false) {
-                                reloadAfterAuthChange();
+                                reloadAfterAuthChange(signedOut ? 'signed-out' : 'expired');
                             }
                         }
                     } catch (e) {
@@ -193,7 +204,8 @@
                 });
                 window.addEventListener('storage', (event) => {
                     if (event.key === STORAGE_KEY && event.newValue === 'signed-out') {
-                        reloadAfterAuthChange();
+                        signedOut = true;
+                        reloadAfterAuthChange('signed-out');
                     }
                 });
 

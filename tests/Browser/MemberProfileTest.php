@@ -3,6 +3,7 @@
 use App\Models\Profile;
 use App\Models\User;
 use App\Support\SpamTrap;
+use Facebook\WebDriver\WebDriverTargetLocator;
 use Laravel\Dusk\Browser;
 
 it('lets a member edit their sparse profile with the keyboard-visible form', function () {
@@ -151,10 +152,10 @@ it('does not resurrect a retired draft over a genuine save after refresh', funct
     expect($member->profile()->sole()->bio)->toBe('Genuine save');
 });
 
-it('preserves unsent profile input when auth sync navigates before save', function (string $source) {
+it('preserves unsent profile input when an expiry probe navigates before save', function () {
     $member = User::factory()->create();
 
-    $this->browse(function (Browser $browser) use ($member, $source) {
+    $this->browse(function (Browser $browser) use ($member) {
         $browser->loginAs($member)
             ->visit('/profile')
             ->press('Add profile details')
@@ -173,9 +174,7 @@ it('preserves unsent profile input when auth sync navigates before save', functi
                 ? Promise.resolve(new Response(JSON.stringify({ authenticated: false }), { status: 200 }))
                 : originalFetch(url, options);
         JS);
-        $browser->script($source === 'focus'
-            ? 'window.dispatchEvent(new Event("focus"));'
-            : 'window.dispatchEvent(new StorageEvent("storage", { key: "two-auth", newValue: "signed-out" }));');
+        $browser->script('window.dispatchEvent(new Event("focus"));');
 
         $browser->waitFor('[data-testid="profile-draft-restored"]')
             ->assertInputValue('bio', 'Auth-sync draft')
@@ -183,7 +182,100 @@ it('preserves unsent profile input when auth sync navigates before save', functi
             ->assertInputValue('timezone', 'Europe/London');
         expect($member->profile()->first())->toBeNull();
     });
-})->with(['focus', 'storage']);
+});
+
+it('stashes the draft without starting login when another tab broadcasts sign-out', function () {
+    $member = User::factory()->create();
+
+    $this->browse(function (Browser $browser) use ($member) {
+        $browser->loginAs($member)
+            ->visit('/profile')
+            ->press('Add profile details')
+            ->waitFor('[data-testid="profile-edit-form"]')
+            ->type('bio', 'Sign-out broadcast draft')
+            ->type('gamesText', "Chess\nCo-op")
+            ->type('timezone', 'Europe/London');
+
+        // Point the handoff at the real OAuth redirect so the regression is
+        // meaningful: the old listener navigated here, where the pinned
+        // Discord driver's prompt=none could silently complete an existing
+        // grant and sign the shared browser back in with no login click
+        // (TOG-9355 review). The broadcast dispatch below runs the shipped
+        // listeners synchronously, so the assertions after it are exact.
+        $browser->script(<<<'JS'
+            document.querySelector('[data-profile-id]').dataset.loginUrl = '/auth/discord/redirect?next=%2Fprofile';
+        JS);
+        $browser->script('window.dispatchEvent(new StorageEvent("storage", { key: "two-auth", newValue: "signed-out" }));');
+
+        $key = "two:profile-draft:{$member->getKey()}";
+        $browser->assertPathIs('/profile')
+            ->assertVisible('[data-testid="profile-edit-form"]')
+            ->assertInputValue('bio', 'Sign-out broadcast draft')
+            ->assertScript("JSON.parse(sessionStorage.getItem('{$key}')).bio", 'Sign-out broadcast draft')
+            ->assertScript("JSON.parse(sessionStorage.getItem('{$key}')).timezone", 'Europe/London');
+        expect($member->profile()->first())->toBeNull();
+
+        // A later expiry probe describes the same dead session, never a
+        // quiet expiry: it must not start login either. The stubbed probe is
+        // async, so give a would-be navigation time to land before asserting
+        // its absence (same negative-assertion pattern as the retire test).
+        $browser->script(<<<'JS'
+            const originalFetch = window.fetch;
+            window.fetch = (url, options) => String(url).endsWith('/auth/status')
+                ? Promise.resolve(new Response(JSON.stringify({ authenticated: false }), { status: 200 }))
+                : originalFetch(url, options);
+        JS);
+        $browser->script('window.dispatchEvent(new Event("focus"));');
+        $browser->pause(1500)
+            ->assertPathIs('/profile')
+            ->assertVisible('[data-testid="profile-edit-form"]')
+            ->assertInputValue('bio', 'Sign-out broadcast draft');
+    });
+});
+
+it('keeps an open editor on the page when a second tab signs out for real', function () {
+    $member = User::factory()->create();
+
+    $this->browse(function (Browser $browser) use ($member) {
+        $browser->loginAs($member)
+            ->visit('/profile')
+            ->press('Add profile details')
+            ->waitFor('[data-testid="profile-edit-form"]')
+            ->type('bio', 'Cross-tab sign-out draft')
+            ->type('gamesText', "Chess\nCo-op")
+            ->type('timezone', 'Europe/London');
+
+        $tabA = $browser->driver->getWindowHandle();
+
+        // Tab B shares the session: a real sign-out there broadcasts
+        // `two-auth = signed-out` to the editing tab — no synthetic events.
+        $browser->driver->switchTo()->newWindow(WebDriverTargetLocator::WINDOW_TYPE_TAB);
+        $tabB = $browser->driver->getWindowHandle();
+        $browser->visit('/profile')
+            ->waitForText('Sign out')
+            ->waitForReload(fn (Browser $page) => $page->press('Sign out'))
+            ->assertPathIs('/');
+
+        // Back to the editing tab. The broadcast stashes the draft, but the
+        // tab must stay on the open form: navigating to the login handoff
+        // would let Discord prompt=none silently sign the shared browser
+        // back in. Only an explicit login action may leave this page.
+        $browser->driver->switchTo()->window($tabA);
+        $key = "two:profile-draft:{$member->getKey()}";
+        $browser->waitUntil("JSON.parse(sessionStorage.getItem('{$key}') || 'null')?.bio === 'Cross-tab sign-out draft'");
+
+        $browser->assertPathIs('/profile')
+            ->assertVisible('[data-testid="profile-edit-form"]')
+            ->assertInputValue('bio', 'Cross-tab sign-out draft')
+            ->assertInputValue('gamesText', "Chess\nCo-op")
+            ->assertInputValue('timezone', 'Europe/London');
+        expect($member->profile()->first())->toBeNull();
+
+        $browser->driver->switchTo()->window($tabB);
+        $browser->driver->close();
+        $browser->driver->switchTo()->window($tabA);
+    });
+});
 
 it('blocks auth-sync navigation when profile draft storage is unavailable', function (string $source) {
     $member = User::factory()->create();

@@ -154,7 +154,7 @@ test('draft remains recoverable if the restore request fails', async () => {
     assert.equal(p.storage.has(key), true);
 });
 
-for (const source of ['focus', 'visibility', 'pageshow', 'storage']) {
+for (const source of ['focus', 'visibility', 'pageshow']) {
     test(`${source} auth expiry preserves deferred input before login instead of reloading`, async () => {
         const p = page();
         p.authExpiry(source);
@@ -165,8 +165,40 @@ for (const source of ['focus', 'visibility', 'pageshow', 'storage']) {
         await settle();
         assert.deepEqual(Array.from(returned.restores[0] ?? []), Object.values(input));
     });
+}
 
-    test(`${source} auth expiry cannot discard input when storage is unavailable`, async () => {
+test('storage sign-out stashes the draft but never starts login on its own', async () => {
+    // TOG-9355 review: an open editor that intercepted another tab's
+    // explicit logout auto-navigated to the login handoff, where the pinned
+    // Discord driver's prompt=none could silently complete an existing
+    // grant and sign the shared browser back in with no login click. The
+    // draft must survive, but only an explicit login action may leave.
+    const p = page();
+    p.authExpiry('storage');
+    await settle();
+    assert.equal(JSON.parse(p.storage.get(key)).bio, input.bio);
+    assert.deepEqual(p.navigations, []);
+    const returned = page({ stored: p.storage.get(key), form: false });
+    await settle();
+    assert.deepEqual(Array.from(returned.restores[0] ?? []), Object.values(input));
+});
+
+test('an expiry probe after a sign-out still requires an explicit login', async () => {
+    // The layout remembers an explicit sign-out for the page lifetime, so a
+    // later focus probe describes the same dead session — never a quiet
+    // expiry — and must not auto-start OAuth either.
+    const p = page();
+    p.authExpiry('storage');
+    await settle();
+    assert.deepEqual(p.navigations, []);
+    p.authExpiry('focus');
+    await settle();
+    assert.deepEqual(p.navigations, []);
+    assert.equal(JSON.parse(p.storage.get(key)).bio, input.bio);
+});
+
+for (const source of ['focus', 'visibility', 'pageshow', 'storage']) {
+    test(`${source} auth change cannot discard input when storage is unavailable`, async () => {
         const p = page({ storageFails: true });
         p.authExpiry(source);
         await settle();
@@ -175,7 +207,7 @@ for (const source of ['focus', 'visibility', 'pageshow', 'storage']) {
         assert.equal(p.warning.focused, true);
     });
 
-    test(`${source} auth expiry still reloads pages without an open profile form`, async () => {
+    test(`${source} auth change still reloads pages without an open profile form`, async () => {
         const p = page({ form: false });
         p.authExpiry(source);
         await settle();
