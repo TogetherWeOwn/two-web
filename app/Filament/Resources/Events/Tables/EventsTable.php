@@ -77,7 +77,9 @@ class EventsTable
                     ->authorize(fn (Event $record): bool => auth()->user()?->can('cancel', $record) ?? false)
                     ->visible(fn (Event $record): bool => in_array($record->status, [EventStatus::Draft, EventStatus::Published], true))
                     ->requiresConfirmation()
-                    ->modalDescription('Cancelling is permanent. Discord will be told; RSVPs are not coming back.')
+                    ->modalDescription(fn (Event $record): string => $record->recurrence_frequency !== null
+                        ? 'Cancelling calls off every instance in the series. This is permanent — any existing Discord mirrors will be cancelled and RSVPs are not coming back.'
+                        : 'Cancelling is permanent. Any existing Discord mirror will be cancelled; RSVPs are not coming back.')
                     ->action(fn (Event $record, EventService $service) => $service->cancel($record))
                     ->icon('heroicon-o-x-circle')
                     ->color('danger'),
