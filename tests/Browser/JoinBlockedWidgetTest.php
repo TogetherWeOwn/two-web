@@ -96,12 +96,11 @@ test('a blocked Discord widget leaves the join fallback usable at 360px', functi
                 $browser->driver->switchTo()->activeElement()->sendKeys(WebDriverKeys::ENTER);
                 $browser->assertScript('return window.joinFallbackDestination;', 'https://discord.gg/testinvite')
                     ->assertPathIs('/'.$fixture)
-                    ->assertScript('return document.documentElement.scrollWidth <= window.innerWidth + 1;')
-                    ->screenshot('join-blocked-widget-360');
+                    ->assertScript('return document.documentElement.scrollWidth <= window.innerWidth + 1;');
             } finally {
-                // Do not leak network blocking or device emulation into Dusk's
-                // reused browser when this test succeeds or fails.
-                $browser->visit('about:blank');
+                // Preserve the refusal viewport on pass or failure before the
+                // reused browser's network and emulation state is restored.
+                $browser->screenshot('join-blocked-widget-360');
                 $cdp->execute('Page.removeScriptToEvaluateOnNewDocument', ['identifier' => $observer['identifier']]);
                 $cdp->execute('Network.setBlockedURLs', ['urls' => []]);
                 $cdp->execute('Emulation.clearDeviceMetricsOverride');
