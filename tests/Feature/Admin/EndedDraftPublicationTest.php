@@ -39,7 +39,7 @@ it('keeps a past-dated create and edit round-trip in Draft and explains why publ
 
     livewire(ListEvents::class)
         ->callTableAction('publish', $event)
-        ->assertHasTableActionErrors(['ends_at'])
+        ->assertHasErrors(['ends_at'])
         ->assertNotified(Notification::make()
             ->title('An event that has already ended cannot be published. Update its dates first.')
             ->danger());
@@ -58,7 +58,7 @@ it('keeps a past-dated create and edit round-trip in Draft and explains why publ
 
     livewire(ListEvents::class)
         ->callTableAction('publish', $event->fresh())
-        ->assertHasNoTableActionErrors();
+        ->assertHasNoErrors();
 
     expect($event->fresh()->status)->toBe(EventStatus::Published);
     Queue::assertPushed(SyncEventToDiscord::class);
@@ -74,7 +74,7 @@ it('refuses a draft that ends while its publish confirmation is open', function 
     $this->travel(2)->seconds();
 
     $page->callMountedTableAction()
-        ->assertHasTableActionErrors(['ends_at'])
+        ->assertHasErrors(['ends_at'])
         ->assertNotified(Notification::make()
             ->title('An event that has already ended cannot be published. Update its dates first.')
             ->danger());
