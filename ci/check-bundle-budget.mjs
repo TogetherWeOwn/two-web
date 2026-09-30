@@ -175,6 +175,34 @@ function selftest() {
     }
   }
 
+  // Isolate gzip enforcement: raw has headroom, and the default-gzip ceiling is
+  // measured from deterministic bytes rather than pinned to a zlib version.
+  for (const [entry, emitted, payload] of [
+    ['resources/js/app.js', 'assets/app.js', Buffer.from(Array.from({ length: 128 }, (_, i) => `console.log("bundle-budget-${i}");\n`).join(''))],
+    ['resources/css/app.css', 'assets/app.css', Buffer.from(Array.from({ length: 128 }, (_, i) => `.budget-${i}{margin:${i}px}\n`).join(''))],
+  ]) {
+    const { dir, budget } = fixture();
+    try {
+      writeFileSync(join(dir, 'public/build', emitted), payload);
+      const gzipped = gzipSync(payload).length;
+      budget.budgets[entry] = { maxRawBytes: payload.length + 1, maxGzipBytes: gzipped - 1 };
+      const over = checkTree({ root: dir, budget });
+      const expected = `${entry} (${emitted}): gzip ${gzipped}B over ${gzipped - 1}B`;
+      if (!over.ok && !over.unreadable && over.errors.length === 1 && over.errors[0] === expected) {
+        pass(`gzip-only breach fails naming ${entry}`);
+      } else {
+        failCase(`gzip-only breach fails naming ${entry}`, over.ok ? 'passed' : over.errors.join('; '));
+      }
+
+      budget.budgets[entry].maxGzipBytes = gzipped;
+      const at = checkTree({ root: dir, budget });
+      if (at.ok && !at.unreadable && at.errors.length === 0) pass(`exact gzip ceiling fits ${entry}`);
+      else failCase(`exact gzip ceiling fits ${entry}`, at.errors.join('; '));
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }
+
   // over-budget JS: the axios accident — a 48 KB import in the 1-byte app.js.
   {
     const { dir, budget } = fixture();
