@@ -30,6 +30,27 @@
                 {{ $this->event->status === \App\Enums\EventStatus::Cancelled ? 'Cancelled' : ($this->event->status === \App\Enums\EventStatus::Draft ? 'Not published yet' : 'This one has been and gone') }}
             </p>
 
+        @elseif ($nonSeatAnswer)
+            {{-- An API answer is still an answer, even without a seat. Keep it
+                 visible ahead of the full/paused refusal, with a way to remove
+                 it rather than silently replacing it with Going. --}}
+            <p class="flex items-center gap-1.5 text-sm text-ink" role="status" tabindex="-1" data-testid="rsvp-answer">
+                <span class="font-medium">{{ $rsvp->status === \App\Enums\RsvpStatus::Maybe ? "You're a maybe" : "You're not going" }}</span>
+            </p>
+
+            <button type="button"
+                    wire:click="withdraw"
+                    wire:loading.attr="disabled"
+                    wire:target="withdraw"
+                    aria-busy="false"
+                    data-testid="rsvp-withdraw"
+                    class="inline-flex items-center justify-center gap-2 min-h-11 px-3 rounded-md
+                           text-ink-muted hover:text-ink hover:bg-raised
+                           transition-colors duration-fast ease-out-quick self-start">
+                <span wire:loading.remove wire:target="withdraw">Remove answer</span>
+                <span wire:loading wire:target="withdraw" aria-busy="true" style="display: none">Removing…</span>
+            </button>
+
         @elseif ($full || $atCapacity)
             {{-- Colour is not carrying this: there is an icon and there are words,
                  and the cap is named so the number is not a mystery.
@@ -186,13 +207,13 @@
             </button>
         @endif
 
-        @if ($syncing && $going)
+        @if ($syncing && ($going || $nonSeatAnswer))
             {{-- The honest in-between. Saved here, not in Discord yet; the reconcile
                  pass closes this within ten minutes and nobody needs to do anything. --}}
             <p class="text-xs text-ink-muted" role="status" data-testid="rsvp-syncing">
                 Saved. Syncing to Discord.
             </p>
-        @elseif ($going)
+        @elseif ($going || $nonSeatAnswer)
             <p class="text-xs text-ink-muted" role="status" data-testid="rsvp-synced">
                 Synced to Discord.
             </p>
@@ -224,7 +245,7 @@
         <script>
             $wire.on('rsvp-state-changed', () => {
                 const root = $wire.el;
-                const confirmed = root.querySelector('[data-testid="rsvp-confirmed"]');
+                const confirmed = root.querySelector('[data-testid="rsvp-confirmed"], [data-testid="rsvp-answer"]');
                 if (confirmed) {
                     confirmed.focus({ preventScroll: true });
                     return;

@@ -157,6 +157,7 @@ class RsvpButton extends Component
             'rsvp' => $rsvp,
             'going' => $going,
             'waitlisted' => $waitlisted,
+            'nonSeatAnswer' => in_array($rsvp?->status, [RsvpStatus::Maybe, RsvpStatus::NotGoing], true),
             // The clock counts, not just the status: a recently finished event is
             // still Published until the reconcile pass flips it to Past, and
             // offering a button for it would be a lie the write path refuses.
