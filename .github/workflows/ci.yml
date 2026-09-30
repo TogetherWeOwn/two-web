@@ -216,6 +216,11 @@ jobs:
       - name: Bundle budget self-test
         run: node ci/check-bundle-budget.mjs --selftest
 
+      # Real npm against an offline fixture registry: an unsaved second install
+      # must reproduce the missing-new-tarball regression, while npm ci stays locked.
+      - name: Budget tooling install self-test
+        run: node ci/budget-tooling-selftest.mjs
+
       # The dependency audit predicate (TOG-8405). Its own `--selftest` runs
       # here, in `static`, for the same reason as the line above: the live
       # audit needs the public feeds so it runs in `deps-audit`, and a
@@ -902,11 +907,6 @@ jobs:
           fi
           echo "harness is serving gzip"
 
-      # Pinned exactly. An unpinned budget tool is a budget that changes without a
-      # commit. Fold these into package.json devDependencies when convenient.
-      - name: Install budget tooling
-        run: npm i --no-save --no-package-lock @lhci/cli@0.14.0 puppeteer@23.11.1 @axe-core/puppeteer@4.10.2 axe-core@4.10.2
-
       # This is the real-browser half of the Cloudflare Access regression guard.
       # The static job already tests config composition without Chrome; here a local
       # fixture proves both headers arrive on the first document request and that a
@@ -966,7 +966,7 @@ jobs:
           # Explicit exit code: steps.lighthouse.outcome below depends on it,
           # and a pipe through tee would report tee's status instead.
           mkdir -p .lighthouseci
-          npx lhci autorun --config=./ci/lighthouserc.cjs > .lighthouseci/lhci.log 2>&1
+          npx --no-install lhci autorun --config=./ci/lighthouserc.cjs > .lighthouseci/lhci.log 2>&1
           rc=$?
           cat .lighthouseci/lhci.log
           exit $rc
