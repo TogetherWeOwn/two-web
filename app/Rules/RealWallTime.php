@@ -7,6 +7,8 @@ use Closure;
 use DateTimeZone;
 use Illuminate\Contracts\Validation\DataAwareRule;
 use Illuminate\Contracts\Validation\ValidationRule;
+use Illuminate\Support\Arr;
+use Illuminate\Support\Str;
 
 /**
  * A wall time that actually occurred in the event's time zone.
@@ -25,9 +27,9 @@ use Illuminate\Contracts\Validation\ValidationRule;
  * offset-bearing) is left to the `date` rule or the NaiveWallTime rule, so
  * this rule never double-reports.
  *
- * The gap test lives on EventInput::isNonexistentWallTime() so the domain
- * layer guards the same strings this rule guards (the Filament panel calls
- * fromValidated() directly and never sees this rule).
+ * The gap test lives on EventInput::isNonexistentWallTime() so the API,
+ * Filament panel and domain layer guard the same strings. The timezone is a
+ * sibling of the date field, including inside Filament's nested `data` state.
  */
 class RealWallTime implements DataAwareRule, ValidationRule
 {
@@ -48,7 +50,10 @@ class RealWallTime implements DataAwareRule, ValidationRule
             return;
         }
 
-        $timezone = $this->data['timezone'] ?? null;
+        $timezoneKey = str_contains($attribute, '.')
+            ? Str::beforeLast($attribute, '.').'.timezone'
+            : 'timezone';
+        $timezone = Arr::get($this->data, $timezoneKey);
 
         if (! is_string($timezone) || ! in_array($timezone, DateTimeZone::listIdentifiers(), true)) {
             return;

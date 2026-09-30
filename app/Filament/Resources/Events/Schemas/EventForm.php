@@ -3,6 +3,8 @@
 namespace App\Filament\Resources\Events\Schemas;
 
 use App\Enums\RecurrenceFrequency;
+use App\Rules\NaiveWallTime;
+use App\Rules\RealWallTime;
 use DateTimeZone;
 use Filament\Forms\Components\DatePicker;
 use Filament\Forms\Components\DateTimePicker;
@@ -49,11 +51,13 @@ class EventForm
                 DateTimePicker::make('starts_at')
                     ->label('Starts (local time)')
                     ->seconds(false)
-                    ->required(),
+                    ->required()
+                    ->rules([new NaiveWallTime, new RealWallTime]),
                 DateTimePicker::make('ends_at')
                     ->label('Ends (local time)')
                     ->seconds(false)
                     ->required()
+                    ->rules([new NaiveWallTime, new RealWallTime])
                     ->after('starts_at'),
 
                 // Instant carriers for the edit page (TOG-6805). A wall time near
