@@ -283,6 +283,11 @@ expect_fail admin-exception-widened 'the relaxed `/admin` LCP budget reads' \
 expect_fail lhci-chrome-flags-dropped 'without `--no-sandbox`' \
   sed -i "s/chromeFlags: '--no-sandbox --disable-dev-shm-usage',/chromeFlags: '--disable-dev-shm-usage',/" ci/lighthouserc.cjs
 
+# Keep the sandbox workaround while dropping only the shared-memory workaround,
+# so checking --no-sandbox alone cannot silently satisfy both requirements.
+expect_fail lhci-chrome-shared-memory-flag-dropped 'without `--disable-dev-shm-usage`' \
+  sed -i "s/chromeFlags: '--no-sandbox --disable-dev-shm-usage',/chromeFlags: '--no-sandbox',/" ci/lighthouserc.cjs
+
 # A second entry appended for an audit that already has one. The pinned line is
 # left exactly as it was — and a JavaScript object literal keeps the *last*
 # duplicate key, so lhci loads the new one and the CEO's LCP budget is gone. The
