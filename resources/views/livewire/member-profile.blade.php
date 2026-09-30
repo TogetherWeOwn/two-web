@@ -328,7 +328,7 @@
                     <div class="flex flex-col gap-6 lg:col-span-2">
                         <section class="rounded-lg border border-line bg-surface p-5 md:p-6" aria-labelledby="about-heading">
                             <h2 id="about-heading" class="text-2xl font-semibold text-ink">About</h2>
-                            @if ($profile->bio)
+                            @if ($profile->bio !== null && $profile->bio !== '')
                                 <p class="mt-3 max-w-prose whitespace-pre-line text-base text-ink">{{ $profile->bio }}</p>
                             @elseif (! $isNewMember)
                                 <p class="mt-3 text-base text-ink-muted">{{ $isOwner ? 'You have not added a bio yet.' : ($member->display_name ?? $member->username).' has not added a bio yet.' }}</p>
