@@ -327,25 +327,26 @@ class EventService
         return DB::transaction(function () use ($event, $to): Event {
             $locked = Event::query()->whereKey($event->getKey())->lockForUpdate()->firstOrFail();
 
+            // Lock and preflight the whole series before writes or dispatches.
+            // A later rejection must not orphan an earlier child's unique
+            // queue lock, which can live outside the SQL rollback.
+            $children = [];
+            if ($locked->status !== $to && $locked->isSeriesParent()) {
+                // Past instances keep their history; cancelled weeks stay off.
+                $children = $locked->childEvents()
+                    ->whereIn('status', [EventStatus::Draft, EventStatus::Published])
+                    ->lockForUpdate()->get()->all();
+            }
+
+            // Lock acquisition can wait past an instance's end. Check every
+            // locked row against the same instant after all locks return.
             $now = CarbonImmutable::now();
             $this->assertCanTransition($locked, $to, $now);
+            foreach ($children as $child) {
+                $this->assertCanTransition($child, $to, $now);
+            }
 
             if ($locked->status !== $to) {
-                // Lock and preflight the whole series before writes or dispatches.
-                // A later rejection must not orphan an earlier child's unique
-                // queue lock, which can live outside the SQL rollback.
-                $children = [];
-                if ($locked->isSeriesParent()) {
-                    // Past instances keep their history; cancelled weeks stay off.
-                    $children = $locked->childEvents()
-                        ->whereIn('status', [EventStatus::Draft, EventStatus::Published])
-                        ->lockForUpdate()->get()->all();
-
-                    foreach ($children as $child) {
-                        $this->assertCanTransition($child, $to, $now);
-                    }
-                }
-
                 $locked->status = $to;
                 $locked->save();
 
