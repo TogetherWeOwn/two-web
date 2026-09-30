@@ -18,21 +18,55 @@
  * No network, no PHP, no app. ~20s.
  *
  * Usage: node ci/browser/selftest.mjs
+ * CLS callback only (no Chrome): node ci/browser/selftest.mjs --cls-only
  */
 import { createServer } from 'node:http';
 import { mkdtempSync, rmSync, readdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execFileSync } from 'node:child_process';
+import { runInNewContext } from 'node:vm';
 import { launch, VIEWPORTS, observeCls, preflight, findChrome } from './launch.mjs';
-
-const HERE = import.meta.dirname;
-const WORK = mkdtempSync(join(process.env.TMPDIR ?? tmpdir(), 'browser-selftest-'));
 
 let failed = 0;
 const pass = (m) => console.log(`\x1b[32mPASS\x1b[0m  ${m}`);
 const fail = (m) => { console.error(`\x1b[31mFAIL\x1b[0m  ${m}`); failed++; };
 const check = (cond, m) => (cond ? pass(m) : fail(m));
+
+// Exercise the shipped callback, not the late-observer control below. Member
+// interactions must not inflate CLS, and buffered entries must be requested.
+{
+  const window = { __cls: 99 };
+  let onEntries;
+  let registration;
+  const page = {
+    async evaluateOnNewDocument(callback) {
+      runInNewContext(`(${callback.toString()})()`, {
+        window,
+        PerformanceObserver: class {
+          constructor(callback) { onEntries = callback; }
+          observe(options) { registration = options; }
+        },
+      });
+    },
+  };
+  await observeCls(page);
+  check(window.__cls === 0, 'observeCls initializes CLS to zero');
+  check(
+    registration?.type === 'layout-shift' && registration?.buffered === true,
+    'observeCls requests buffered layout-shift entries'
+  );
+  onEntries({ getEntries: () => [
+    { value: 0.25, hadRecentInput: false },
+    { value: 0.75, hadRecentInput: true },
+  ] });
+  check(window.__cls === 0.25, `observeCls excludes recent-input shifts (cls=${window.__cls})`);
+}
+
+if (process.argv.includes('--cls-only')) process.exit(failed === 0 ? 0 : 1);
+
+const HERE = import.meta.dirname;
+const WORK = mkdtempSync(join(process.env.TMPDIR ?? tmpdir(), 'browser-selftest-'));
 
 // A fixture that is deliberately responsive AND deliberately shifts its layout
 // late. The shift is what case 2 needs: a page that a late observer scores 0.
