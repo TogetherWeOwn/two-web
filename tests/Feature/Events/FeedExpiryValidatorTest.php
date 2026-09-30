@@ -42,7 +42,8 @@ it('invalidates the collection validator when an event expires without a write',
     $expiredEtag = $expired->headers->get('ETag');
 
     expect($expiredBody)->not->toBe($body)
-        ->not->toContain($itemMarker, $event->title)
+        ->not->toContain($itemMarker)
+        ->not->toContain($event->title)
         ->and($expiredEtag)->not->toBe($etag)
         ->toBe('"'.hash('sha256', $expiredBody).'"');
 
