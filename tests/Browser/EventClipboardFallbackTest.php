@@ -2,6 +2,7 @@
 
 use App\Enums\EventStatus;
 use App\Models\Event;
+use Illuminate\Foundation\Vite;
 use Illuminate\Support\Str;
 use Laravel\Dusk\Browser;
 
@@ -17,7 +18,22 @@ test('clipboard denial falls back from the nested event icon and removes its tex
 
     // Snapshot the real published route, as in JoinBlockedWidgetTest. Only the
     // disposable local fixture gets this policy: no external browser requests.
-    $html = $this->get($canonical)->assertOk()->getContent();
+    //
+    // Pin Vite to built assets while rendering: under the documented
+    // `composer dev` workflow `public/hot` exists and `@vite` would emit the
+    // separate-port dev origin, which the fixture's self-only script-src
+    // rejects and the copy handler never loads. Pointing the test-process
+    // Vite singleton (the same instance the `@vite` directive resolves) at a
+    // missing hot file forces manifest mode for this render only; the
+    // manifest entry itself is pinned by ViteEntrypointsTest.
+    $vite = app(Vite::class);
+    $hotFile = $vite->hotFile();
+    $vite->useHotFile(sys_get_temp_dir().'/dusk-no-vite-hot');
+    try {
+        $html = $this->get($canonical)->assertOk()->getContent();
+    } finally {
+        $vite->useHotFile($hotFile);
+    }
     $html = str_replace('<head>', '<head><meta http-equiv="Content-Security-Policy" content="default-src \'self\'; script-src \'self\' \'unsafe-inline\'; style-src \'self\' \'unsafe-inline\'; img-src \'self\' data:; frame-src \'none\'; object-src \'none\'">', $html, $heads);
     expect($heads)->toBe(1);
     $fixture = 'dusk-event-clipboard-fallback-'.Str::uuid().'.html';
@@ -99,6 +115,13 @@ test('clipboard denial falls back from the nested event icon and removes its tex
                 expect($result['success'])->toBe(! $throws);
                 expect($result['failure'])->toBe($throws);
             } finally {
+                // Dusk's browse() catch captures failure screenshots/source
+                // after this block, so a failure must leave the failing page
+                // up until then. Screenshot here, before navigating away, so
+                // a toast-wait or probe-assertion failure keeps its evidence;
+                // teardown (page clear, stub restore, fixture removal) runs
+                // on both outcomes.
+                $browser->screenshot('event-clipboard-fallback-'.($throws ? 'throws' : 'success'));
                 $browser->script('window.eventClipboardProbe?.restore();');
                 $browser->driver->navigate()->to('about:blank');
             }
