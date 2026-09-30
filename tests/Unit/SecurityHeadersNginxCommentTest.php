@@ -8,18 +8,30 @@ require_once __DIR__.'/../Support/NginxSecurityHeaders.php';
 
 // Exercise both shipped pins against copied templates. Never edit the real
 // template, run nginx, boot a deploy, or contact a database or external service.
-it('counts only active security headers in both the PHP and shell pins', function (string $replacement, bool $passes) {
+it('counts only active security headers in both the PHP and shell pins', function (string $replacement, bool $passes, bool $commentedCopy) {
     $directive = 'add_header X-Frame-Options "DENY";';
     $files = new Filesystem;
     $contents = $files->get(base_path('nginx.template.conf'));
-    expect(substr_count($contents, $directive))->toBe(1);
+    if ($commentedCopy) {
+        $contents = '# '.$directive."\n".$contents;
+    }
+
+    // Mutate the active line, not harmless copies in template comments.
+    $contents = preg_replace_callback(
+        '/^([ \t]*)'.preg_quote($directive, '/').'/m',
+        static fn (array $match): string => $match[1].$replacement,
+        $contents,
+        -1,
+        $count,
+    ) ?? throw new RuntimeException('Could not mutate the copied nginx template.');
+    expect($count)->toBe(1);
 
     $scratch = getenv('PAPERCLIP_RUN_SCRATCH_DIR') ?: sys_get_temp_dir();
     $fixture = $scratch.'/nginx-header-comment-'.bin2hex(random_bytes(8));
     $files->makeDirectory($fixture.'/ci', 0755, true);
 
     try {
-        $files->put($fixture.'/nginx.template.conf', str_replace($directive, $replacement, $contents));
+        $files->put($fixture.'/nginx.template.conf', $contents);
         $files->copy(base_path('ci/php-runtime-config-selftest.sh'), $fixture.'/ci/php-runtime-config-selftest.sh');
         $copied = $files->get($fixture.'/nginx.template.conf');
 
@@ -66,4 +78,15 @@ it('counts only active security headers in both the PHP and shell pins', functio
     'escaped quote and comment marker in another value' => ['add_header X-Frame-Options "DENY"; add_header X-Other "escaped \\"; # still inside the value";', true],
     'inline commented duplicate is ignored' => ['add_header X-Frame-Options "DENY"; # add_header X-Frame-Options "DENY";', true],
     'comment between directive tokens' => ["add_header X-Frame-Options # framing policy\n        \"DENY\";", true],
+    'hash inside a preceding unquoted token' => ['set $fragment foo#bar; add_header X-Frame-Options "DENY";', true],
+    'hash inside a preceding multiline token' => ["set \$fragment foo#bar\n        ; add_header X-Frame-Options \"DENY\";", true],
+    'hash after escaped space is inside a token' => ['set $fragment foo\ #bar; add_header X-Frame-Options "DENY";', true],
+    'hash after escaped tab is inside a token' => ["set \$fragment foo\\\t#bar; add_header X-Frame-Options \"DENY\";", true],
+    'escaped hash at token start' => ['set $fragment \#bar; add_header X-Frame-Options "DENY";', true],
+    'hash at token boundary starts a comment' => ["set \$fragment foo #bar; add_header X-Frame-Options \"DENY\";\n        ;", false],
+    'hash after a terminator starts a comment' => ["set \$fragment foo;# add_header X-Frame-Options \"DENY\";\n", false],
+    'quote inside a preceding unquoted token is literal' => ['set $fragment foo"bar; add_header X-Frame-Options "DENY";', true],
+])->with([
+    'template without an extra commented copy' => [false],
+    'template with an extra commented copy' => [true],
 ]);

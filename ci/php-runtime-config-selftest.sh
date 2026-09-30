@@ -90,6 +90,7 @@ check_header() {
   local name="$1" value="$2" line count
   line="add_header ${name} \"${value}\""
   count="$(awk -v directive="$line" '
+    BEGIN { token_boundary = 1 }
     {
       input = $0 "\n"
       for (i = 1; i <= length(input); i++) {
@@ -97,26 +98,33 @@ check_header() {
         if (escaped) {
           statement = statement char
           escaped = 0
+          token_boundary = 0
         } else if (char == sprintf("%c", 92)) {
           statement = statement char
           escaped = 1
+          token_boundary = 0
         } else if (quote != "") {
           statement = statement char
           if (char == quote) quote = ""
-        } else if (char == "#") {
+        } else if (char == "#" && token_boundary) {
+          # nginx starts comments only at token boundaries; foo#bar is literal.
           if (statement != "" && substr(statement, length(statement), 1) != " ") statement = statement " "
           break
-        } else if (char == "\"" || char == sprintf("%c", 39)) {
+        } else if ((char == "\"" || char == sprintf("%c", 39)) && token_boundary) {
           quote = char
           statement = statement char
+          token_boundary = 0
         } else if (char == ";" || char == "{" || char == "}") {
           sub(/[[:space:]]+$/, "", statement)
           if (char == ";" && (statement == directive || statement == directive " always")) count++
           statement = ""
+          token_boundary = 1
         } else if (char ~ /[[:space:]]/) {
           if (statement != "" && substr(statement, length(statement), 1) != " ") statement = statement " "
+          token_boundary = 1
         } else {
           statement = statement char
+          token_boundary = 0
         }
       }
     }
