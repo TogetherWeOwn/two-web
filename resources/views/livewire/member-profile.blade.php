@@ -1,4 +1,21 @@
-<div class="min-h-full bg-canvas text-ink">
+{{--
+    data-login-url: the way back in with the ?next= return (TOG-9254). The
+    @script 419 hook below navigates here instead of reloading — a reload on
+    this auth-walled page would bounce through the middleware's intended URL,
+    while this keeps the explicit return the callback prefers. Rendered always,
+    not only with the expired banner, because the 419 path never reaches the
+    server render that would show the banner.
+--}}
+<div class="min-h-full bg-canvas text-ink"
+     data-profile-id="{{ $member->getKey() }}"
+     data-draft-owner="{{ $isOwner ? '1' : '0' }}"
+     data-login-url="{{ route('login', $returnTo ? ['next' => $returnTo] : []) }}">
+    <div hidden role="alert" tabindex="-1" data-testid="profile-draft-unavailable"
+         class="mx-auto max-w-6xl rounded-lg border border-line bg-surface p-5 text-sm text-ink">
+        Your session expired. Copy your changes before logging in; this browser could not keep a draft.
+        <a href="{{ route('login', $returnTo ? ['next' => $returnTo] : []) }}"
+           class="font-semibold underline underline-offset-4">Log in after copying your changes</a>
+    </div>
     <div class="mx-auto max-w-6xl px-4 py-8 md:px-6 md:py-12 lg:px-8">
         <div class="flex flex-col gap-8">
             <header class="rounded-lg border border-line bg-surface p-5 md:p-8">
@@ -138,9 +155,35 @@
                                     <p class="text-sm font-medium text-ink">Your session expired.</p>
                                     <p class="mt-0.5 text-sm text-ink-muted">
                                         Your changes are still here.
-                                        <a href="{{ route('login') }}" class="font-semibold text-ink underline underline-offset-4 hover:text-ink">Log in with Discord</a>
+                                        {{-- TOG-9355: the ?next= return puts them
+                                             back on this page after Discord,
+                                             next to their still-open draft —
+                                             a bare link strands them on
+                                             /profile instead. Mirrors the
+                                             RSVP login link (TOG-9254). --}}
+                                        <a href="{{ route('login', $returnTo ? ['next' => $returnTo] : []) }}" data-profile-login class="font-semibold text-ink underline underline-offset-4 hover:text-ink">Log in with Discord</a>
                                         and save again.
                                     </p>
+                                </div>
+                            </div>
+                        @endif
+
+                        {{-- TOG-9355: the 419-stashed draft made it back. The
+                             session is alive again — they already logged back
+                             in — so this names the kept draft, not the expiry.
+                             role="status", not alert: nothing was interrupted
+                             on this page load, the draft simply arrived. --}}
+                        @if ($draftRestored ?? false)
+                            <div class="mt-5 flex items-start gap-3 rounded-lg border border-line bg-online-quiet p-4"
+                                 role="status"
+                                 tabindex="-1"
+                                 data-testid="profile-draft-restored">
+                                <svg class="mt-0.5 size-5 shrink-0 text-online" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+                                    <path d="M6.2 11.8 2.6 8.2l1.1-1.1 2.5 2.5 6.1-6.1 1.1 1.1-7.2 7.2Z"/>
+                                </svg>
+                                <div>
+                                    <p class="text-sm font-medium text-ink">Your unsent changes are back.</p>
+                                    <p class="mt-0.5 text-sm text-ink-muted">Review them and save when ready.</p>
                                 </div>
                             </div>
                         @endif
@@ -398,6 +441,16 @@
                     return;
                 }
 
+                // TOG-9355: a 419-stashed draft just landed back in the open
+                // form. Not an interruption, so it comes after the alerts —
+                // but before the heading/saved fallthroughs, which would
+                // strand focus away from the news that their text survived.
+                const restored = root.querySelector('[data-testid="profile-draft-restored"]');
+                if (restored) {
+                    restored.focus({ preventScroll: true });
+                    return;
+                }
+
                 const saved = root.querySelector('[data-testid="profile-saved"]');
                 if (saved) {
                     saved.focus({ preventScroll: true });
@@ -415,6 +468,86 @@
                     edit.focus({ preventScroll: true });
                 }
             });
+
+            // Deferred wire:model values may not have reached the server when
+            // CSRF rejects the save. Capture the DOM, not the last snapshot.
+            // Tab-local storage never crosses profiles; restoreDraft also gates
+            // the caller server-side. A draft expires after one day.
+            const draftKey = `two:profile-draft:${$wire.el.dataset.profileId}`;
+            const keepDraft = () => {
+                if (!$wire.el.querySelector('[data-testid="profile-edit-form"]')) {
+                    return true;
+                }
+
+                try {
+                    sessionStorage.setItem(draftKey, JSON.stringify({
+                        version: 1,
+                        savedAt: Date.now(),
+                        bio: $wire.el.querySelector('#bio').value,
+                        gamesText: $wire.el.querySelector('#games').value,
+                        timezone: $wire.el.querySelector('#timezone').value,
+                    }));
+                    return true;
+                } catch {
+                    // Storage can be disabled or full. Never navigate away
+                    // with unpreserved input: offer an explicit copy-first exit.
+                    const warning = $wire.el.querySelector('[data-testid="profile-draft-unavailable"]');
+                    warning.hidden = false;
+                    warning.focus({ preventScroll: true });
+                    return false;
+                }
+            };
+
+            $wire.$hook('request', ({ fail }) => {
+                fail(({ status, preventDefault }) => {
+                    if (status !== 419) {
+                        return;
+                    }
+
+                    preventDefault();
+                    if (keepDraft()) {
+                        window.location.assign($wire.el.dataset.loginUrl);
+                    }
+                });
+            });
+
+            // Covers the component's guest-session banner too, when CSRF
+            // remained valid but authentication expired before save().
+            $wire.el.addEventListener('click', (event) => {
+                if (event.target.closest('[data-profile-login]') && !keepDraft()) {
+                    event.preventDefault();
+                }
+            });
+
+            const restoreDraft = async () => {
+                let draft;
+                try {
+                    const stored = sessionStorage.getItem(draftKey);
+                    if (!stored) return;
+                    draft = JSON.parse(stored);
+                    if ($wire.el.dataset.draftOwner !== '1'
+                        || draft?.version !== 1
+                        || !Number.isFinite(draft.savedAt)
+                        || draft.savedAt > Date.now()
+                        || Date.now() - draft.savedAt > 24 * 60 * 60 * 1000
+                        || !['bio', 'gamesText', 'timezone'].every(field => typeof draft[field] === 'string')) {
+                        sessionStorage.removeItem(draftKey);
+                        return;
+                    }
+                } catch {
+                    try { sessionStorage.removeItem(draftKey); } catch {}
+                    return;
+                }
+
+                try {
+                    await $wire.restoreDraft(draft.bio, draft.gamesText, draft.timezone);
+                    sessionStorage.removeItem(draftKey);
+                } catch {
+                    // An interrupted restore must not consume the only copy.
+                    // A later page load can retry; never auto-save a draft.
+                }
+            };
+            restoreDraft();
         </script>
     @endscript
 </div>

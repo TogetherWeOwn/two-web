@@ -61,6 +61,49 @@ it('moves focus into the form on open and back to Edit profile on cancel (TOG-56
     });
 });
 
+it('recovers deferred profile input after a real CSRF 419 and page round trip', function () {
+    $member = User::factory()->create();
+
+    $this->browse(function (Browser $browser) use ($member) {
+        $browser->loginAs($member)
+            ->visit('/profile')
+            ->press('Add profile details')
+            ->waitFor('[data-testid="profile-edit-form"]')
+            ->type('bio', 'Unsent <bio>')
+            ->type('gamesText', "Chess\nCo-op")
+            ->type('timezone', 'Europe/London');
+
+        // Reject the actual Livewire POST in CSRF middleware. Keep the login
+        // destination local to isolate recovery from Discord availability;
+        // the authenticated fresh page supplies the new CSRF token.
+        $browser->script(<<<'JS'
+            document.querySelector('[data-profile-id]').dataset.loginUrl = '/profile';
+            document.querySelectorAll('meta[name="csrf-token"]').forEach(meta => meta.content = 'expired-token');
+            document.querySelectorAll('script[data-csrf]').forEach(script => script.dataset.csrf = 'expired-token');
+        JS);
+
+        $browser->press('Save')
+            ->waitFor('[data-testid="profile-draft-restored"]')
+            ->assertInputValue('bio', 'Unsent <bio>')
+            ->assertInputValue('gamesText', "Chess\nCo-op")
+            ->assertInputValue('timezone', 'Europe/London')
+            ->waitUntil('document.activeElement?.dataset?.testid === "profile-draft-restored"');
+
+        expect($member->profile()->first())->toBeNull();
+
+        $browser->pause(SpamTrap::MIN_FILL_MS + 500)
+            ->press('Save')
+            ->waitFor('[data-testid="profile-saved"]')
+            ->refresh()
+            ->waitForText('Unsent <bio>');
+    });
+
+    expect($member->profile()->sole())
+        ->bio->toBe('Unsent <bio>')
+        ->games->toBe(['Chess', 'Co-op'])
+        ->timezone->toBe('Europe/London');
+});
+
 it('keeps an invalid edit open and gives the field an accessible error', function () {
     $member = User::factory()->create();
 

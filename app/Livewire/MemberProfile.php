@@ -9,6 +9,7 @@ use App\Rules\NoControlCharacters;
 use App\Support\Profiles\MemberStats;
 use App\Support\Profiles\Milestone;
 use App\Support\Profiles\SaveMemberProfile;
+use App\Support\SafeRedirect;
 use App\Support\SpamTrap;
 use Illuminate\Auth\Access\AuthorizationException;
 use Illuminate\Support\Facades\Gate;
@@ -46,6 +47,28 @@ class MemberProfile extends Component
      */
     public bool $sessionExpired = false;
 
+    /**
+     * Set when a 419-stashed draft was folded back into the form after
+     * re-login (TOG-9355). Distinct from $sessionExpired on purpose: the
+     * session is alive again — they already logged back in — so the message
+     * names the kept draft, not the expiry. Cleared on the next edit, save
+     * or cancel like the other banners.
+     */
+    public bool $draftRestored = false;
+
+    /**
+     * Where the guest login link sends the member back to after Discord.
+     *
+     * Captured once in mount, when the real page request is in hand. A
+     * Livewire re-render answers a `/livewire/update` request, so reading the
+     * path in the blade would point `?next=` at the update endpoint after the
+     * first morph — a persisted prop keeps the page path across updates, and
+     * keeps the expired-session re-render pointing at the page too. Null when
+     * the path fails the open-redirect guard, and the link stays bare.
+     * Mirrors RsvpButton::$returnTo (TOG-9254).
+     */
+    public ?string $returnTo = null;
+
     public string $bio = '';
 
     public string $gamesText = '';
@@ -78,6 +101,7 @@ class MemberProfile extends Component
         Gate::authorize('view', $member);
 
         $this->member = $member->loadMissing('profile');
+        $this->returnTo = SafeRedirect::safe(request()->getPathInfo());
         $this->statsAvailable = $stats->available;
         $this->statsJoinedAt = $stats->joinedAt?->toIso8601String();
         $this->rankKey = $stats->rankKey;
@@ -114,6 +138,7 @@ class MemberProfile extends Component
         $this->saved = false;
         $this->saveFailed = false;
         $this->sessionExpired = false;
+        $this->draftRestored = false;
         $this->editing = true;
         $this->website = '';
         $this->formOpenedAt = now()->getTimestampMs();
@@ -146,9 +171,38 @@ class MemberProfile extends Component
         $this->resetValidation();
         $this->editing = false;
         $this->sessionExpired = false;
+        $this->draftRestored = false;
         $this->fillForm();
         // TOG-6957: closing the form unmounts the focused Cancel control.
         // Refocus the Edit profile button after the round trip.
+        $this->dispatch('profile-state-changed')->self();
+    }
+
+    /**
+     * Fold a 419-stashed draft back into the open form after re-login
+     * (TOG-9355). The browser stashed the unsaved input to sessionStorage
+     * before leaving for login and calls this once the fresh page opens the
+     * form; the same-author gate runs first, so a crafted call on another
+     * member's profile still 403s. Draft fields arrive through the normal
+     * validation rules on the next save, and the honeypot floor compares
+     * against the fresh edit() stamp — never against a client-supplied one.
+     */
+    public function restoreDraft(string $bio, string $gamesText, string $timezone): void
+    {
+        Gate::authorize('updateProfile', $this->member);
+
+        if (! $this->editing) {
+            $this->edit();
+        } else {
+            $this->saved = false;
+            $this->saveFailed = false;
+            $this->sessionExpired = false;
+        }
+
+        $this->bio = $bio;
+        $this->gamesText = $gamesText;
+        $this->timezone = $timezone;
+        $this->draftRestored = true;
         $this->dispatch('profile-state-changed')->self();
     }
 
@@ -199,6 +253,7 @@ class MemberProfile extends Component
             // responses also keeps the trap oracle-free.
             $this->saveFailed = false;
             $this->sessionExpired = false;
+            $this->draftRestored = false;
             $this->editing = false;
             $this->saved = true;
             $this->fillForm();
@@ -231,6 +286,7 @@ class MemberProfile extends Component
 
         $this->saveFailed = false;
         $this->sessionExpired = false;
+        $this->draftRestored = false;
 
         // TOG-9855: strict '' comparison — trim("0") is "0" but "0" ?: null
         // is null in PHP, which swallowed a bio of exactly "0" into NULL.
@@ -268,6 +324,10 @@ class MemberProfile extends Component
             'games' => $this->games($profile),
             'isOwner' => auth()->user()?->is($this->member) ?? false,
             'isNewMember' => blank($profile->bio) && $this->games($profile) === [] && blank($profile->timezone),
+            // TOG-9355: the login links' return-to page, or null for bare
+            // links. Read from the persisted prop, never from the request —
+            // see $returnTo. Mirrors RsvpButton's render (TOG-9254).
+            'returnTo' => $this->returnTo,
         ]);
     }
 

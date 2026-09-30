@@ -924,3 +924,78 @@ it('clears the expired banner when the form is reopened', function () {
         ->assertSet('sessionExpired', false)
         ->assertDontSeeHtml('data-testid="profile-session-expired"');
 });
+
+it('restores an unsent profile draft without writing until the member saves', function () {
+    $member = User::factory()->create();
+    Profile::factory()->for($member)->create(['bio' => 'Before']);
+
+    $component = Livewire::actingAs($member)
+        ->test(MemberProfile::class, ['member' => $member, 'stats' => profileStats($member->discord_id)])
+        ->call('restoreDraft', 'Unsent <bio>', "Chess\nCo-op", 'Europe/London')
+        ->assertSet('editing', true)
+        ->assertSet('draftRestored', true)
+        ->assertSet('bio', 'Unsent <bio>')
+        ->assertSet('gamesText', "Chess\nCo-op")
+        ->assertSet('timezone', 'Europe/London')
+        ->assertSeeHtml('data-testid="profile-draft-restored"')
+        ->assertSeeHtml('Unsent &lt;bio&gt;')
+        ->assertDispatched('profile-state-changed');
+
+    expect($member->profile()->first()->bio)->toBe('Before');
+    pausePastFillFloor();
+    $component->call('save')->assertSet('draftRestored', false)->assertSet('saved', true);
+    expect($member->profile()->first()->bio)->toBe('Unsent <bio>');
+});
+
+it('refuses to restore a draft onto another members profile', function () {
+    $member = User::factory()->create();
+    $viewer = User::factory()->create();
+
+    Livewire::actingAs($viewer)
+        ->test(MemberProfile::class, ['member' => $member, 'stats' => profileStats($member->discord_id)])
+        ->call('restoreDraft', 'Not mine', '', '')
+        ->assertForbidden();
+
+    expect($member->profile()->first())->toBeNull();
+});
+
+it('validates restored drafts on save and retains invalid input', function () {
+    $member = User::factory()->create();
+    $bio = str_repeat('x', 1001);
+
+    $component = Livewire::actingAs($member)
+        ->test(MemberProfile::class, ['member' => $member, 'stats' => profileStats($member->discord_id)])
+        ->call('restoreDraft', $bio, '', 'not-a-zone');
+    pausePastFillFloor();
+    $component->call('save')
+        ->assertHasErrors(['bio', 'timezone'])
+        ->assertSet('editing', true)
+        ->assertSet('bio', $bio);
+
+    expect($member->profile()->first())->toBeNull();
+});
+
+it('discards a restored draft when the member cancels', function () {
+    $member = User::factory()->create();
+    Profile::factory()->for($member)->create(['bio' => 'Before']);
+
+    Livewire::actingAs($member)
+        ->test(MemberProfile::class, ['member' => $member, 'stats' => profileStats($member->discord_id)])
+        ->call('restoreDraft', 'Unsent', '', '')
+        ->call('cancel')
+        ->assertSet('draftRestored', false)
+        ->assertSet('editing', false)
+        ->assertSet('bio', 'Before');
+});
+
+it('renders a page-specific login return and the scoped 419 recovery hook', function () {
+    $member = User::factory()->create();
+
+    $html = $this->actingAs($member)->get(route('profiles.show', $member))->assertOk()->getContent();
+    $url = route('login', ['next' => parse_url(route('profiles.show', $member), PHP_URL_PATH)]);
+
+    expect($html)->toContain('data-login-url="'.$url.'"')
+        ->toContain('data-draft-owner="1"')
+        ->toContain("\$wire.\$hook('request'")
+        ->toContain('status !== 419');
+});
