@@ -5,6 +5,7 @@ namespace App\Console\Commands;
 use App\Support\ErrorAlertRateLimit;
 use Illuminate\Console\Command;
 use Illuminate\Support\Facades\Log;
+use Monolog\Handler\PsrHandler;
 use Monolog\Handler\TestHandler;
 use Monolog\Logger;
 
@@ -36,12 +37,15 @@ class ErrorAlertProbe extends Command
     {
         $marker = 'error-alert-probe-'.now()->format('YmdHis').'-'.substr((string) str()->uuid(), 0, 8);
 
-        // Capture what the listener logs without touching the real log: swap
-        // in a TestHandler, report the marker, swap back. The box-side drill
-        // (tail the real log) is the runbook step in docs/runbook.md.
+        // Capture the listener's records and forward them to the configured
+        // logger, so the marker also reaches the log the operator will tail.
+        // Restore the original logger even if reporting or delivery throws.
         $handler = new TestHandler;
         $original = Log::getFacadeRoot();
-        Log::swap(new \Illuminate\Log\Logger(new Logger('error-alert-probe', [$handler])));
+        Log::swap(new \Illuminate\Log\Logger(new Logger('error-alert-probe', [
+            $handler,
+            new PsrHandler($original),
+        ])));
 
         try {
             $exception = new \RuntimeException('error-alert:probe self-failure for marker '.$marker);
