@@ -1,5 +1,7 @@
 # TWO — the Together We Own website
 
+[![Release](https://img.shields.io/github/v/release/TogetherWeOwn/two-web)](https://github.com/TogetherWeOwn/two-web/releases)
+
 > **Maintenance mode (2026-09-29, TOG-9788):** bug and security fixes only — new
 > development continues in two-web-next.
 
