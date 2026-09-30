@@ -1224,15 +1224,22 @@ it('retires the stored copy when a genuine save retries after a failed save', fu
     expect($member->profile()->sole()->bio)->toBe('Recovered');
 });
 
-it('renders a page-specific login return and the scoped 419 recovery hook', function () {
+it('renders the signed-out notice and a 419 hook that never auto-starts OAuth', function () {
     $member = User::factory()->create();
 
     $html = $this->actingAs($member)->get(route('profiles.show', $member))->assertOk()->getContent();
     $url = route('login', ['next' => parse_url(route('profiles.show', $member), PHP_URL_PATH)]);
 
+    // TOG-9355 review (P1+P2): a 419 or probe cannot distinguish logout
+    // from quiet expiry, so the shipped script stashes, shows the notice,
+    // and stays — no automatic handoff. The notice link carries the same
+    // ?next= return an explicit click needs.
     expect($html)->toContain('data-login-url="'.$url.'"')
         ->toContain('data-draft-owner="1"')
+        ->toContain('data-testid="profile-signed-out"')
+        ->toContain('data-profile-login')
         ->toContain('$wire.$hook(')
         ->toContain('&#039;request&#039;')
-        ->toContain('status !== 419');
+        ->toContain('status !== 419')
+        ->not->toContain('location.assign');
 });

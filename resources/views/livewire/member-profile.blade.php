@@ -1,10 +1,12 @@
 {{--
-    data-login-url: the way back in with the ?next= return (TOG-9254). The
-    @script 419 hook below navigates here instead of reloading — a reload on
-    this auth-walled page would bounce through the middleware's intended URL,
-    while this keeps the explicit return the callback prefers. Rendered always,
-    not only with the expired banner, because the 419 path never reaches the
-    server render that would show the banner.
+    data-login-url: the way back in with the ?next= return (TOG-9254).
+    TOG-9355 review: no script navigates here automatically — a 419 or an
+    unauthenticated probe cannot distinguish logout from quiet expiry, so
+    only an explicit login-link click leaves. The client-side signed-out
+    notice below carries the same ?next= return; this dataset stays as its
+    fallback and for tests pinning the destination. Rendered always, not
+    only with the expired banner, because the client-side path never reaches
+    the server render that would show the banner.
 --}}
 <div class="min-h-full bg-canvas text-ink"
      data-profile-id="{{ $member->getKey() }}"
@@ -15,6 +17,23 @@
         Your session expired. Copy your changes before logging in; this browser could not keep a draft.
         <a href="{{ route('login', $returnTo ? ['next' => $returnTo] : []) }}"
            class="font-semibold underline underline-offset-4">Log in after copying your changes</a>
+    </div>
+    {{-- TOG-9355 review (P2): the client-side signed-out notice. The healthy
+         authenticated render has no expiry banner (it only renders after a
+         server round trip names the expiry), and suppressing the 419 default
+         handling means no morph can supply one — so without this, a
+         successful sign-out capture leaves retained input but an apparently
+         inert Save/Cancel and no visible login path. This names the sign-out
+         and offers an explicit login link: it preserves the current deferred
+         fields via the same keepDraft click handler and returns to this
+         profile, but never starts OAuth until clicked. Distinct from the
+         storage-failure warning above on purpose: that one asks for a copy
+         first because nothing was stashed; this one stashed successfully. --}}
+    <div hidden role="status" tabindex="-1" data-testid="profile-signed-out"
+         class="mx-auto max-w-6xl rounded-lg border border-line bg-surface p-5 text-sm text-ink">
+        Your session ended — for example, you signed out in another tab or it expired. Your changes are still here.
+        <a href="{{ route('login', $returnTo ? ['next' => $returnTo] : []) }}" data-profile-login
+           class="font-semibold underline underline-offset-4">Log in with Discord to save them</a>
     </div>
     <div class="mx-auto max-w-6xl px-4 py-8 md:px-6 md:py-12 lg:px-8">
         <div class="flex flex-col gap-8">
@@ -498,39 +517,48 @@
                 }
             };
 
-            // Auth rechecks and another tab's logout can fire before a save
-            // ever sends a request. Preserve input before those reloads too.
-            // A quiet expiry goes through login rather than a guest render
-            // that cannot restore this owner's draft; an explicit sign-out
-            // in another tab stashes the draft and stays on the open form —
-            // never auto-starting OAuth, where the pinned Discord driver's
-            // prompt=none could silently complete an existing grant and sign
-            // the shared browser back in with no login click (TOG-9355
-            // review). Only an explicit login action leaves this page after
-            // a sign-out. Ignore unmounted components.
+            // TOG-9355 review: an unauthenticated probe or a 419 cannot
+            // distinguish a logout from a quiet expiry — auth.status answers
+            // one boolean, and a missed localStorage broadcast (quota,
+            // private mode) delivers no storage event at all. Absence of a
+            // broadcast is not evidence of quiet expiry, so NO automatic
+            // handoff starts OAuth here: after a real logout the pinned
+            // Discord driver's prompt=none could silently complete an
+            // existing grant and sign the shared browser back in with no
+            // login click. Preserve input, show the signed-out notice with
+            // its explicit login link, and stay — only an explicit login
+            // action leaves this page. The notice carries the same
+            // data-profile-login stashing as the server login links, so the
+            // click preserves the current deferred fields and returns to
+            // this profile. Ignore unmounted components.
             //
-            // TOG-9355: the expiry branch starts abandoning this document —
-            // the layout reloads when no form is open, this listener stashes
-            // then navigates to login when one is. A restore still in flight
-            // must not consume the only stored copy for a document about to
-            // be replaced; the replacement page needs it. keepDraft is
-            // synchronous DOM capture, so it lands before a slow restore
-            // response in either branch.
+            // TOG-9355: either branch starts abandoning this document — the
+            // layout reloads when no form is open, this listener stashes
+            // when one is. A restore still in flight must not consume the
+            // only stored copy for a document about to be replaced; the
+            // replacement page needs it. keepDraft is synchronous DOM
+            // capture, so it lands before a slow restore response.
             //
             // TOG-9355 review: the 419 request hook below is an independent
-            // navigation path — after another tab signs out, Save/Cancel sends
-            // the stale CSRF token and gets a 419 without any before-auth
-            // reload firing first. Remember an explicit sign-out for the page
-            // lifetime so that hook can stash and stay too, instead of
-            // auto-starting OAuth where prompt=none could silently sign the
-            // shared browser back in. Quiet expiry keeps login recovery.
+            // path — after another tab signs out, Save/Cancel sends the
+            // stale CSRF token and gets a 419 without any before-auth
+            // reload firing first. It shows the same notice and stays too.
             let authAbandoned = false;
-            let explicitSignOut = false;
+            // Form-guarded: without an open form there are no deferred
+            // fields to name, so a 419 there stays silent instead of
+            // showing a "changes are still here" notice about nothing.
+            const showSignedOutNotice = () => {
+                if (!$wire.el.querySelector('[data-testid="profile-edit-form"]')) {
+                    return;
+                }
+                const notice = $wire.el.querySelector('[data-testid="profile-signed-out"]');
+                if (notice) {
+                    notice.hidden = false;
+                    notice.focus({ preventScroll: true });
+                }
+            };
             document.addEventListener('two:before-auth-reload', (event) => {
                 authAbandoned = true;
-                if (event.detail?.reason === 'signed-out') {
-                    explicitSignOut = true;
-                }
                 if (!$wire.el.isConnected || !$wire.el.querySelector('[data-testid="profile-edit-form"]')) {
                     return;
                 }
@@ -539,28 +567,26 @@
                 if (!keepDraft()) {
                     return;
                 }
-                if (event.detail?.reason === 'signed-out') {
-                    return;
-                }
-                window.location.assign($wire.el.dataset.loginUrl);
+                showSignedOutNotice();
             });
 
-            // After an explicit sign-out in another tab, Save/Cancel is
-            // not an explicit login action: stash and stay on the open
-            // form instead of auto-starting OAuth, where the pinned
-            // Discord driver's prompt=none could silently complete an
-            // existing grant and sign the shared browser back in with no
-            // login click (TOG-9355 review). Quiet-expiry 419s keep the
-            // login recovery below.
+            // Same no-automatic-handoff rule as above: a 419 cannot
+            // distinguish logout from expiry either, so stash, show the
+            // notice, and stay. Save/Cancel is not an explicit login
+            // action. Without an open form there is no deferred input at
+            // risk, so leave Livewire's default 419 handling alone.
             $wire.$hook('request', ({ fail }) => {
                 fail(({ status, preventDefault }) => {
                     if (status !== 419) {
                         return;
                     }
+                    if (!$wire.el.querySelector('[data-testid="profile-edit-form"]')) {
+                        return;
+                    }
 
                     preventDefault();
-                    if (keepDraft() && !explicitSignOut) {
-                        window.location.assign($wire.el.dataset.loginUrl);
+                    if (keepDraft()) {
+                        showSignedOutNotice();
                     }
                 });
             });

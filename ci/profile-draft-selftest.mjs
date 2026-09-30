@@ -12,19 +12,24 @@ const authScript = layout.match(/<script data-testid="auth-tab-sync">([\s\S]*?)<
 const key = 'two:profile-draft:42';
 const input = { bio: 'Unsent <bio>\nsecond line', gamesText: 'Chess\nCo-op', timezone: 'Europe/London' };
 
-function page({ stored = null, owner = true, storageFails = false, restoreFails = false, manualRestore = false, form = true } = {}) {
+function page({ stored = null, owner = true, storageFails = false, restoreFails = false, manualRestore = false, form = true, localStorageFails = false } = {}) {
     const storage = new Map(stored === null ? [] : [[key, stored]]);
     const nodes = Object.fromEntries(Object.entries(input).map(([name, value]) => [name, { value }]));
     const warning = { hidden: true, focus() { this.focused = true; } };
+    const notice = { hidden: true, focus() { this.focused = true; } };
     let request;
     let click;
     let pendingRestore = null;
     const listeners = {};
     const restores = [];
     const navigations = [];
+    const authReasons = [];
+    let localWrites = 0;
+    class HTMLFormElement {}
     const document = Object.assign(new EventTarget(), { visibilityState: 'visible' });
+    document.addEventListener('two:before-auth-reload', e => authReasons.push(e.detail.reason));
     const window = Object.assign(new EventTarget(), {
-        localStorage: { setItem() {} },
+        localStorage: { setItem() { localWrites++; if (localStorageFails) throw new DOMException('local storage full', 'QuotaExceededError'); } },
         location: { assign(url) { navigations.push(url); }, reload() { navigations.push('reload'); } },
     });
     const wire = {
@@ -34,6 +39,7 @@ function page({ stored = null, owner = true, storageFails = false, restoreFails 
             querySelector(selector) {
                 if (selector === '[data-testid="profile-edit-form"]') return form ? {} : null;
                 if (selector === '[data-testid="profile-draft-unavailable"]') return warning;
+                if (selector === '[data-testid="profile-signed-out"]') return notice;
                 return nodes[{ '#bio': 'bio', '#games': 'gamesText', '#timezone': 'timezone' }[selector]] ?? null;
             },
             addEventListener(name, handler) { if (name === 'click') click = handler; },
@@ -50,8 +56,9 @@ function page({ stored = null, owner = true, storageFails = false, restoreFails 
         },
     };
     const context = {
-        $wire: wire,
+        $wire: wire, HTMLFormElement,
         window, document, CustomEvent,
+        DOMException: globalThis.DOMException ?? Error,
         fetch: async () => ({ ok: true, json: async () => ({ authenticated: false }) }),
         sessionStorage: {
             getItem(k) { if (storageFails) throw new Error('disabled'); return storage.get(k) ?? null; },
@@ -63,7 +70,14 @@ function page({ stored = null, owner = true, storageFails = false, restoreFails 
     runInNewContext(script, context);
     runInNewContext(authScript, context);
     return {
-        storage, warning, restores, navigations,
+        storage, warning, notice, restores, navigations, authReasons,
+        logoutSubmit() {
+            const form = Object.assign(new HTMLFormElement(), { action: 'https://test.invalid/logout' });
+            const event = new Event('submit');
+            Object.defineProperty(event, 'target', { value: form });
+            document.dispatchEvent(event);
+            return localWrites;
+        },
         emit(name) { wire.emit(name); },
         resolveRestore() {
             assert.ok(pendingRestore, 'no pending restore');
@@ -94,11 +108,19 @@ function page({ stored = null, owner = true, storageFails = false, restoreFails 
 const draft = () => JSON.stringify({ version: 1, savedAt: Date.now(), ...input });
 const settle = () => new Promise(resolve => setImmediate(resolve));
 
-test('419 captures deferred DOM input before navigating and restores it after login', async () => {
+test('419 stashes deferred DOM input, shows the signed-out notice, and stays for an explicit login', async () => {
+    // TOG-9355 review (P1+P2): a 419 cannot distinguish logout from quiet
+    // expiry, so no automatic handoff starts OAuth here — the pinned Discord
+    // driver's prompt=none could silently sign the shared browser back in.
+    // Stash, show the notice with its explicit login link, and stay; the
+    // notice link click preserves the draft via the same keepDraft handler.
     const expired = page();
     assert.equal(expired.fail(419), true);
     assert.deepEqual(JSON.parse(expired.storage.get(key)), { version: 1, savedAt: JSON.parse(expired.storage.get(key)).savedAt, ...input });
-    assert.deepEqual(expired.navigations, ['/login?next=%2Fmembers%2F42']);
+    assert.deepEqual(expired.navigations, []);
+    assert.equal(expired.notice.hidden, false);
+    assert.equal(expired.notice.focused, true);
+    assert.equal(expired.login(), false, 'notice link keeps current input stashed');
     const returned = page({ stored: expired.storage.get(key), form: false });
     await settle();
     assert.deepEqual(Array.from(returned.restores[0] ?? []), Object.values(input));
@@ -155,29 +177,37 @@ test('draft remains recoverable if the restore request fails', async () => {
 });
 
 for (const source of ['focus', 'visibility', 'pageshow']) {
-    test(`${source} auth expiry preserves deferred input before login instead of reloading`, async () => {
+    test(`${source} auth expiry stashes deferred input, shows the notice, and stays for an explicit login`, async () => {
+        // TOG-9355 review (P1): a probe cannot distinguish logout from
+        // quiet expiry — a missed localStorage broadcast delivers no
+        // storage event at all — so no automatic handoff starts OAuth.
         const p = page();
         p.authExpiry(source);
         await settle();
         assert.equal(JSON.parse(p.storage.get(key)).bio, input.bio);
-        assert.deepEqual(p.navigations, ['/login?next=%2Fmembers%2F42']);
+        assert.deepEqual(p.navigations, []);
+        assert.equal(p.notice.hidden, false);
+        assert.equal(p.notice.focused, true);
         const returned = page({ stored: p.storage.get(key), form: false });
         await settle();
         assert.deepEqual(Array.from(returned.restores[0] ?? []), Object.values(input));
     });
 }
 
-test('storage sign-out stashes the draft but never starts login on its own', async () => {
+test('storage sign-out stashes the draft, shows the notice, and never starts login on its own', async () => {
     // TOG-9355 review: an open editor that intercepted another tab's
     // explicit logout auto-navigated to the login handoff, where the pinned
     // Discord driver's prompt=none could silently complete an existing
     // grant and sign the shared browser back in with no login click. The
-    // draft must survive, but only an explicit login action may leave.
+    // draft must survive and the notice must name the sign-out, but only an
+    // explicit login action may leave.
     const p = page();
     p.authExpiry('storage');
     await settle();
     assert.equal(JSON.parse(p.storage.get(key)).bio, input.bio);
     assert.deepEqual(p.navigations, []);
+    assert.equal(p.notice.hidden, false);
+    assert.equal(p.notice.focused, true);
     const returned = page({ stored: p.storage.get(key), form: false });
     await settle();
     assert.deepEqual(Array.from(returned.restores[0] ?? []), Object.values(input));
@@ -294,21 +324,24 @@ test('a failed save never retires the only stored copy', async () => {
     assert.deepEqual(Array.from(later.restores[0] ?? []), Object.values(input));
 });
 
-test('419 without an open form goes to login without inventing a draft', () => {
+test('419 without an open form leaves default handling alone and invents no draft', () => {
+    // No deferred fields at risk: the hook stays out so Livewire's own 419
+    // handling runs, and no "changes are still here" notice names nothing.
     const p = page({ form: false });
-    assert.equal(p.fail(419), true);
+    assert.equal(p.fail(419), false);
     assert.equal(p.storage.size, 0);
-    assert.equal(p.navigations.length, 1);
+    assert.equal(p.navigations.length, 0);
+    assert.equal(p.notice.hidden, true);
 });
 
 for (const probe of [false, true]) {
-    test(`explicit sign-out then ${probe ? 'focus then ' : ''}419 Save/Cancel request cannot auto-start OAuth`, async () => {
+    test(`explicit sign-out then ${probe ? 'focus then ' : ''}419 Save/Cancel request shows the notice and stays`, async () => {
         // TOG-9355 review: after another tab signs out, Save/Cancel sends
         // the stale CSRF token and gets a 419 without any before-auth
-        // reload firing first. The hook must stash and stay — Save/Cancel
-        // is not an explicit login click, and the pinned Discord driver's
-        // prompt=none could otherwise silently sign the shared browser
-        // back in. Quiet-expiry 419s keep login recovery (first test).
+        // reload firing first. The hook must stash, show the notice, and
+        // stay — Save/Cancel is not an explicit login click, and the pinned
+        // Discord driver's prompt=none could otherwise silently sign the
+        // shared browser back in.
         const p = page();
         p.authExpiry('storage');
         await settle();
@@ -320,6 +353,55 @@ for (const probe of [false, true]) {
         }
         assert.equal(p.fail(419), true, 'suppress generic 419 handling');
         assert.equal(JSON.parse(p.storage.get(key)).bio, input.bio, 'preserve typed input');
+        assert.equal(p.notice.hidden, false, 'notice names the sign-out');
+        assert.equal(p.notice.focused, true, 'notice takes focus');
         assert.deepEqual(p.navigations, [], 'Save/Cancel is not an explicit login click');
     });
 }
+
+// TOG-9355 review (P1): localStorage and sessionStorage have independent
+// quotas, so the sender's synchronous logout broadcast can fail while the
+// editor can still stash to sessionStorage. A real logout has completed
+// before these probes: fetch reports authenticated:false. The missing
+// broadcast is not evidence of quiet expiry — no automatic OAuth handoff,
+// from either the focus probe or the 419 hook. Both shipped scripts run;
+// no replacement implementation.
+test('focus after a logout with failed localStorage broadcast must not auto-start OAuth', async () => {
+    const sender = page({ form: false, localStorageFails: true });
+    assert.equal(sender.logoutSubmit(), 2, 'startup and submit both tried the shipped localStorage writer');
+    const editor = page(); // no storage event is delivered after the sender write failed
+    editor.authExpiry('focus');
+    await settle();
+    assert.equal(JSON.parse(editor.storage.get(key)).bio, input.bio, 'sessionStorage still works');
+    assert.deepEqual(editor.authReasons, ['expired'], 'missing broadcast is classified as expiry');
+    assert.deepEqual(editor.navigations, [], 'logout is not permission to restart OAuth');
+    assert.equal(editor.notice.hidden, false, 'notice names the ended session');
+    assert.equal(editor.notice.focused, true, 'notice takes focus');
+});
+
+test('419 after a logout with failed localStorage broadcast must not auto-start OAuth', async () => {
+    const sender = page({ form: false, localStorageFails: true });
+    assert.equal(sender.logoutSubmit(), 2);
+    const editor = page();
+    assert.equal(editor.fail(419), true);
+    assert.equal(JSON.parse(editor.storage.get(key)).bio, input.bio);
+    assert.deepEqual(editor.navigations, [], 'an absent broadcast cannot establish quiet expiry');
+    assert.equal(editor.notice.hidden, false);
+    assert.equal(editor.notice.focused, true);
+});
+
+test('signed-out notice login click preserves the draft and returns to the profile', async () => {
+    // TOG-9355 review (P2): the recovery journey. The notice link is a real
+    // explicit login action — it stashes the current deferred fields through
+    // the same keepDraft click handler and returns to this profile, where
+    // the restore folds the draft back into the reopened form.
+    const p = page();
+    p.authExpiry('focus');
+    await settle();
+    assert.equal(p.notice.hidden, false);
+    assert.equal(p.login(), false, 'notice link stashes without blocking');
+    const returned = page({ stored: p.storage.get(key), form: false });
+    await settle();
+    assert.deepEqual(Array.from(returned.restores[0] ?? []), Object.values(input));
+    assert.equal(returned.storage.has(key), false);
+});
