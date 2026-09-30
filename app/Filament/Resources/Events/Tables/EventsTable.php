@@ -145,8 +145,8 @@ class EventsTable
                     ->visible(fn (Event $record): bool => in_array($record->status, [EventStatus::Draft, EventStatus::Published], true))
                     ->requiresConfirmation()
                     ->modalDescription(fn (Event $record): string => $record->isSeriesParent()
-                        ? 'Cancelling calls off every instance in the series. This is permanent — Discord will be told and RSVPs are not coming back.'
-                        : 'Cancelling is permanent. Discord will be told; RSVPs are not coming back.')
+                        ? 'Cancelling calls off every instance in the series. This is permanent — any existing Discord mirrors will be cancelled and RSVPs are not coming back.'
+                        : 'Cancelling is permanent. Any existing Discord mirror will be cancelled; RSVPs are not coming back.')
                     ->action(fn (Event $record, EventService $service) => $service->cancel($record))
                     ->icon('heroicon-o-x-circle')
                     ->color('danger'),
