@@ -620,7 +620,10 @@ lint() {
         rc=1
       fi
       local chrome_port_fallback
-      chrome_port_fallback=$(node -e '
+      # Unset the var for this probe: CI runners export it, and this checks the
+      # *fallback* shape, not the configured one. Without `env -u` a
+      # runner-populated shell fails this check on a correct config (TOG-10673).
+      chrome_port_fallback=$(env -u CI_CHROME_PORT node -e '
         const path = require("path");
         const config = require(path.resolve(process.argv[1]));
         console.log((config.ci || {}).collect?.settings?.port ?? "absent");

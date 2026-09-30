@@ -569,6 +569,20 @@ else
   rc=1
 fi
 
+# The fallback probe must not see a runner-exported CI_CHROME_PORT. CI runners
+# export the var, so without `env -u` the unset-shape check reads the configured
+# port and fails a correct config (TOG-10673 review of the TOG-8177 fix). This is
+# a pass-case, not a mutation: the clean fixture lints green under an inherited
+# valid port.
+n=$((n + 1))
+if ( cd "$(fixture clean-inherited-port)" && CI_CHROME_PORT=10015 ./ci/verify-pipeline.sh --lint >/dev/null 2>&1 ); then
+  pass "clean-inherited-port: the real workflow lints green with CI_CHROME_PORT set in the environment"
+else
+  fail "clean-inherited-port: the lint rejects a correct config when CI_CHROME_PORT is inherited"
+  ( cd "$WORK/clean-inherited-port" && CI_CHROME_PORT=10015 ./ci/verify-pipeline.sh --lint 2>&1 | sed 's/^/        /' )
+  rc=1
+fi
+
 printf '\n\033[1m==> The live-run assertions themselves\033[0m\n'
 
 # `--lint` reads the workflow. `--run` reads the check conclusions a pull request
