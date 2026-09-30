@@ -8,6 +8,7 @@ use Filament\Tables\Columns\IconColumn;
 use Filament\Tables\Columns\TextColumn;
 use Filament\Tables\Filters\TernaryFilter;
 use Filament\Tables\Table;
+use Illuminate\Database\Eloquent\Builder;
 
 class FeaturedContentsTable
 {
@@ -37,7 +38,7 @@ class FeaturedContentsTable
                     ->since()
                     ->sortable(),
             ])
-            ->defaultSort('position')
+            ->defaultSort(fn (Builder $query): Builder => $query->orderBy('position')->orderBy('id'))
             ->filters([
                 TernaryFilter::make('is_published')
                     ->label('Published'),
