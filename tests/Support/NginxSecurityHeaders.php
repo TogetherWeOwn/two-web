@@ -12,6 +12,7 @@ function activeNginxStatements(string $contents): array
     $quote = '';
     $escaped = false;
     $comment = false;
+    $tokenBoundary = true;
 
     for ($i = 0, $length = strlen($contents); $i < $length; $i++) {
         $char = $contents[$i];
@@ -28,30 +29,37 @@ function activeNginxStatements(string $contents): array
         if ($escaped) {
             $statement .= $char;
             $escaped = false;
+            $tokenBoundary = false;
         } elseif ($char === '\\') {
             $statement .= $char;
             $escaped = true;
+            $tokenBoundary = false;
         } elseif ($quote !== '') {
             $statement .= $char;
             if ($char === $quote) {
                 $quote = '';
             }
-        } elseif ($char === '#') {
+        } elseif ($char === '#' && $tokenBoundary) {
+            // nginx starts comments only at token boundaries; foo#bar is literal.
             $comment = true;
-        } elseif ($char === '"' || $char === "'") {
+        } elseif (($char === '"' || $char === "'") && $tokenBoundary) {
             $quote = $char;
             $statement .= $char;
+            $tokenBoundary = false;
         } elseif ($char === ';' || $char === '{' || $char === '}') {
             if ($char === ';') {
                 $statements[] = trim($statement);
             }
             $statement = '';
+            $tokenBoundary = true;
         } elseif (str_contains(" \t\r\n", $char)) {
             if ($statement !== '' && ! str_ends_with($statement, ' ')) {
                 $statement .= ' ';
             }
+            $tokenBoundary = true;
         } else {
             $statement .= $char;
+            $tokenBoundary = false;
         }
     }
 
