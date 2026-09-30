@@ -3,6 +3,7 @@
 use App\Models\Profile;
 use App\Models\User;
 use App\Support\SpamTrap;
+use Facebook\WebDriver\WebDriverTargetLocator;
 use Laravel\Dusk\Browser;
 
 it('lets a member edit their sparse profile with the keyboard-visible form', function () {
@@ -49,6 +50,8 @@ it('moves focus into the form on open and back to Edit profile on cancel (TOG-56
     $this->browse(function (Browser $browser) use ($member) {
         $browser->loginAs($member)
             ->visit('/profile')
+            // Same order-dependence guard as the sign-out tests below.
+            ->waitFor('[data-testid="profile-new-member"]')
             ->press('Add profile details')
             ->waitFor('[data-testid="profile-edit-form"]')
             // The trigger unmounts when the form renders: without the focus
@@ -61,12 +64,447 @@ it('moves focus into the form on open and back to Edit profile on cancel (TOG-56
     });
 });
 
+it('shows the signed-out notice after a real CSRF 419 and restores through the explicit login link', function () {
+    $member = User::factory()->create();
+
+    $this->browse(function (Browser $browser) use ($member) {
+        $browser->loginAs($member)
+            ->visit('/profile')
+            // Same order-dependence guard as the sign-out tests below.
+            ->waitFor('[data-testid="profile-new-member"]')
+            ->press('Add profile details')
+            ->waitFor('[data-testid="profile-edit-form"]')
+            ->type('bio', 'Unsent <bio>')
+            ->type('gamesText', "Chess\nCo-op")
+            ->type('timezone', 'Europe/London');
+
+        // Reject the actual Livewire POST in CSRF middleware. The session
+        // stays valid, so the explicit login link can return to an
+        // authenticated page that restores the draft — no Discord involved.
+        $browser->script(<<<'JS'
+            document.querySelectorAll('meta[name="csrf-token"]').forEach(meta => meta.content = 'expired-token');
+            document.querySelectorAll('script[data-csrf]').forEach(script => script.dataset.csrf = 'expired-token');
+        JS);
+
+        // TOG-9355 review (P1+P2): a 419 cannot distinguish logout from
+        // quiet expiry, so it stashes, shows the notice, and stays — Save
+        // is not an explicit login action.
+        $browser->press('Save')
+            ->waitFor('[data-testid="profile-signed-out"]')
+            ->assertSee('Your session ended')
+            ->assertSeeLink('Log in with Discord to save them')
+            ->assertPathIs('/profile')
+            ->assertVisible('[data-testid="profile-edit-form"]')
+            ->assertInputValue('bio', 'Unsent <bio>')
+            ->assertInputValue('gamesText', "Chess\nCo-op")
+            ->assertInputValue('timezone', 'Europe/London')
+            ->waitUntil('document.activeElement?.dataset?.testid === "profile-signed-out"');
+
+        $key = "two:profile-draft:{$member->getKey()}";
+        $browser->assertScript("JSON.parse(sessionStorage.getItem('{$key}')).bio", 'Unsent <bio>');
+        expect($member->profile()->first())->toBeNull();
+
+        // The explicit login journey: point the notice link at the profile
+        // (the session is still valid; the real href is the Discord handoff)
+        // and follow it. The fresh page restores the draft into the form.
+        $browser->script(<<<'JS'
+            document.querySelector('[data-testid="profile-signed-out"] a').href = '/profile';
+        JS);
+        $browser->clickLink('Log in with Discord to save them')
+            ->waitFor('[data-testid="profile-draft-restored"]')
+            ->assertInputValue('bio', 'Unsent <bio>')
+            ->assertInputValue('gamesText', "Chess\nCo-op")
+            ->assertInputValue('timezone', 'Europe/London')
+            ->waitUntil('document.activeElement?.dataset?.testid === "profile-draft-restored"');
+
+        // The restore landed with a fresh edit stamp, so wait past the fill
+        // floor like a human before the genuine save.
+        $browser->pause(SpamTrap::MIN_FILL_MS + 500)
+            ->press('Save')
+            ->waitFor('[data-testid="profile-saved"]')
+            ->refresh()
+            ->waitForText('Unsent <bio>');
+    });
+
+    expect($member->profile()->sole())
+        ->bio->toBe('Unsent <bio>')
+        ->games->toBe(['Chess', 'Co-op'])
+        ->timezone->toBe('Europe/London');
+});
+
+it('does not resurrect a retired draft over a genuine save after refresh', function () {
+    $member = User::factory()->create();
+
+    $this->browse(function (Browser $browser) use ($member) {
+        $browser->loginAs($member)
+            ->visit('/profile');
+
+        // Reproduce the failed-first-restore state directly: a stored copy
+        // the member never saw (the restore threw, e.g. offline), then the
+        // member opens the form by hand and saves genuinely. The save must
+        // retire the stored copy — otherwise refresh resurrects the obsolete
+        // text over the newer saved text.
+        $key = "two:profile-draft:{$member->getKey()}";
+        $browser->script(<<<JS
+            sessionStorage.setItem('{$key}', JSON.stringify({
+                version: 1,
+                savedAt: Date.now(),
+                bio: 'Stale draft text',
+                gamesText: '',
+                timezone: '',
+            }));
+        JS);
+
+        $browser->press('Add profile details')
+            ->waitFor('[data-testid="profile-edit-form"]')
+            ->type('bio', 'Genuine save')
+            // Same human-fill pause as the other save journeys: the
+            // server-locked fill floor applies to hand-opened forms too.
+            ->pause(SpamTrap::MIN_FILL_MS + 500)
+            ->press('Save')
+            ->waitFor('[data-testid="profile-saved"]')
+            // Deterministic red/green: without the retire signal the only
+            // stored copy survives the genuine save.
+            ->assertScript("sessionStorage.getItem('{$key}')", null)
+            ->refresh()
+            ->waitForText('Genuine save')
+            // Give a buggy restore round trip time to land before asserting
+            // its absence: the banner renders only when a stored copy exists.
+            ->pause(1000)
+            ->assertSee('Genuine save')
+            ->assertDontSee('Stale draft text')
+            ->assertMissing('[data-testid="profile-draft-restored"]');
+    });
+
+    expect($member->profile()->sole()->bio)->toBe('Genuine save');
+});
+
+it('shows the signed-out notice when an expiry probe fires before save', function () {
+    $member = User::factory()->create();
+
+    $this->browse(function (Browser $browser) use ($member) {
+        $browser->loginAs($member)
+            ->visit('/profile')
+            // Same order-dependence guard as the sign-out tests below.
+            ->waitFor('[data-testid="profile-new-member"]')
+            ->press('Add profile details')
+            ->waitFor('[data-testid="profile-edit-form"]')
+            ->type('bio', 'Auth-sync draft')
+            ->type('gamesText', "Chess\nCo-op")
+            ->type('timezone', 'Europe/London');
+
+        // Exercise the shipped layout and component listeners. Stub only
+        // the probe verdict; a failed probe cannot distinguish logout from
+        // quiet expiry, so it stashes, shows the notice, and stays — focus
+        // is not an explicit login action.
+        $browser->script(<<<'JS'
+            const originalFetch = window.fetch;
+            window.fetch = (url, options) => String(url).endsWith('/auth/status')
+                ? Promise.resolve(new Response(JSON.stringify({ authenticated: false }), { status: 200 }))
+                : originalFetch(url, options);
+        JS);
+        $browser->script('window.dispatchEvent(new Event("focus"));');
+
+        $key = "two:profile-draft:{$member->getKey()}";
+        $browser->waitFor('[data-testid="profile-signed-out"]')
+            ->assertSee('Your session ended')
+            ->assertPathIs('/profile')
+            ->assertVisible('[data-testid="profile-edit-form"]')
+            ->assertInputValue('bio', 'Auth-sync draft')
+            ->assertInputValue('gamesText', "Chess\nCo-op")
+            ->assertInputValue('timezone', 'Europe/London')
+            ->assertScript("JSON.parse(sessionStorage.getItem('{$key}')).bio", 'Auth-sync draft');
+        expect($member->profile()->first())->toBeNull();
+
+        // Leave no stored draft behind (same order-dependence leak guard as
+        // the sign-out tests below).
+        $browser->visit('/')
+            ->assertPathIs('/');
+        $browser->script("sessionStorage.removeItem('{$key}');");
+    });
+});
+
+it('stashes the draft without starting login when another tab broadcasts sign-out', function () {
+    $member = User::factory()->create();
+
+    $this->browse(function (Browser $browser) use ($member) {
+        $browser->loginAs($member)
+            ->visit('/profile')
+            // Order-dependence guard (docs/flake-policy.md; DiscordLoginTest
+            // 'a member can sign out again'): press() resolves then clicks
+            // in separate round trips, so resolve against the rendered
+            // closed page rather than a page mid-morph — including the
+            // morph a leaked draft's auto-restore would cause. The next
+            // test's prefix depends on this storage being clean.
+            ->waitFor('[data-testid="profile-new-member"]')
+            ->press('Add profile details')
+            ->waitFor('[data-testid="profile-edit-form"]')
+            ->type('bio', 'Sign-out broadcast draft')
+            ->type('gamesText', "Chess\nCo-op")
+            ->type('timezone', 'Europe/London');
+
+        // TOG-9355 review (P1+P2): the old listener navigated to the login
+        // handoff here, where the pinned Discord driver's prompt=none could
+        // silently complete an existing grant and sign the shared browser
+        // back in with no login click. Now it stashes, shows the notice, and
+        // stays. The broadcast dispatch below runs the shipped listeners
+        // synchronously, so the assertions after it are exact — except the
+        // notice focus, which lands in the same task.
+        $browser->script('window.dispatchEvent(new StorageEvent("storage", { key: "two-auth", newValue: "signed-out" }));');
+
+        $key = "two:profile-draft:{$member->getKey()}";
+        $browser->assertPathIs('/profile')
+            ->assertVisible('[data-testid="profile-edit-form"]')
+            ->assertInputValue('bio', 'Sign-out broadcast draft')
+            ->assertScript("JSON.parse(sessionStorage.getItem('{$key}')).bio", 'Sign-out broadcast draft')
+            ->assertScript("JSON.parse(sessionStorage.getItem('{$key}')).timezone", 'Europe/London')
+            ->waitFor('[data-testid="profile-signed-out"]')
+            ->assertSee('Your session ended')
+            ->assertSeeLink('Log in with Discord to save them')
+            ->waitUntil('document.activeElement?.dataset?.testid === "profile-signed-out"');
+        expect($member->profile()->first())->toBeNull();
+
+        // A later expiry probe describes the same dead session, never a
+        // quiet expiry: it must not start login either. The stubbed probe is
+        // async, so give a would-be navigation time to land before asserting
+        // its absence (same negative-assertion pattern as the retire test).
+        $browser->script(<<<'JS'
+            const originalFetch = window.fetch;
+            window.fetch = (url, options) => String(url).endsWith('/auth/status')
+                ? Promise.resolve(new Response(JSON.stringify({ authenticated: false }), { status: 200 }))
+                : originalFetch(url, options);
+        JS);
+        $browser->script('window.dispatchEvent(new Event("focus"));');
+        $browser->pause(1500)
+            ->assertPathIs('/profile')
+            ->assertVisible('[data-testid="profile-edit-form"]')
+            ->assertInputValue('bio', 'Sign-out broadcast draft');
+
+        // Leave no stored draft behind, after parking on a page with no
+        // form on purpose: a stray focus probe between cleanup and the next
+        // test's visit would re-stash this still-open form. This tab is
+        // shared with the next test and profile ids are reused across
+        // tests, so a leftover here would restore on their page load and
+        // open a form they never asked for (docs/flake-policy.md: order
+        // dependence).
+        $browser->visit('/')
+            ->assertPathIs('/');
+        $browser->script("sessionStorage.removeItem('{$key}');");
+    });
+});
+
+it('requires an explicit login when a logout broadcast fails to publish (TOG-9355 review)', function () {
+    $member = User::factory()->create();
+
+    $this->browse(function (Browser $browser) use ($member) {
+        $browser->loginAs($member)
+            ->visit('/profile')
+            // Same order-dependence guard as the broadcast test above.
+            ->waitFor('[data-testid="profile-new-member"]')
+            ->press('Add profile details')
+            ->waitFor('[data-testid="profile-edit-form"]')
+            ->type('bio', 'Missed broadcast draft')
+            ->type('gamesText', "Chess\nCo-op")
+            ->type('timezone', 'Europe/London');
+
+        $tabA = $browser->driver->getWindowHandle();
+
+        // Tab B shares the session, but its synchronous logout broadcast
+        // cannot publish: localStorage writes throw (quota, private mode),
+        // which the layout's submit delegation swallows. The real POST still
+        // signs out, but tab A hears nothing — no storage event arrives —
+        // while sessionStorage in tab A keeps working.
+        $browser->driver->switchTo()->newWindow(WebDriverTargetLocator::WINDOW_TYPE_TAB);
+        $tabB = $browser->driver->getWindowHandle();
+        $browser->visit('/profile')
+            ->waitForText('Sign out');
+        // Standalone statement: script() returns the JS result, not the
+        // browser, so it cannot sit mid-chain.
+        $browser->script('window.localStorage.setItem = function () { throw new Error("quota"); };');
+        $browser->waitForReload(fn (Browser $page) => $page->press('Sign out'))
+            ->assertPathIs('/');
+
+        // Back to the editing tab. Nothing arrived, so the tab is untouched —
+        // and a later focus probe can only classify the dead session as a
+        // quiet expiry (auth.status answers one boolean). A missing broadcast
+        // is not evidence of quiet expiry, so the probe must stash, show the
+        // notice, and stay: only an explicit login action may leave.
+        // (The visibility wait is load-bearing: the probe skips hidden
+        // documents, and the tab needs a beat to become visible again.)
+        $browser->driver->switchTo()->window($tabA);
+        $key = "two:profile-draft:{$member->getKey()}";
+        $browser->assertPathIs('/profile')
+            ->assertVisible('[data-testid="profile-edit-form"]')
+            ->assertInputValue('bio', 'Missed broadcast draft');
+
+        $browser->waitUntil("document.visibilityState === 'visible'")
+            ->script('window.dispatchEvent(new Event("focus"));');
+        $browser->waitFor('[data-testid="profile-signed-out"]')
+            ->assertPathIs('/profile')
+            ->assertVisible('[data-testid="profile-edit-form"]')
+            ->assertSee('Your session ended')
+            ->assertSeeLink('Log in with Discord to save them')
+            ->assertInputValue('bio', 'Missed broadcast draft')
+            ->assertInputValue('gamesText', "Chess\nCo-op")
+            ->assertInputValue('timezone', 'Europe/London')
+            ->assertScript("JSON.parse(sessionStorage.getItem('{$key}')).bio", 'Missed broadcast draft')
+            ->waitUntil('document.activeElement?.dataset?.testid === "profile-signed-out"');
+
+        // And the post-logout Save 419 (stale CSRF, no broadcast ever heard)
+        // keeps the notice and stays too.
+        $browser->press('Save')
+            ->pause(1500)
+            ->assertPathIs('/profile')
+            ->assertVisible('[data-testid="profile-edit-form"]')
+            ->assertVisible('[data-testid="profile-signed-out"]')
+            ->assertInputValue('bio', 'Missed broadcast draft')
+            ->assertScript("JSON.parse(sessionStorage.getItem('{$key}')).bio", 'Missed broadcast draft');
+        expect($member->profile()->first())->toBeNull();
+
+        $browser->driver->switchTo()->window($tabB);
+        $browser->driver->close();
+        $browser->driver->switchTo()->window($tabA);
+
+        // Same leak guard as the other sign-out tests.
+        $browser->visit('/')
+            ->assertPathIs('/');
+        $browser->script("sessionStorage.removeItem('{$key}');");
+    });
+});
+
+it('keeps an open editor on the page when a second tab signs out for real', function () {
+    $member = User::factory()->create();
+
+    $this->browse(function (Browser $browser) use ($member) {
+        $browser->loginAs($member)
+            ->visit('/profile')
+            // Same order-dependence guard as the broadcast test above:
+            // the wait only passes on a genuinely fresh page, so a leaked
+            // draft's auto-restore cannot silently steal this press.
+            ->waitFor('[data-testid="profile-new-member"]')
+            ->press('Add profile details')
+            ->waitFor('[data-testid="profile-edit-form"]')
+            ->type('bio', 'Cross-tab sign-out draft')
+            ->type('gamesText', "Chess\nCo-op")
+            ->type('timezone', 'Europe/London');
+
+        $tabA = $browser->driver->getWindowHandle();
+
+        // Tab B shares the session: a real sign-out there broadcasts
+        // `two-auth = signed-out` to the editing tab — no synthetic events.
+        $browser->driver->switchTo()->newWindow(WebDriverTargetLocator::WINDOW_TYPE_TAB);
+        $tabB = $browser->driver->getWindowHandle();
+        $browser->visit('/profile')
+            ->waitForText('Sign out')
+            ->waitForReload(fn (Browser $page) => $page->press('Sign out'))
+            ->assertPathIs('/');
+
+        // Back to the editing tab. The broadcast stashes the draft and shows
+        // the notice, but the tab must stay on the open form: navigating to
+        // the login handoff would let Discord prompt=none silently sign the
+        // shared browser back in. Only an explicit login action may leave.
+        $browser->driver->switchTo()->window($tabA);
+        $key = "two:profile-draft:{$member->getKey()}";
+        $browser->waitUntil("JSON.parse(sessionStorage.getItem('{$key}') || 'null')?.bio === 'Cross-tab sign-out draft'");
+
+        $browser->assertPathIs('/profile')
+            ->assertVisible('[data-testid="profile-edit-form"]')
+            ->assertInputValue('bio', 'Cross-tab sign-out draft')
+            ->assertInputValue('gamesText', "Chess\nCo-op")
+            ->assertInputValue('timezone', 'Europe/London')
+            ->waitFor('[data-testid="profile-signed-out"]')
+            ->assertSee('Your session ended')
+            ->assertSeeLink('Log in with Discord to save them');
+        expect($member->profile()->first())->toBeNull();
+
+        // TOG-9355 review: the post-logout Save/Cancel sends the stale
+        // CSRF token and gets a 419 without any before-auth reload firing
+        // first. The 419 hook must stash, keep the notice, and stay too —
+        // Save/Cancel is not an explicit login click. The old hook
+        // navigated to the real OAuth redirect here, where the pinned
+        // Discord driver's prompt=none could silently complete an existing
+        // grant and sign the shared browser back in. The 419 is async, so
+        // give a would-be navigation time to land before asserting its
+        // absence (same negative pattern as the broadcast test).
+        $browser->press('Save')
+            ->pause(1500)
+            ->assertPathIs('/profile')
+            ->assertVisible('[data-testid="profile-edit-form"]')
+            ->assertVisible('[data-testid="profile-signed-out"]')
+            ->assertInputValue('bio', 'Cross-tab sign-out draft')
+            ->assertScript("JSON.parse(sessionStorage.getItem('{$key}')).bio", 'Cross-tab sign-out draft');
+
+        // Sign-out → focus → 419: a later focus probe describes the same
+        // dead session and must stay, then a post-probe Cancel must stay
+        // too.
+        $browser->script('window.dispatchEvent(new Event("focus"));');
+        $browser->pause(1500)
+            ->assertPathIs('/profile')
+            ->assertVisible('[data-testid="profile-edit-form"]');
+        $browser->press('Cancel')
+            ->pause(1500)
+            ->assertPathIs('/profile')
+            ->assertVisible('[data-testid="profile-edit-form"]')
+            ->assertInputValue('bio', 'Cross-tab sign-out draft');
+        expect($member->profile()->first())->toBeNull();
+
+        $browser->driver->switchTo()->window($tabB);
+        $browser->driver->close();
+        $browser->driver->switchTo()->window($tabA);
+
+        // Same leak guard as the broadcast test, after the window
+        // juggling on purpose: refocusing tab A can fire its signed-out
+        // probe, which re-stashes the open form after an earlier cleanup.
+        // Park the tab on a guest page with no form and no probes, then
+        // remove the stash — a leftover here would restore on the next
+        // test's page load and open a form they never asked for
+        // (docs/flake-policy.md: order dependence).
+        $browser->visit('/')
+            ->assertPathIs('/');
+        $browser->script("sessionStorage.removeItem('{$key}');");
+    });
+});
+
+it('blocks auth-sync navigation when profile draft storage is unavailable', function (string $source) {
+    $member = User::factory()->create();
+
+    $this->browse(function (Browser $browser) use ($member, $source) {
+        $browser->loginAs($member)
+            ->visit('/profile')
+            // Same order-dependence guard as the sign-out tests above.
+            ->waitFor('[data-testid="profile-new-member"]')
+            ->press('Add profile details')
+            ->waitFor('[data-testid="profile-edit-form"]')
+            ->type('bio', 'Copy this before login');
+
+        $browser->script(<<<'JS'
+            window.__draftRecoveryProbe = 'unsent';
+            Object.defineProperty(window, 'sessionStorage', { get() { throw new Error('disabled'); } });
+            const originalFetch = window.fetch;
+            window.fetch = (url, options) => String(url).endsWith('/auth/status')
+                ? Promise.resolve(new Response(JSON.stringify({ authenticated: false }), { status: 200 }))
+                : originalFetch(url, options);
+        JS);
+        $browser->script($source === 'focus'
+            ? 'window.dispatchEvent(new Event("focus"));'
+            : 'window.dispatchEvent(new StorageEvent("storage", { key: "two-auth", newValue: "signed-out" }));');
+
+        $browser->waitFor('[data-testid="profile-draft-unavailable"]')
+            ->assertInputValue('bio', 'Copy this before login')
+            ->assertScript('window.__draftRecoveryProbe', 'unsent')
+            ->waitUntil('document.activeElement?.dataset?.testid === "profile-draft-unavailable"');
+        expect($member->profile()->first())->toBeNull();
+    });
+})->with(['focus', 'storage']);
+
 it('keeps an invalid edit open and gives the field an accessible error', function () {
     $member = User::factory()->create();
 
     $this->browse(function (Browser $browser) use ($member) {
         $browser->loginAs($member)
             ->visit('/profile')
+            // Same order-dependence guard as the sign-out tests above.
+            ->waitFor('[data-testid="profile-new-member"]')
             ->press('Add profile details')
             ->waitFor('[data-testid="profile-edit-form"]')
             ->type('timezone', 'BST')

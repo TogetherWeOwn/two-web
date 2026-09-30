@@ -139,6 +139,9 @@ jobs:
       - name: Dusk suite-health self-test
         run: node ci/suite-health-selftest.mjs
 
+      - name: Profile draft recovery self-test
+        run: node --test ci/profile-draft-selftest.mjs
+
       # The Dusk app, OAuth provider, bot stub and queue worker are separate
       # processes. This is the mutation control on their receipt gate: bypassing
       # OAuth or skipping the bot call must make the required browser job red.

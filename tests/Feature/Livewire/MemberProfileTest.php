@@ -924,3 +924,322 @@ it('clears the expired banner when the form is reopened', function () {
         ->assertSet('sessionExpired', false)
         ->assertDontSeeHtml('data-testid="profile-session-expired"');
 });
+
+it('restores an unsent profile draft without writing until the member saves', function () {
+    $member = User::factory()->create();
+    Profile::factory()->for($member)->create(['bio' => 'Before']);
+
+    $component = Livewire::actingAs($member)
+        ->test(MemberProfile::class, ['member' => $member, 'stats' => profileStats($member->discord_id)])
+        ->call('restoreDraft', 'Unsent <bio>', "Chess\nCo-op", 'Europe/London')
+        ->assertSet('editing', true)
+        ->assertSet('draftRestored', true)
+        ->assertSet('bio', 'Unsent <bio>')
+        ->assertSet('gamesText', "Chess\nCo-op")
+        ->assertSet('timezone', 'Europe/London')
+        ->assertSeeHtml('data-testid="profile-draft-restored"')
+        ->assertDispatched('profile-state-changed');
+
+    expect($member->profile()->first()->bio)->toBe('Before');
+    pausePastFillFloor();
+    $component->call('save')
+        ->assertSet('draftRestored', false)
+        ->assertSet('saved', true)
+        ->assertSeeHtml('Unsent &lt;bio&gt;');
+    expect($member->profile()->first()->bio)->toBe('Unsent <bio>');
+});
+
+it('retains a restored draft on an immediate save and accepts a later retry', function () {
+    $this->freezeTime();
+    $member = User::factory()->create();
+    Profile::factory()->for($member)->create(['bio' => 'Before']);
+
+    $component = Livewire::actingAs($member)
+        ->test(MemberProfile::class, ['member' => $member, 'stats' => profileStats($member->discord_id)])
+        ->call('restoreDraft', 'Recovered', "Chess\nCo-op", 'Europe/London');
+
+    $this->travel(500)->milliseconds();
+    $component->call('save')
+        ->assertHasErrors(['bio'])
+        ->assertSet('saved', false)
+        ->assertSet('editing', true)
+        ->assertSet('draftRestored', true)
+        ->assertSet('bio', 'Recovered')
+        ->assertSet('gamesText', "Chess\nCo-op")
+        ->assertSet('timezone', 'Europe/London');
+    expect($member->profile()->sole()->bio)->toBe('Before');
+
+    $this->travel(SpamTrap::MIN_FILL_MS)->milliseconds();
+    $component->call('save')
+        ->assertHasNoErrors()
+        ->assertSet('saved', true)
+        ->assertSet('draftRestored', false);
+    expect($member->profile()->sole())
+        ->bio->toBe('Recovered')
+        ->games->toBe(['Chess', 'Co-op'])
+        ->timezone->toBe('Europe/London');
+});
+
+it('keeps a restored draft through a queued edit (TOG-9355 review)', function () {
+    // The Edit/Add controls stay in the DOM while the restoreDraft round
+    // trip is outstanding (Livewire defers the morph), so a click queued
+    // behind the restore runs after it. Server-side that ordering is
+    // restore-then-edit — the queued edit must not refill over the
+    // recovered draft after the browser consumed its only stored copy.
+    $member = User::factory()->create();
+    Profile::factory()->for($member)->create(['bio' => 'Before']);
+
+    Livewire::actingAs($member)
+        ->test(MemberProfile::class, ['member' => $member, 'stats' => profileStats($member->discord_id)])
+        ->call('restoreDraft', 'Recovered', "Chess\nCo-op", 'Europe/London')
+        ->call('edit')
+        ->assertSet('editing', true)
+        ->assertSet('draftRestored', true)
+        ->assertSet('bio', 'Recovered')
+        ->assertSet('gamesText', "Chess\nCo-op")
+        ->assertSet('timezone', 'Europe/London')
+        ->assertSeeHtml('data-testid="profile-draft-restored"');
+
+    expect($member->profile()->sole()->bio)->toBe('Before');
+});
+
+it('answers an early restored save the same with an empty or filled decoy', function () {
+    // TOG-9355 review: inside the same server-locked floor, both decoy
+    // states get the same recoverable refusal — splitting them would be a
+    // honeypot oracle. Past the floor the filled decoy still takes the
+    // ordinary silent-trap path.
+    $this->freezeTime();
+    $member = User::factory()->create();
+    Profile::factory()->for($member)->create(['bio' => 'Before']);
+
+    foreach ([false, true] as $filled) {
+        $component = Livewire::actingAs($member)
+            ->test(MemberProfile::class, ['member' => $member, 'stats' => profileStats($member->discord_id)])
+            ->call('restoreDraft', 'Recovered', '', '');
+        if ($filled) {
+            $component->set('website', 'filled decoy');
+        }
+
+        $this->travel(500)->milliseconds();
+        $component->call('save')
+            ->assertHasErrors(['bio'])
+            ->assertSet('saved', false)
+            ->assertSet('editing', true)
+            ->assertSet('draftRestored', true)
+            ->assertSet('bio', 'Recovered');
+        expect($member->profile()->sole()->bio)->toBe('Before');
+    }
+});
+
+it('still swallows a filled honeypot on a restored draft past the floor', function () {
+    $this->freezeTime();
+    $member = User::factory()->create();
+
+    $component = Livewire::actingAs($member)
+        ->test(MemberProfile::class, ['member' => $member, 'stats' => profileStats($member->discord_id)])
+        ->call('restoreDraft', 'Bot draft', '', '')
+        ->set('website', 'filled decoy');
+
+    // Inside the floor both decoy states refuse identically (see above);
+    // age past it so the filled decoy reaches the silent trap.
+    $this->travel(SpamTrap::MIN_FILL_MS + 1000)->milliseconds();
+    $component->call('save')
+        ->assertHasNoErrors()
+        ->assertSet('saved', true)
+        ->assertSet('editing', false);
+    expect($member->profile()->first())->toBeNull();
+});
+
+it('refuses to restore a draft onto another members profile', function () {
+    $member = User::factory()->create();
+    $viewer = User::factory()->create();
+
+    Livewire::actingAs($viewer)
+        ->test(MemberProfile::class, ['member' => $member, 'stats' => profileStats($member->discord_id)])
+        ->call('restoreDraft', 'Not mine', '', '')
+        ->assertForbidden();
+
+    expect($member->profile()->first())->toBeNull();
+});
+
+it('validates restored drafts on save and retains invalid input', function () {
+    $member = User::factory()->create();
+    $bio = str_repeat('x', 1001);
+
+    $component = Livewire::actingAs($member)
+        ->test(MemberProfile::class, ['member' => $member, 'stats' => profileStats($member->discord_id)])
+        ->call('restoreDraft', $bio, '', 'not-a-zone');
+    pausePastFillFloor();
+    $component->call('save')
+        ->assertHasErrors(['bio', 'timezone'])
+        ->assertSet('editing', true)
+        ->assertSet('bio', $bio);
+
+    expect($member->profile()->first())->toBeNull();
+});
+
+it('discards a restored draft when the member cancels', function () {
+    $member = User::factory()->create();
+    Profile::factory()->for($member)->create(['bio' => 'Before']);
+
+    Livewire::actingAs($member)
+        ->test(MemberProfile::class, ['member' => $member, 'stats' => profileStats($member->discord_id)])
+        ->call('restoreDraft', 'Unsent', '', '')
+        ->call('cancel')
+        ->assertSet('draftRestored', false)
+        ->assertSet('editing', false)
+        ->assertSet('bio', 'Before');
+});
+
+it('retires the stored draft on a genuine save so refresh cannot resurrect it', function () {
+    // TOG-9355 review: a restore that failed earlier kept the stored copy,
+    // but the later genuine save never retired it — the next page load
+    // restored the obsolete draft over the newer saved text. The save
+    // dispatches the retire signal; the shipped script consumes it.
+    $member = User::factory()->create();
+    Profile::factory()->for($member)->create(['bio' => 'Before']);
+
+    Livewire::actingAs($member)
+        ->test(MemberProfile::class, ['member' => $member, 'stats' => profileStats($member->discord_id)])
+        ->call('restoreDraft', 'Recovered', "Chess\nCo-op", 'Europe/London')
+        ->tap(fn () => pausePastFillFloor())
+        ->call('save')
+        ->assertSet('saved', true)
+        ->assertDispatched('profile-draft-retired');
+
+    expect($member->profile()->sole()->bio)->toBe('Recovered');
+});
+
+it('retires the stored draft on an explicit cancel', function () {
+    // Same stale path through cancel: discarding a restored draft must
+    // also retire the stored copy, or refresh reopens the input just
+    // discarded.
+    $member = User::factory()->create();
+    Profile::factory()->for($member)->create(['bio' => 'Before']);
+
+    Livewire::actingAs($member)
+        ->test(MemberProfile::class, ['member' => $member, 'stats' => profileStats($member->discord_id)])
+        ->call('restoreDraft', 'Unsent', '', '')
+        ->call('cancel')
+        ->assertSet('editing', false)
+        ->assertDispatched('profile-draft-retired');
+
+    expect($member->profile()->sole()->bio)->toBe('Before');
+});
+
+it('keeps the stored draft when cancelling a form that never restored one', function () {
+    // Cancelling a manually-opened form after a failed restore must not
+    // retire the stashed copy the member never saw — that is the P2 loss
+    // through the sibling path.
+    $member = User::factory()->create();
+    Profile::factory()->for($member)->create(['bio' => 'Before']);
+
+    Livewire::actingAs($member)
+        ->test(MemberProfile::class, ['member' => $member, 'stats' => profileStats($member->discord_id)])
+        ->call('edit')
+        ->set('bio', 'Typed by hand')
+        ->call('cancel')
+        ->assertSet('editing', false)
+        ->assertNotDispatched('profile-draft-retired');
+
+    expect($member->profile()->sole()->bio)->toBe('Before');
+});
+
+it('never retires the stored draft on a failed save', function () {
+    // A write failure keeps the form open with input intact — and must keep
+    // the stored copy too, so a refresh can still retry the restore.
+    $member = User::factory()->create();
+    Profile::factory()->for($member)->create(['bio' => 'Before']);
+    MemberProfile::$profileWriter = static fn () => throw new RuntimeException('boom');
+
+    try {
+        Livewire::actingAs($member)
+            ->test(MemberProfile::class, ['member' => $member, 'stats' => profileStats($member->discord_id)])
+            ->call('restoreDraft', 'Recovered', '', '')
+            ->tap(fn () => pausePastFillFloor())
+            ->call('save')
+            ->assertSet('saveFailed', true)
+            ->assertSet('editing', true)
+            ->assertNotDispatched('profile-draft-retired');
+    } finally {
+        MemberProfile::$profileWriter = null;
+    }
+
+    expect($member->profile()->sole()->bio)->toBe('Before');
+});
+
+it('keeps the restored marker across a failed save so a later cancel retires the stored copy', function () {
+    // TOG-9355 review (P2 on 04e32dbc): save() cleared draftRestored before
+    // the writer ran, so restore → failed write → Cancel never dispatched
+    // the retire signal and refresh resurrected the discarded input. The
+    // marker must survive the failed write; the explicit discard retires it.
+    $member = User::factory()->create();
+    Profile::factory()->for($member)->create(['bio' => 'Before']);
+    MemberProfile::$profileWriter = static fn () => throw new RuntimeException('boom');
+
+    try {
+        $component = Livewire::actingAs($member)
+            ->test(MemberProfile::class, ['member' => $member, 'stats' => profileStats($member->discord_id)])
+            ->call('restoreDraft', 'Recovered', '', '')
+            ->tap(fn () => pausePastFillFloor())
+            ->call('save')
+            ->assertSet('saveFailed', true)
+            ->assertSet('editing', true)
+            ->assertSet('draftRestored', true)
+            ->assertNotDispatched('profile-draft-retired');
+
+        $component->call('cancel')
+            ->assertSet('editing', false)
+            ->assertSet('draftRestored', false)
+            ->assertDispatched('profile-draft-retired');
+    } finally {
+        MemberProfile::$profileWriter = null;
+    }
+
+    expect($member->profile()->sole()->bio)->toBe('Before');
+});
+
+it('retires the stored copy when a genuine save retries after a failed save', function () {
+    // The failed first attempt keeps the marker (and the stored copy); the
+    // genuine retry is the terminal success that spends both.
+    $member = User::factory()->create();
+    Profile::factory()->for($member)->create(['bio' => 'Before']);
+    MemberProfile::$profileWriter = static fn () => throw new RuntimeException('boom');
+
+    $component = Livewire::actingAs($member)
+        ->test(MemberProfile::class, ['member' => $member, 'stats' => profileStats($member->discord_id)])
+        ->call('restoreDraft', 'Recovered', '', '')
+        ->tap(fn () => pausePastFillFloor())
+        ->call('save')
+        ->assertSet('saveFailed', true)
+        ->assertSet('draftRestored', true)
+        ->assertNotDispatched('profile-draft-retired');
+
+    MemberProfile::$profileWriter = null;
+
+    $component->call('save')
+        ->assertSet('saved', true)
+        ->assertDispatched('profile-draft-retired');
+
+    expect($member->profile()->sole()->bio)->toBe('Recovered');
+});
+
+it('renders the signed-out notice and a 419 hook that never auto-starts OAuth', function () {
+    $member = User::factory()->create();
+
+    $html = $this->actingAs($member)->get(route('profiles.show', $member))->assertOk()->getContent();
+    $url = route('login', ['next' => parse_url(route('profiles.show', $member), PHP_URL_PATH)]);
+
+    // TOG-9355 review (P1+P2): a 419 or probe cannot distinguish logout
+    // from quiet expiry, so the shipped script stashes, shows the notice,
+    // and stays — no automatic handoff. The notice link carries the same
+    // ?next= return an explicit click needs.
+    expect($html)->toContain('data-login-url="'.$url.'"')
+        ->toContain('data-draft-owner="1"')
+        ->toContain('data-testid="profile-signed-out"')
+        ->toContain('data-profile-login')
+        ->toContain('$wire.$hook(')
+        ->toContain('&#039;request&#039;')
+        ->toContain('status !== 419')
+        ->not->toContain('location.assign');
+});
