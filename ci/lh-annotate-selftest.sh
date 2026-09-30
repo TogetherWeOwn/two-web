@@ -161,10 +161,17 @@ case_is samples-non-numeric 1 'median of 3 runs' \
 
 printf '\n\033[1m==> The host speed that produced those samples (TOG-3224)\033[0m\n'
 
-# case_with_lhr <slug> <expected exit> <expected substrings, one per line> <assertion json> <lhr json>...
+# case_with_lhr [--exact] <slug> <expected exit> <expected lines, one per line> <assertion json> <lhr json>...
 # Same contract as case_is, plus saved lhr-*.json reports so the environment block
 # is readable. benchmarkIndex is per-host, so it is reported once per job.
+#
+# Without --exact each expected line is a substring (grep -qF); with --exact each
+# must equal a whole output line (grep -qxF). The two-reports page median ends in
+# `200`, so substring matching also accepts an inflated `2000` — only a
+# whole-line match pins the even-count median.
 case_with_lhr() {
+  local exact=0
+  if [ "${1:-}" = "--exact" ]; then exact=1; shift; fi
   local slug="$1" want="$2" expected="$3" body="$4"
   local dir out status lhr expected_line report=0
   shift 4
@@ -187,7 +194,14 @@ case_with_lhr() {
     return
   fi
   while IFS= read -r expected_line; do
-    if ! grep -qF -- "$expected_line" <<< "$out"; then
+    if [ "$exact" -eq 1 ]; then
+      if ! grep -qxF -- "$expected_line" <<< "$out"; then
+        fail "$slug: exit ${status} was right, but no output line equals: ${expected_line}"
+        printf '%s\n' "$out" | sed 's/^/        /'
+        rc=1
+        return
+      fi
+    elif ! grep -qF -- "$expected_line" <<< "$out"; then
       fail "$slug: exit ${status} was right, but the output never says: ${expected_line}"
       printf '%s\n' "$out" | sed 's/^/        /'
       rc=1
@@ -225,9 +239,11 @@ case_with_lhr benchmark-absent 1 'largest-contentful-paint' \
 LHR_LOW='{"finalDisplayedUrl":"http://127.0.0.1:8000/events","environment":{"benchmarkIndex":1000},"audits":{"largest-contentful-paint":{"numericValue":100}}}'
 LHR_HIGH='{"finalDisplayedUrl":"http://127.0.0.1:8000/events","environment":{"benchmarkIndex":1400},"audits":{"largest-contentful-paint":{"numericValue":300}}}'
 
-case_with_lhr two-reports-one-url 1 \
+# Whole-line match (--exact): the page median ends in `200`, so a substring also
+# accepts an inflated `2000`. Only complete lines pin the even-count median.
+case_with_lhr --exact two-reports-one-url 1 \
 '::error::CONTEXT, NOT A FAILURE — measured on http://127.0.0.1:8000/events (median of 2 runs): largest-contentful-paint 200
-::error::CONTEXT, NOT A FAILURE — host speed while measuring: benchmarkIndex 1200 (median of 2 runs, range 1000–1400).' \
+::error::CONTEXT, NOT A FAILURE — host speed while measuring: benchmarkIndex 1200 (median of 2 runs, range 1000–1400). Lower means a busier runner. These timings are wall-clock on a host shared with pest, dusk and two-bot, so read a breach against the spread above before hunting for bytes (TOG-3224).' \
 '[{"auditId":"largest-contentful-paint","level":"error","url":"http://127.0.0.1:8000/events","actual":200,"expected":150,"passed":false,"values":[100,300]}]' \
 "$LHR_LOW" "$LHR_HIGH"
 
