@@ -73,3 +73,16 @@ it('keeps the Taste route out of the public sitemap', function () {
         ->assertOk()
         ->assertDontSee('/design-lab/taste');
 });
+
+it('renders featured image alt text instead of an empty alt in the Taste concept', function () {
+    FeaturedContent::factory()->published()->create([
+        'title' => 'Summer social photos',
+        'image_url' => 'https://example.org/photo.jpg',
+        'image_alt' => 'Members playing board games at the summer social',
+    ]);
+
+    $this->get('/design-lab/taste')
+        ->assertOk()
+        ->assertSee('alt="Members playing board games at the summer social"', escape: false)
+        ->assertDontSee('alt=""', escape: false);
+});

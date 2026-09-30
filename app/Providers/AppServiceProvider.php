@@ -2,10 +2,13 @@
 
 namespace App\Providers;
 
+use App\Enums\EventStatus;
+use App\Models\Event as EventModel;
 use App\Models\Profile;
 use App\Models\User;
 use App\Services\Bot\InternalActionClient;
 use App\Services\Paperclip\RestartCardClient;
+use App\Support\AgentEventRateLimit;
 use App\Support\Counts\CountsReader;
 use App\Support\Counts\CountsSource;
 use App\Support\Events\DiscordEventsReader;
@@ -13,16 +16,22 @@ use App\Support\Events\DiscordEventsSource;
 use App\Support\MemberDataAccess\AccessRecorder;
 use App\Support\Profiles\MemberStatsReader;
 use App\Support\Profiles\MemberStatsSource;
+use App\Support\RsvpRateLimit;
+use Illuminate\Cache\RateLimiting\Limit;
 use Illuminate\Contracts\Foundation\Application;
+use Illuminate\Http\Request;
 use Illuminate\Queue\Events\JobFailed;
 use Illuminate\Support\Facades\Event;
 use Illuminate\Support\Facades\Gate;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Queue;
+use Illuminate\Support\Facades\RateLimiter;
+use Illuminate\Support\Facades\View;
 use Illuminate\Support\ServiceProvider;
 use Livewire\Livewire;
 use SocialiteProviders\Discord\DiscordExtendSocialite;
 use SocialiteProviders\Manager\SocialiteWasCalled;
+use Throwable;
 
 class AppServiceProvider extends ServiceProvider
 {
@@ -99,6 +108,20 @@ class AppServiceProvider extends ServiceProvider
 
     public function boot(): void
     {
+        // The outer shield for the machine ingress (TOG-8402): named limiter
+        // resolved per request before auth, the grant lookup and the audit
+        // write. Keyed per credential by AgentEventRateLimit, never per IP —
+        // machine callers sit behind shared egress. `route:cache` serialises
+        // provider boot, so registration lives here, not in a closure route file.
+        RateLimiter::for('agent-events', fn (Request $request): Limit => AgentEventRateLimit::routeLimit($request));
+
+        // The RSVP write shield (TOG-8824): a named limiter with its own
+        // `rsvp:{member id}` bucket. The bare `throttle:12,1` it replaces
+        // shares sha1(user id) with every `throttle:10,1` route, so RSVP
+        // hammering could 429 a member's join/login redirect and vice versa.
+        // Registered here for the same `route:cache` reason as above.
+        RateLimiter::for('rsvp-writes', fn (Request $request): Limit => RsvpRateLimit::routeLimit($request));
+
         // Livewire injects its runtime as a plain <script src> with no defer, which
         // puts 162 KB in the critical path of every Livewire page. On the budget
         // profile (mid-range phone, 4x CPU, Slow 4G) that is about 900ms of
@@ -143,6 +166,47 @@ class AppServiceProvider extends ServiceProvider
         // provider is about seventy lines we would then own and get subtly
         // wrong, against a package the Laravel ecosystem already leans on.
         Event::listen(SocialiteWasCalled::class, [DiscordExtendSocialite::class, 'handle']);
+
+        // The 404 page's "happening soon" suggestions (TOG-6929). A composer,
+        // not controller code: Laravel renders `errors/404.blade.php` directly
+        // from the exception handler, so no controller ever runs for it.
+        //
+        // Registered on BOTH `errors::404` and `errors.404`. The exception
+        // handler looks the view up as `errors::404` (hint notation — see
+        // Handler::getHttpExceptionView), which is a different view name from
+        // the `errors.404` dot notation a direct `view('errors.404')` render
+        // uses. A composer on only one of them silently never fires on the
+        // other path, and the blade's empty-state fallback masks it as "no
+        // upcoming events". Both registrations share one closure.
+        //
+        // The catch is deliberate and broad. A 404 fires for any unknown URL,
+        // including while the database is down — catching only QueryException
+        // would turn "page not found" into a 500 the day the schema is the
+        // thing that is broken. The failure is logged at warning, not hidden:
+        // an empty suggestion list is the degraded state, not the quiet one.
+        $suggestUpcomingEvents = function (\Illuminate\View\View $view): void {
+            try {
+                $query = EventModel::query()
+                    ->where('ends_at', '>=', now())
+                    ->orderBy('starts_at')
+                    ->limit(3);
+
+                // A draft has not been announced to anybody. Moderators see them
+                // so they can check a card before publishing it; nobody else
+                // knows it exists. Same rule the listing enforces.
+                if (! Gate::allows('viewDrafts', EventModel::class)) {
+                    $query->where('status', '!=', EventStatus::Draft->value);
+                }
+
+                $view->with('suggestedEvents', $query->get());
+            } catch (Throwable $e) {
+                Log::warning('404 suggestions unavailable.', ['exception' => get_class($e)]);
+
+                $view->with('suggestedEvents', collect());
+            }
+        };
+
+        View::composer(['errors::404', 'errors.404'], $suggestUpcomingEvents);
 
         // The one permission the site has. It is recomputed from the member's
         // Discord roles on every login — see DiscordLoginController — so removing

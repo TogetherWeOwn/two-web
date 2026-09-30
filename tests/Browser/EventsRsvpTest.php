@@ -5,6 +5,8 @@ use App\Enums\RsvpStatus;
 use App\Models\Event;
 use App\Models\Rsvp;
 use App\Models\User;
+use App\Support\RsvpRateLimit;
+use Facebook\WebDriver\Chrome\ChromeDevToolsDriver;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Laravel\Dusk\Browser;
@@ -41,6 +43,17 @@ function browsableEvent(array $overrides = []): Event
     ], $overrides));
 }
 
+/*
+ * The RSVP round-trip, part two: the pre-boot guard (TOG-7927). Every journey
+ * that clicks a control waits for boot first — `waitForLivewireBoot()`,
+ * shared in Support/DeferredLivewireBoot.php so MobileClickPathTest drives
+ * the same bound-side click — and the last test owns the pre-boot window
+ * itself (blocked script, disabled button, recovery). No deferred page
+ * server-renders an `a[wire:click]` (pagination renders buttons; the calendar
+ * day-links only exist after a client-side view switch), so a pre-boot link
+ * tap is unreachable on real markup — the link half (capture-stop plus the
+ * announced copy) is pinned by the Feature tests instead.
+ */
 test('a member RSVPs, the bot receives it, and the page advances to synced', function () {
     $member = User::factory()->create();
     $event = browsableEvent();
@@ -58,12 +71,18 @@ test('a member RSVPs, the bot receives it, and the page advances to synced', fun
             ->resize(360, 780)
             ->visit('/events')
             ->waitForText('Friday night Helldivers')
-            ->assertVisible('[data-testid="event-card"]')
+            ->assertVisible('[data-testid="event-card"]');
 
+        // The guard disables the button until the deferred runtime binds it —
+        // click before that and the tap lands in the unbound window (TOG-7927).
+        waitForLivewireBoot($browser);
+
+        $browser
             // The control is offered before it is pressed. If this is missing the
             // failure says "no RSVP button", not "click timed out".
             ->assertVisible('[data-testid="rsvp-going"]')
             ->assertSeeIn('[data-testid="rsvp-going"]', "I'm in")
+            ->assertButtonEnabled('[data-testid="rsvp-going"]')
 
             ->click('[data-testid="rsvp-going"]')
 
@@ -139,9 +158,11 @@ test('a failed RSVP write returns the control and succeeds on retry', function (
             $browser->loginAs($member)
                 ->resize(360, 780)
                 ->visit('/events')
-                ->waitUntil('window.Livewire?.initialRenderIsFinished === true')
-                ->waitFor('[data-testid="rsvp-going"]')
-                ->click('[data-testid="rsvp-going"]')
+                ->waitFor('[data-testid="rsvp-going"]');
+
+            waitForLivewireBoot($browser);
+
+            $browser->click('[data-testid="rsvp-going"]')
                 ->waitFor('[data-testid="rsvp-failed"]')
                 ->assertSeeIn('[data-testid="rsvp-failed"]', "That RSVP didn't save. Try once more.")
                 ->assertVisible('[data-testid="rsvp-going"]')
@@ -172,6 +193,50 @@ test('a failed RSVP write returns the control and succeeds on retry', function (
         ->exists())->toBeTrue();
 });
 
+test('a rate-limited RSVP click announces the wait and keeps the control', function () {
+    $member = User::factory()->create();
+    $event = browsableEvent();
+
+    // The limiter is database-backed and shared across processes, so spending
+    // the member's budget here throttles the browser journey too: the click
+    // below is the 13th write. The HTTP 429 envelope is unchanged; the control
+    // must speak instead of failing silently (TOG-7976).
+    for ($attempt = 0; $attempt < RsvpRateLimit::MAX_ATTEMPTS; $attempt++) {
+        RsvpRateLimit::hit($member);
+    }
+
+    $this->browse(function (Browser $browser) use ($member, $event) {
+        $browser->loginAs($member)
+            ->resize(360, 780)
+            ->visit('/events')
+            ->waitFor('[data-testid="rsvp-going"]');
+
+        waitForLivewireBoot($browser);
+
+        $browser->click('[data-testid="rsvp-going"]')
+            // The exact wait depends on wall-clock seconds since the budget was
+            // spent across the process boundary, so pin the stable fragments of
+            // the CM-frozen copy, not the number.
+            ->waitFor('[data-testid="rsvp-rate-limited"]')
+            ->assertSeeIn('[data-testid="rsvp-rate-limited"]', 'Slow down — try again in')
+            ->assertSeeIn('[data-testid="rsvp-rate-limited"]', 'seconds. Nothing changed, just wait a moment.')
+            // Polite announcement for a temporary wait, never an interruption.
+            ->assertAttribute('[data-testid="rsvp-rate-limited"]', 'role', 'status')
+            // The control returns to default and stays usable — never disabled
+            // or replaced, and no failure copy for a wait.
+            ->assertVisible('[data-testid="rsvp-going"]')
+            ->assertButtonEnabled('[data-testid="rsvp-going"]')
+            ->assertMissing('[data-testid="rsvp-confirmed"]')
+            ->assertMissing('[data-testid="rsvp-failed"]');
+
+        // The throttled click changed nothing.
+        expect(Rsvp::query()
+            ->where('event_id', $event->id)
+            ->where('user_id', $member->id)
+            ->exists())->toBeFalse();
+    });
+});
+
 test('a member can stand down again', function () {
     $member = User::factory()->create();
     $event = browsableEvent();
@@ -185,8 +250,11 @@ test('a member can stand down again', function () {
         $browser->loginAs($member)
             ->resize(360, 780)
             ->visit('/events')
-            ->waitFor('[data-testid="rsvp-withdraw"]')
-            ->assertSeeIn('[data-testid="rsvp-withdraw"]', "Can't make it")
+            ->waitFor('[data-testid="rsvp-withdraw"]');
+
+        waitForLivewireBoot($browser);
+
+        $browser->assertSeeIn('[data-testid="rsvp-withdraw"]', "Can't make it")
             ->click('[data-testid="rsvp-withdraw"]')
             ->waitFor('[data-testid="rsvp-going"]')
             ->assertMissing('[data-testid="rsvp-confirmed"]')
@@ -214,8 +282,11 @@ test('the going count ticks with the answer without a reload', function () {
             // Polite live region: the count changes without a reload, so the
             // change must announce via role="status", never role="alert".
             ->assertAttribute('[data-testid="event-going-count"]', 'role', 'status')
-            ->assertVisible('[data-testid="rsvp-going"]')
-            ->click('[data-testid="rsvp-going"]')
+            ->assertVisible('[data-testid="rsvp-going"]');
+
+        waitForLivewireBoot($browser);
+
+        $browser->click('[data-testid="rsvp-going"]')
             ->waitFor('[data-testid="rsvp-confirmed"]')
             ->waitForTextIn('[data-testid="event-going-count"]', '1 of 4 going')
             ->assertSeeIn('[data-testid="event-going-count"]', '1 of 4 going')
@@ -280,8 +351,13 @@ test('an empty calendar reads as early rather than broken', function () {
                 ->assertAttribute('[data-testid="events-empty-never"] [data-testid="discord-join"]', 'href', route('discord'))
                 ->assertSeeLink('Join the Discord')
                 ->assertMissing('[data-testid="events-empty-error"]')
-                ->assertMissing('[data-testid="rsvp-failed"]')
-                ->click('[data-testid="events-view-calendar"]')
+                ->assertMissing('[data-testid="rsvp-failed"]');
+
+            // The toggle renders before the deferred runtime binds it — a bare
+            // `waitFor` above is not enough (TOG-7927).
+            waitForLivewireBoot($browser);
+
+            $browser->click('[data-testid="events-view-calendar"]')
                 ->waitFor('[data-testid="events-calendar-grid"]')
                 ->assertAttribute('[data-testid="events-view-calendar"]', 'aria-pressed', 'true')
                 ->assertVisible('[data-testid="events-empty-never"]')
@@ -312,8 +388,12 @@ test('the gap calendar shows five past names and keeps the selected view', funct
                 ->assertSeeIn('[data-testid="events-empty-gap"]', 'Last time: Past game night 1')
                 ->assertCount('[data-testid="events-empty-gap-item"]', 5)
                 ->assertDontSee('Past game night 6')
-                ->assertMissing('[data-testid="events-empty-never"]')
-                ->click('[data-testid="events-view-calendar"]')
+                ->assertMissing('[data-testid="events-empty-never"]');
+
+            // Same unbound window as above: the toggle is a `wire:click` button.
+            waitForLivewireBoot($browser);
+
+            $browser->click('[data-testid="events-view-calendar"]')
                 ->waitFor('[data-testid="events-calendar-grid"]')
                 ->assertAttribute('[data-testid="events-view-calendar"]', 'aria-pressed', 'true')
                 ->assertVisible('[data-testid="events-empty-gap"]');
@@ -335,8 +415,13 @@ test('a failed calendar read retries in the browser without losing the view', fu
                 ->waitFor('[data-testid="events-empty-error"]')
                 ->assertSeeIn('[data-testid="events-empty-error"]', "We couldn't load the calendar.")
                 ->assertSeeIn('[data-testid="events-empty-error"]', 'The Discord always has the latest — come ask there.')
-                ->assertMissing('[data-testid="events-empty-never"]')
-                ->click('[data-testid="events-view-calendar"]')
+                ->assertMissing('[data-testid="events-empty-never"]');
+
+            // The retry below re-fires a `wire:click` read; it needs the runtime
+            // bound, which this wait pins before the first toggle click.
+            waitForLivewireBoot($browser);
+
+            $browser->click('[data-testid="events-view-calendar"]')
                 ->waitFor('[data-testid="events-calendar-grid"]')
                 ->assertAttribute('[data-testid="events-view-calendar"]', 'aria-pressed', 'true');
 
@@ -363,10 +448,86 @@ test('the calendar view renders a month grid and jumps to the event', function (
             // behind a horizontal scroll rather than squashed into seven columns.
             ->resize(1280, 900)
             ->visit('/events')
-            ->waitForText('Friday night Helldivers')
-            ->click('[data-testid="events-view-calendar"]')
+            ->waitForText('Friday night Helldivers');
+
+        // The grid toggle is a `wire:click` button: unbound until the
+        // deferred runtime boots (TOG-7927).
+        waitForLivewireBoot($browser);
+
+        $browser->click('[data-testid="events-view-calendar"]')
             ->waitFor('[data-testid="events-calendar-grid"]')
             ->assertVisible('[data-testid="calendar-day"]')
             ->assertSeeIn('[data-testid="events-calendar-grid"]', 'Mon');
+    });
+});
+
+test('an RSVP tap before Livewire boots cannot land and the control recovers', function () {
+    $member = User::factory()->create();
+    $event = browsableEvent();
+
+    $this->browse(function (Browser $browser) use ($member, $event) {
+        $cdp = new ChromeDevToolsDriver($browser->driver);
+        $cdp->execute('Network.enable');
+        // Hold the pre-boot window open deterministically: the page renders
+        // fully but the deferred runtime never arrives, so Livewire.start()
+        // never runs. Network-level blocking, not a paused sleep — a fixed
+        // delay is either a flake or dead time (docs/flake-policy.md).
+        $cdp->execute('Network.setBlockedURLs', ['urls' => ['*livewire*']]);
+
+        try {
+            $browser->loginAs($member)
+                ->resize(360, 780)
+                ->visit('/events')
+                ->waitFor('[data-testid="rsvp-going"]');
+
+            // The guard disables the button at parse time. Wait for the
+            // property, not just presence: the button exists in the initial
+            // HTML before the guard script below it runs.
+            $browser->waitUsing(10, 100, function () use ($browser) {
+                $result = $browser->script(
+                    'return (document.querySelector(\'[data-testid="rsvp-going"]\') || {}).disabled === true;'
+                );
+
+                return (bool) ($result[0] ?? false);
+            }, 'The pre-boot guard never disabled the RSVP button.');
+
+            $browser->assertButtonDisabled('[data-testid="rsvp-going"]');
+
+            // The loading state is announced through the live region, not
+            // silent — a screen reader hears where the control stands.
+            expect(bootStatusText($browser))->toContain('Loading interactive controls');
+
+            // A tap in the window cannot land: even a synthetic click fires
+            // nothing on a disabled button, so no answer is written.
+            $browser->script('document.querySelector(\'[data-testid="rsvp-going"]\').click();');
+
+            expect(Rsvp::query()
+                ->where('event_id', $event->id)
+                ->where('user_id', $member->id)
+                ->exists())->toBeFalse();
+        } finally {
+            $cdp->execute('Network.setBlockedURLs', ['urls' => []]);
+        }
+
+        // Recovery: with the runtime reachable again the page boots, the guard
+        // lifts, and the same control answers a real tap.
+        $browser->refresh();
+
+        waitForLivewireBoot($browser);
+
+        $browser->assertButtonEnabled('[data-testid="rsvp-going"]')
+            ->click('[data-testid="rsvp-going"]')
+            ->waitFor('[data-testid="rsvp-confirmed"]')
+            ->assertSeeIn('[data-testid="rsvp-confirmed"]', "You're in");
+
+        // Nobody was stopped, so boot stays silent: no stale loading line and
+        // no unprompted ready announcement for a member who touched nothing.
+        expect(bootStatusText($browser))->toBe('');
+
+        expect(Rsvp::query()
+            ->where('event_id', $event->id)
+            ->where('user_id', $member->id)
+            ->where('status', RsvpStatus::Going)
+            ->exists())->toBeTrue();
     });
 });

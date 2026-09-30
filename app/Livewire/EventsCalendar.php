@@ -6,6 +6,8 @@ use App\Enums\EventStatus;
 use App\Enums\RsvpStatus;
 use App\Models\Event;
 use App\Support\Events\DiscordEventsSource;
+use App\Support\Events\EventSearchLogger;
+use App\Support\SafeRedirect;
 use Carbon\CarbonImmutable;
 use Carbon\Exceptions\InvalidFormatException;
 use DateTimeZone;
@@ -21,11 +23,12 @@ use Livewire\Component;
 /**
  * The events page: a list and a month grid over the same rows.
  *
- * Server-rendered in one pass. There is deliberately no loading state on this
- * component and no fetch after paint — the LCP budget is 2.0s and the page's
- * largest element is the first event card, so anything that arrives in a second
- * round trip has already lost. The only loading state on this screen belongs to
- * the RSVP control, which is a thing the member started.
+ * Server-rendered in one pass. There is no fetch after paint — the LCP budget
+ * is 2.0s and the page's largest element is the first event card, so anything
+ * that arrives in a second round trip has already lost. Member-started
+ * re-renders (view toggle, month steps, the past drawer, clearing a search)
+ * show a skeleton while the round trip is in flight (TOG-5416); the RSVP
+ * control carries its own loading state, which is a thing the member started.
  *
  * The two views are one query rendered twice, not two components. A month grid
  * that asks its own question would disagree with the list beside it on the day an
@@ -57,7 +60,25 @@ class EventsCalendar extends Component
     #[Url(as: 'q', except: '')]
     public string $search = '';
 
+    /**
+     * Where the guest login links send the member back to after Discord.
+     *
+     * Same contract as `RsvpButton::$returnTo` (TOG-9254): captured once in
+     * mount, when the real page request is in hand. Reading the path in the
+     * card loop's blade would point `?next=` at the Livewire update endpoint
+     * after the first morph — and worse, would fork the fragment cache key
+     * per render. A persisted prop keeps the page path across updates, and
+     * the anon fragment cache keys on it. Null when the path fails the
+     * open-redirect guard, and the links stay bare.
+     */
+    public ?string $returnTo = null;
+
     private const VIEWS = ['list', 'calendar'];
+
+    public function mount(): void
+    {
+        $this->returnTo = SafeRedirect::safe(request()->getPathInfo());
+    }
 
     public function setView(string $view): void
     {
@@ -144,9 +165,28 @@ class EventsCalendar extends Component
         // a match hidden behind a closed drawer reads as "no results".
         $showPast = $this->showingPast || $searching;
 
+        // Record what was searched and what the guest saw (TOG-8400). One
+        // row per render: debounced typing settles through several states
+        // and each one is a result set the guest actually saw. The count is
+        // the visible results — local plus Discord rows, past matches only
+        // once revealed (the past list is capped at 20, so a huge tail reads
+        // as 20 — exact where it matters, at zero). The logger normalizes
+        // (case, whitespace, length) and never stores who searched: no user
+        // id, no session, no IP, no raw input. Fail-open by design — a down
+        // table is an unrecorded search, never a broken page.
+        if ($searching) {
+            app(EventSearchLogger::class)->record(
+                $this->search,
+                $upcoming->count() + ($showPast ? $past->count() : 0),
+            );
+        }
+
         return view('livewire.events-calendar', [
             'upcoming' => $upcoming,
             'past' => $past,
+            // TOG-9277: the guest card fragments key on this, so every card on
+            // the page shares one return-to value (see $returnTo).
+            'returnTo' => $this->returnTo,
             'weeks' => $this->weeks($upcoming->concat($past)),
             'monthLabel' => $this->monthStart()->format('F Y'),
             // Failed reads take precedence over an empty result, including search.

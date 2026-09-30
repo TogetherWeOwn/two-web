@@ -13,6 +13,10 @@ use App\Models\Event;
 use App\Models\Rsvp;
 use App\Models\User;
 use App\Support\EventInput;
+use App\Support\Events\AnonymousEventCard;
+use App\Support\RecurrenceInput;
+use App\Support\RecurrenceSchedule;
+use Carbon\CarbonImmutable;
 use Illuminate\Database\QueryException;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
@@ -46,13 +50,65 @@ class EventService
         });
     }
 
+    /**
+     * Create a recurring series: the parent row holding the rule, plus one row
+     * per occurrence the rule names — all drafts, like every other create.
+     *
+     * One transaction, so a failure leaves no half-series behind. The parent
+     * is index 1; children copy its field values, except status: a child
+     * starts as Draft even when created under an already-published parent, so
+     * extending a live series never announces meetings a moderator has not
+     * seen. Publishing the parent announces whatever exists then (see
+     * transitionTo); later children are published from their own rows.
+     */
+    public function createSeries(User $host, EventInput $input, RecurrenceInput $recurrence): Event
+    {
+        return DB::transaction(function () use ($host, $input, $recurrence): Event {
+            $parent = new Event;
+            $this->fill($parent, $input);
+            $parent->created_by = $host->getKey();
+            $parent->status = EventStatus::Draft;
+            $parent->recurrence_frequency = $recurrence->frequency;
+            $parent->recurrence_count = $recurrence->count;
+            $parent->recurrence_ends_on = $recurrence->endsOn;
+            $parent->recurrence_index = 1;
+            $parent->save();
+
+            $this->materializeMissingInstances($parent);
+
+            return $parent->fresh() ?? $parent;
+        });
+    }
+
     public function update(Event $event, EventInput $input): Event
     {
         return DB::transaction(function () use ($event, $input): Event {
-            $this->fill($event, $input);
-            $event->save();
+            // Locked like every other seat-changing write: a capacity increase
+            // frees seats, and the freed seats are dealt to the waitlist below.
+            // A concurrent rsvp(Going) slipping between the save and the deal
+            // would take the new seat ahead of the line — the same race the
+            // capacity check in rsvp() locks against.
+            $locked = Event::query()->whereKey($event->getKey())->lockForUpdate()->firstOrFail();
 
-            $this->syncAfterCommit($event);
+            $oldStartsAt = $locked->starts_at;
+            $oldEndsAt = $locked->ends_at;
+
+            $this->fill($locked, $input);
+            $locked->save();
+
+            // A parent whose times moved reprograms the future: children not
+            // yet started shift by the same delta, so the series stays weekly
+            // around the edit. Started or finished instances keep their times —
+            // members already planned around them.
+            if ($locked->isSeriesParent()) {
+                $this->shiftFutureChildren($locked, $oldStartsAt, $oldEndsAt);
+            }
+
+            $this->promoteWaitlist($locked);
+
+            $this->syncAfterCommit($locked);
+
+            $event->setRawAttributes($locked->getAttributes(), true);
 
             return $event;
         });
@@ -112,6 +168,10 @@ class EventService
             $locked->agent_version = $expectedVersion + 1;
             $locked->save();
 
+            // A raised cap frees seats whoever raised it. Same lock, same
+            // transaction, same first-come-first-served deal as the human path.
+            $this->promoteWaitlist($locked);
+
             $this->syncAfterCommit($locked);
 
             $event->setRawAttributes($locked->getAttributes(), true);
@@ -128,6 +188,41 @@ class EventService
     public function cancel(Event $event): Event
     {
         return $this->transitionTo($event, EventStatus::Cancelled);
+    }
+
+    /**
+     * Pause or reopen answers (TOG-8725). A flag flip, not a status
+     * transition: pausing keeps a published event visible while stopping new
+     * answers, and unlike cancelling it is reversible. Row-locked like every
+     * other event write.
+     *
+     * Reopening settles the backlog in the same locked write: seats freed
+     * while paused were never dealt (promotion freezes on a pause, below), and
+     * without this a newcomer answering after the reopen would take a freed
+     * seat ahead of the line that waited for it. Pausing dispatches no
+     * write-back — the mirror carries no RSVP-open state, so a pause changes
+     * nothing on the bot's side — but a reopen may have promoted rows, which
+     * is mirrored state, so it syncs.
+     */
+    public function setRsvpOpen(Event $event, bool $open): Event
+    {
+        return DB::transaction(function () use ($event, $open): Event {
+            $locked = Event::query()->whereKey($event->getKey())->lockForUpdate()->firstOrFail();
+
+            if ($locked->isRsvpOpen() !== $open) {
+                $locked->rsvp_open = $open;
+                $locked->save();
+
+                if ($open) {
+                    $this->promoteWaitlist($locked);
+                    $this->syncAfterCommit($locked);
+                }
+            }
+
+            $event->setRawAttributes($locked->getAttributes(), true);
+
+            return $event;
+        });
     }
 
     /**
@@ -161,6 +256,15 @@ class EventService
                 throw EventNotOpenException::forRsvp($locked);
             }
 
+            // A moderator pause (TOG-8725): the event stays published and
+            // visible, but takes no new answers while closed — unpublishing to
+            // the same end would hide the event itself. Read on the locked row
+            // like the check above, so a concurrent reopen cannot slip through.
+            // Withdrawals are deliberately not gated: leaving is always allowed.
+            if (! $locked->isRsvpOpen()) {
+                throw EventNotOpenException::forRsvpClosed($locked);
+            }
+
             $existing = Rsvp::query()
                 ->where('event_id', $locked->getKey())
                 ->where('user_id', $user->getKey())
@@ -191,6 +295,16 @@ class EventService
         });
     }
 
+    /**
+     * Record that a member no longer holds (or lines up for) a seat, and deal
+     * the freed seat to the line.
+     *
+     * The delete and the promotion share the event row lock and the
+     * transaction: a concurrent rsvp(Going) that reads "full" must block until
+     * this commits, by which time the waitlist head already holds the seat and
+     * the newcomer's count is right. A promotion outside this frame would let
+     * that newcomer take the seat ahead of the member who has been waiting.
+     */
     public function withdrawRsvp(Event $event, User $user): void
     {
         DB::transaction(function () use ($event, $user): void {
@@ -202,9 +316,68 @@ class EventService
                 ->delete();
 
             if ($deleted > 0) {
+                $this->promoteWaitlist($locked);
                 $this->syncAfterCommit($locked);
+                // TOG-9277: the mass delete above bypasses `Rsvp::deleted`, and
+                // the promotions' saves fire it per row — but only when there
+                // is a line. Bump unconditionally so a plain withdraw retires
+                // the cached guest fragments too.
+                AnonymousEventCard::bump($locked);
             }
         });
+    }
+
+    /**
+     * Deal freed seats to the head of the waitlist, earliest answer first.
+     *
+     * Runs inside the caller's transaction behind the caller's event row lock —
+     * it takes no lock of its own. Each promotion flips one waitlisted row to
+     * Going and resets its Discord mirror stamp, exactly as if the member had
+     * claimed the seat themselves: the seat is now spoken for on both sides,
+     * so the mirror is stale. Only open events promote: an ended or cancelled
+     * event has no seats to deal, and leaving the line untouched there keeps
+     * the withdraw a plain delete. The line order is the same (created_at, id)
+     * pair `waitlistPositionFor()` numbers places by, so the member shown #1
+     * is the one who gets the seat.
+     */
+    private function promoteWaitlist(Event $locked): void
+    {
+        if ($locked->status !== EventStatus::Published || $locked->hasEnded()) {
+            return;
+        }
+
+        // A moderator pause freezes the line (TOG-8725): seats freed while
+        // paused stay free until the reopen settles them. Dealing them now
+        // would move seats while the event claims to take no answers, and
+        // the reopen path above promotes in the same locked write — so the
+        // head of the line never loses a freed seat to a newcomer.
+        if (! $locked->isRsvpOpen()) {
+            return;
+        }
+
+        if ($locked->capacity === null) {
+            $free = PHP_INT_MAX;
+        } else {
+            $free = $locked->capacity - $locked->goingCount();
+
+            if ($free <= 0) {
+                return;
+            }
+        }
+
+        $heads = Rsvp::query()
+            ->where('event_id', $locked->getKey())
+            ->where('status', RsvpStatus::Waitlisted)
+            ->orderBy('created_at')
+            ->orderBy('id')
+            ->limit($free)
+            ->get();
+
+        foreach ($heads as $rsvp) {
+            $rsvp->status = RsvpStatus::Going;
+            $rsvp->synced_to_discord_at = null;
+            $rsvp->save();
+        }
     }
 
     private function transitionTo(Event $event, EventStatus $to): Event
@@ -223,6 +396,25 @@ class EventService
                 $locked->status = $to;
                 $locked->save();
 
+                // A series moves together: publishing the parent announces every
+                // instance that exists, cancelling it calls them all off. Each
+                // child is transitioned through the same path, so the terminal
+                // rule holds for every row and every row gets its write-back —
+                // a child that already reached the target state (a week skipped
+                // by cancelling early) is skipped, never forced.
+                if ($locked->isSeriesParent()) {
+                    foreach ($locked->childEvents()->lockForUpdate()->get() as $child) {
+                        // Only the states this action applies to: a past instance
+                        // keeps its history ("it ran" is not "called off"), and a
+                        // week skipped by cancelling early stays as it is.
+                        if (! in_array($child->status, [EventStatus::Draft, EventStatus::Published], true)) {
+                            continue;
+                        }
+
+                        $this->transitionRow($child, $to);
+                    }
+                }
+
                 $this->syncAfterCommit($locked);
             }
 
@@ -230,6 +422,119 @@ class EventService
 
             return $event;
         });
+    }
+
+    /**
+     * Transition one row without touching its children. A series child is a
+     * leaf: cancelling one instance to skip a week must not cascade anywhere.
+     */
+    private function transitionRow(Event $row, EventStatus $to): void
+    {
+        if ($row->status === EventStatus::Cancelled) {
+            throw EventNotOpenException::forTransition($row, $to);
+        }
+
+        if ($row->status !== $to) {
+            $row->status = $to;
+            $row->save();
+
+            $this->syncAfterCommit($row);
+        }
+    }
+
+    /**
+     * Shift every not-yet-started child of a series parent by the same
+     * absolute delta the parent's times moved.
+     *
+     * The delta is seconds, not wall arithmetic: the parent moved from one
+     * instant to another and the children follow by the same amount, which is
+     * DST-proof in both directions. A child whose start moved between the read
+     * and the save is guarded by the row lock, which serialises this against
+     * every other event write.
+     */
+    private function shiftFutureChildren(Event $parent, CarbonImmutable $oldStartsAt, CarbonImmutable $oldEndsAt): void
+    {
+        $startDelta = $parent->starts_at->getTimestamp() - $oldStartsAt->getTimestamp();
+        $endDelta = $parent->ends_at->getTimestamp() - $oldEndsAt->getTimestamp();
+
+        if ($startDelta === 0 && $endDelta === 0) {
+            return;
+        }
+
+        $children = $parent->childEvents()->lockForUpdate()
+            ->where('starts_at', '>', now())
+            ->get();
+
+        foreach ($children as $child) {
+            $child->starts_at = $child->starts_at->addSeconds($startDelta);
+            $child->ends_at = $child->ends_at->addSeconds($endDelta);
+            $child->save();
+
+            $this->syncAfterCommit($child);
+        }
+    }
+
+    /**
+     * Create every occurrence the parent's rule names that does not exist yet.
+     * Index 1 is the parent itself, so it starts at 2.
+     *
+     * Idempotent by the index pairs already in the table: re-running creates
+     * only what is missing and never touches an existing row — including one
+     * a moderator cancelled to skip a week. That is the whole contract with
+     * `events:reconcile`, which calls this on every pass.
+     *
+     * @return int how many rows were created
+     */
+    public function materializeMissingInstances(Event $parent): int
+    {
+        // Read once and null-check the value, not isSeriesParent(): the check
+        // below narrows the type for the call that follows, and a helper that
+        // answers a question cannot do that narrowing for us.
+        $frequency = $parent->recurrence_frequency;
+
+        if ($frequency === null) {
+            return 0;
+        }
+
+        $occurrences = RecurrenceSchedule::occurrences(
+            $parent->starts_at,
+            $parent->ends_at,
+            $parent->timezone,
+            $frequency,
+            $parent->recurrence_count,
+            $parent->recurrence_ends_on,
+        );
+
+        $existing = Event::query()
+            ->where('parent_event_id', $parent->getKey())
+            ->pluck('recurrence_index')
+            ->all();
+
+        $created = 0;
+
+        foreach ($occurrences as $index => [$startsAt, $endsAt]) {
+            if ($index === 1 || in_array($index, $existing, true)) {
+                continue;
+            }
+
+            $child = new Event;
+            $child->title = $parent->title;
+            $child->game = $parent->game;
+            $child->description = $parent->description;
+            $child->starts_at = $startsAt;
+            $child->ends_at = $endsAt;
+            $child->timezone = $parent->timezone;
+            $child->location = $parent->location;
+            $child->capacity = $parent->capacity;
+            $child->created_by = $parent->created_by;
+            $child->status = EventStatus::Draft;
+            $child->parent_event_id = $parent->getKey();
+            $child->recurrence_index = $index;
+            $child->save();
+            $created++;
+        }
+
+        return $created;
     }
 
     private function fill(Event $event, EventInput $input): void
@@ -276,6 +581,22 @@ class EventService
     {
         if (! $event->isMirroredInDiscord()) {
             return;
+        }
+
+        // A genuinely new member or moderator change re-arms a terminally-refused
+        // row (TOG-6990): the stamp answered an older operation, and the dispatch
+        // below carries a new one the bot has not ruled on. Cleared in the outer
+        // write, never inside the unique-lock savepoint below — a failed clear
+        // there would read as "no fresh lock" and skip silently. If the write
+        // rolls back, the stamp stays with it, which is correct: the change
+        // never happened. A lock-skip keeps the clear: the already-queued job
+        // re-reads the row and either lands (clearing the stamp itself) or is
+        // refused again (re-stamping it), so the verdict is always re-confirmed.
+        if ($event->discord_sync_failed_at !== null) {
+            $event->forceFill([
+                'discord_sync_failed_at' => null,
+                'discord_sync_failure_code' => null,
+            ])->save();
         }
 
         try {

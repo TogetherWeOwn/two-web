@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\Auth;
 
 use App\Models\User;
+use App\Support\SafeRedirect;
 use App\Support\Testing\DiscordProvider as TestingDiscordProvider;
 use Illuminate\Contracts\View\View;
 use Illuminate\Http\RedirectResponse;
@@ -43,8 +44,17 @@ class DiscordLoginController
     private const SCOPES = ['identify', 'guilds.members.read'];
 
     /** Send the member to Discord to approve us. */
-    public function redirect(): RedirectResponse
+    public function redirect(Request $request): RedirectResponse
     {
+        // Carry the guest's return-to page across the OAuth round trip, or
+        // nothing. Only a value that survives the open-redirect guard reaches
+        // the session — hostile values leave no trace.
+        $next = SafeRedirect::safe($request->query('next'));
+
+        if ($next !== null) {
+            $request->session()->put('login_next', $next);
+        }
+
         // setScopes, not scopes: scopes() *merges* with the driver's defaults, and
         // the Discord driver defaults to asking for `email`. We have no feature
         // that uses an email address, so we must not ask for one.
@@ -116,7 +126,35 @@ class DiscordLoginController
         // way in; a remember cookie adds a second one that cannot re-read roles.
         Auth::login($user);
 
-        return redirect()->intended(route('profile'));
+        // A dead-session write left a durable notice (TOG-8560): the member
+        // hit submit past SESSION_LIFETIME and the `auth` middleware bounced
+        // them here. Reflash it as `auth_error=expired` — the home banner's
+        // key — so the landing page says why they are signing in again.
+        // Pulled (consumed), never peeked: a flash survives exactly one more
+        // request, which is the landing, so the next login stays quiet.
+        // Pulled before the landing redirects below so it rides along either
+        // way; a normal login simply finds nothing and flashes nothing.
+        $expiredNotice = (bool) $request->session()->pull('expired_session_notice', false);
+
+        // Back to the page the guest came from, when they came from one and
+        // the value survives the open-redirect guard. First in line: an
+        // explicit `?next=` beats the `auth` middleware's stored intended URL.
+        // Anything else keeps the old profile landing.
+        $next = SafeRedirect::safe($request->session()->pull('login_next'));
+
+        $landing = $next !== null
+            ? redirect()->to($next)
+            : redirect()->intended(route('profile'));
+
+        if ($next !== null) {
+            $request->session()->forget('url.intended');
+        }
+
+        if ($expiredNotice) {
+            $landing->with('auth_error', 'expired');
+        }
+
+        return $landing;
     }
 
     public function logout(Request $request): RedirectResponse

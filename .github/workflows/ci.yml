@@ -9,6 +9,10 @@ on:
   pull_request:
   push:
     branches: [main]
+  # Dispatched by the release workflow (TOG-10036) on release-please branches:
+  # PRs opened with GITHUB_TOKEN trigger no workflows, so the required checks
+  # would never run on the release PR without this path.
+  workflow_dispatch:
 
 # A second push to the same PR cancels the first. Never cancel `main` — its result
 # is what the staging deploy keys off.
@@ -30,15 +34,17 @@ jobs:
   # ---------------------------------------------------------------------------
   static:
     name: static
-    runs-on: [self-hosted, two-selfhosted]
+    runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
 
       # Where did this job actually run? `runs-on:` asks; only the job can
-      # answer. Fails on a GitHub-hosted runner (which bills) and publishes its
-      # runner_name as an annotation. First, so a misrouted job burns seconds
-      # rather than a full suite. See ci/attest-runner.sh (TOG-2847).
+      # answer. Fails on a non-hosted runner (the private group cannot serve
+      # this public repo, so a misrouted job would queue forever) and publishes
+      # its runner_name as an annotation. First, so a misrouted job burns
+      # seconds rather than a full suite. See ci/attest-runner.sh (TOG-8909;
+      # the pre-flip self-hosted gate was TOG-2847).
       - name: Attest the runner
         run: ./ci/attest-runner.sh
 
@@ -54,7 +60,7 @@ jobs:
       # And the attestation itself, which is the one check in this repository that
       # cannot be proved by the run it is part of: on a correctly-routed job it
       # passes, and so does a version that returns 0 unconditionally. This drives
-      # it through a synthetic hosted runner, a spoofed name and an unaudited host
+      # it through a synthetic hosted runner, a spoofed name and a private host
       # and pins the exit code and reason for each, then asserts every job in every
       # workflow still carries the step. Under a second, no network.
       - name: Runner attestation self-test
@@ -196,6 +202,15 @@ jobs:
       - name: Bundle budget self-test
         run: node ci/check-bundle-budget.mjs --selftest
 
+      # The dependency audit predicate (TOG-8405). Its own `--selftest` runs
+      # here, in `static`, for the same reason as the line above: the live
+      # audit needs the public feeds so it runs in `deps-audit`, and a
+      # predicate that quietly stopped failing is indistinguishable from
+      # clean lockfiles unless something offline proves it still fails.
+      # Canned fixtures in a temp dir, no network, milliseconds.
+      - name: Dependency audit self-test
+        run: ./ci/deps-audit.sh --selftest
+
       # The `budgets` verdict, which had no test until it shipped a defect. lhci
       # runs there under `continue-on-error: true`, so its exit code is discarded
       # and `ci/lh-annotate.mjs` is what actually turns the job red — the whole
@@ -274,6 +289,14 @@ jobs:
       - name: Postgres backup self-test
         run: ./ci/pg-backup-selftest.sh
 
+      # The log watcher's offline half (TOG-8730): fixture logs through the
+      # real script — quiet stays silent, alert lines page, the offset
+      # advances, rotation re-reads, a missing log pages. Same pattern as the
+      # backup self-test above. No network, no log file, no database; the
+      # script is POSIX sh with no dependencies beyond grep/tail/wc.
+      - name: Error log watch self-test
+        run: ./bin/error-log-watch.sh --selftest
+
       - uses: shivammathur/setup-php@f3e473d116dcccaddc5834248c87452386958240 # v2
         with:
           php-version: ${{ env.PHP_VERSION }}
@@ -338,7 +361,7 @@ jobs:
   # ---------------------------------------------------------------------------
   pest:
     name: pest
-    runs-on: [self-hosted, two-selfhosted]
+    runs-on: ubuntu-latest
     timeout-minutes: 15
 
     services:
@@ -362,7 +385,7 @@ jobs:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
 
       # See the note in `static`. Every job attests; a job that does not could be
-      # moved onto a billable runner with nothing going red (TOG-2847).
+      # moved onto a misrouted runner with nothing going red (TOG-8909; pre-flip gate TOG-2847).
       - name: Attest the runner
         run: ./ci/attest-runner.sh
 
@@ -448,7 +471,7 @@ jobs:
   # ---------------------------------------------------------------------------
   dusk:
     name: dusk
-    runs-on: [self-hosted, two-selfhosted]
+    runs-on: ubuntu-latest
     timeout-minutes: 20
 
     # The persistent self-hosted hosts run Chrome as an unprivileged user,
@@ -484,7 +507,7 @@ jobs:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
 
       # See the note in `static`. Every job attests; a job that does not could be
-      # moved onto a billable runner with nothing going red (TOG-2847).
+      # moved onto a misrouted runner with nothing going red (TOG-8909; pre-flip gate TOG-2847).
       - name: Attest the runner
         run: ./ci/attest-runner.sh
 
@@ -541,8 +564,8 @@ jobs:
       # chromium-browser package is a snap transitional package, and snap is not a
       # reliable dependency inside an Actions job, so use Google's apt package.
       #
-      # Three host flakes met here, all TOG-5877. First, the rbx1 uplink refuses
-      # dl.google.com intermittently (4–6 of 30 connects, operator-measured), so
+      # Three download flakes met here, all TOG-5877. First, the runner uplink
+      # refuses dl.google.com intermittently (4–6 of 30 connects, measured), so
       # the download retries with backoff instead of failing the job on one
       # refused connection. Second, a prior run's Chrome install leaves its apt
       # source behind on the persistent runner, and a later `apt-get update`
@@ -655,36 +678,6 @@ jobs:
           retention-days: 14
           if-no-files-found: ignore
 
-      # Every test now screenshots on pass or fail (tests/DuskTestCase.php
-      # tearDown, TOG-782), so evidence exists regardless of outcome — hence
-      # always() rather than failure() like the GH Actions upload above. This
-      # goes to the Paperclip board as a second, parallel destination (the
-      # owner asked for evidence he can watch from the board, not by clicking
-      # into a GH Actions run); the GH Actions artifact upload above is
-      # unrelated and untouched.
-      #
-      # continue-on-error rather than gating on the secret's presence: until
-      # PAPERCLIP_BOARD_API_KEY is minted (a one-time human action — see PR
-      # description) this step goes visibly red, which is a more honest
-      # signal than silently skipping.
-      - name: Upload Dusk evidence to Paperclip
-        if: always()
-        continue-on-error: true
-        env:
-          PAPERCLIP_API_URL: ${{ vars.PAPERCLIP_API_URL }}
-          PAPERCLIP_API_KEY: ${{ secrets.PAPERCLIP_BOARD_API_KEY }}
-          PAPERCLIP_COMPANY_ID: ${{ vars.PAPERCLIP_COMPANY_ID }}
-          PAPERCLIP_TASK_ID: ${{ vars.PAPERCLIP_E2E_EVIDENCE_ISSUE_ID }}
-          PAPERCLIP_RUN_ID: gh-actions-${{ github.run_id }}-${{ github.job }}
-        run: |
-          shopt -s nullglob
-          for f in tests/Browser/screenshots/*.png; do
-            name="$(basename "$f" .png)"
-            ./.github/scripts/paperclip-upload-artifact.sh "$f" \
-              --title "two-web/${{ github.run_id }}/dusk/${name}" \
-              --summary "Dusk evidence, run ${{ github.run_id }}, job dusk"
-          done
-
   # ---------------------------------------------------------------------------
   # Budgets. Performance and accessibility are enforced as failures, not warnings.
   # LCP < 2.0s and CLS < 0.1 on a mid-range phone profile; WCAG 2.2 AA with no
@@ -693,7 +686,7 @@ jobs:
   # ---------------------------------------------------------------------------
   budgets:
     name: budgets
-    runs-on: [self-hosted, two-selfhosted]
+    runs-on: ubuntu-latest
     timeout-minutes: 20
 
     services:
@@ -717,7 +710,7 @@ jobs:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
 
       # See the note in `static`. Every job attests; a job that does not could be
-      # moved onto a billable runner with nothing going red (TOG-2847).
+      # moved onto a misrouted runner with nothing going red (TOG-8909; pre-flip gate TOG-2847).
       - name: Attest the runner
         run: ./ci/attest-runner.sh
 
@@ -1038,8 +1031,63 @@ jobs:
           if-no-files-found: ignore
 
   # ---------------------------------------------------------------------------
-  # The aggregate. It is one of the six required checks on `main` (TWO-36) — the
-  # four jobs above are required too, so protection does not depend on this guard
+  # Dependency audit. composer audit + npm audit, failing on high/critical
+  # advisories (TOG-8405). Both read the lockfiles, so this needs no install,
+  # no vendor/, no node_modules, no database — seconds, not minutes.
+  #
+  # The threshold lives in ci/deps-audit.sh, not here: composer's advisory feed
+  # carries entries with no severity field at all, and trusting either tool's
+  # exit code alone would pass those quietly. The script allowlists low/medium
+  # and fails on everything else, fail-closed on unparseable output.
+  # ---------------------------------------------------------------------------
+  deps-audit:
+    name: deps-audit
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+
+      # See the note in `static`. Every job attests; a job that does not could be
+      # moved onto a billable runner with nothing going red
+      # (TOG-8909; pre-flip gate TOG-2847).
+      - name: Attest the runner
+        run: ./ci/attest-runner.sh
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      # No extensions: the audit reads lockfiles and phones the free public
+      # feeds (packagist.org, the npm registry). Nothing to compile against,
+      # no database, no paid service.
+      - uses: shivammathur/setup-php@f3e473d116dcccaddc5834248c87452386958240 # v2
+        with:
+          php-version: ${{ env.PHP_VERSION }}
+          coverage: none
+          tools: composer:v2
+
+      # See the pin note in `static`: the shared /usr/bin/php link moves under
+      # concurrent jobs, so this job pins the versioned binary too.
+      - name: Pin the setup-php PHP and Composer binaries (TOG-5877)
+        run: |
+          php_bin="$(command -v "php${PHP_VERSION}")"
+          [ -n "$php_bin" ] || { echo "::error::php${PHP_VERSION} not found after setup-php — refusing to run on the wrong interpreter (TOG-5877)"; exit 1; }
+          composer_src="$(command -v composer)"
+          [ -n "$composer_src" ] || { echo "::error::composer not found after setup-php (TOG-5877)"; exit 1; }
+          head -1 "$composer_src" | grep -q php || { echo "::error::composer is not a PHP script — cannot pin it to the pinned interpreter (TOG-5877)"; exit 1; }
+          cp "$composer_src" "$RUNNER_TEMP/composer-pinned"
+          echo "CI_PHP_BIN=$php_bin" >> "$GITHUB_ENV"
+          echo "CI_COMPOSER_BIN=$RUNNER_TEMP/composer-pinned" >> "$GITHUB_ENV"
+          "$php_bin" -v | head -1
+          [ "$("$php_bin" -r 'echo PHP_MAJOR_VERSION, ".", PHP_MINOR_VERSION;')" = "$PHP_VERSION" ] || { echo "::error::pinned PHP is $("$php_bin" -v | head -1), not PHP ${PHP_VERSION} — refusing to run on the wrong interpreter (TOG-5877)"; exit 1; }
+          "$php_bin" "$RUNNER_TEMP/composer-pinned" --version
+
+      - name: Dependency audit
+        run: ./ci/deps-audit.sh --run
+
+  # ---------------------------------------------------------------------------
+  # The aggregate. It is one of the seven required checks on `main` (TWO-36) — the
+  # five jobs above are required too, so protection does not depend on this guard
   # staying correct through future edits. See docs/ci.md for the full list.
   #
   # Protection matches the check-run *name*, which is a job's `name:` when it sets
@@ -1047,19 +1095,19 @@ jobs:
   # string. Rename either half and the required check never arrives: every PR waits
   # forever, and it presents as CI hanging rather than as a misconfiguration.
   #
-  # What this job buys on top of the four: anything added above goes red through
+  # What this job buys on top of the five: anything added above goes red through
   # here the moment it is in `needs`, with no protection change at all.
   # ---------------------------------------------------------------------------
   tests:
     name: tests
-    runs-on: [self-hosted, two-selfhosted]
+    runs-on: ubuntu-latest
     timeout-minutes: 5
     if: always()
-    needs: [static, pest, dusk, budgets]
+    needs: [static, pest, dusk, budgets, deps-audit]
     steps:
       # This job had no checkout: it only reads `needs` results. It needs one now
-      # so it can attest its own runner — the aggregate bills like any other job,
-      # and being cheap is not the same as being free (TOG-2847).
+      # so it can attest its own runner — a job that does not attest could be
+      # misrouted with nothing going red (TOG-8909).
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
 
       - name: Attest the runner
@@ -1067,10 +1115,11 @@ jobs:
 
       - name: Gate
         run: |
-          echo "static:  ${{ needs.static.result }}"
-          echo "pest:    ${{ needs.pest.result }}"
-          echo "dusk:    ${{ needs.dusk.result }}"
-          echo "budgets: ${{ needs.budgets.result }}"
+          echo "static:     ${{ needs.static.result }}"
+          echo "pest:       ${{ needs.pest.result }}"
+          echo "dusk:       ${{ needs.dusk.result }}"
+          echo "budgets:    ${{ needs.budgets.result }}"
+          echo "deps-audit: ${{ needs.deps-audit.result }}"
           if [ "${{ contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled') || contains(needs.*.result, 'skipped') }}" = "true" ]; then
             echo "::error::CI is red. Nobody merges. Read the failing job — do not re-run it."
             exit 1

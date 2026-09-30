@@ -1,6 +1,7 @@
 <?php
 
 use App\Enums\EventStatus;
+use App\Http\Controllers\Auth\AuthStatusController;
 use App\Http\Controllers\Auth\DiscordLoginController;
 use App\Http\Controllers\Auth\StagingQaLoginController;
 use App\Http\Controllers\DesignLab\HallmarkController;
@@ -28,8 +29,13 @@ Route::get('/', HomeController::class)->name('home');
 
 // Non-production visual experiments. These routes share the homepage's real
 // counts, featured content and join flow, but never replace the production page.
-Route::get('/design-lab/hallmark', HallmarkController::class)->name('design-lab.hallmark');
-Route::get('/design-lab/taste', [HomeController::class, 'taste'])->name('design-lab.taste');
+// They are not registered in production at all. The controllers repeat the
+// check so a cached or manually registered route still fails closed (the same
+// pattern as the staging QA login below).
+if (! app()->environment('production')) {
+    Route::get('/design-lab/hallmark', HallmarkController::class)->name('design-lab.hallmark');
+    Route::get('/design-lab/taste', [HomeController::class, 'taste'])->name('design-lab.taste');
+}
 
 // Public pages plus the shareable event pages (TOG-7072). Keep this explicit:
 // auth callbacks, signed-in profiles, the JSON collection and /admin never
@@ -46,7 +52,9 @@ Route::get('/sitemap_index.xml', function () {
         ['loc' => route('join'), 'changefreq' => 'monthly', 'priority' => '0.9'],
         ['loc' => route('events.index'), 'changefreq' => 'daily', 'priority' => '0.8'],
         ['loc' => route('about'), 'changefreq' => 'monthly', 'priority' => '0.7'],
+        ['loc' => route('faq'), 'changefreq' => 'monthly', 'priority' => '0.7'],
         ['loc' => route('rules'), 'changefreq' => 'monthly', 'priority' => '0.7'],
+        ['loc' => route('privacy'), 'changefreq' => 'monthly', 'priority' => '0.7'],
     ];
 
     $events = Event::query()
@@ -157,6 +165,15 @@ Route::get('/auth/discord/callback', [DiscordLoginController::class, 'callback']
     ->middleware('throttle:10,1')
     ->name('login.callback');
 
+// TOG-8136: the cross-tab sign-out probe the layout's tab-sync script asks on
+// visibility/focus. Public on purpose — a logged-out tab must get
+// `{"authenticated":false}`, not the `auth`-group 302 — and throttled like the
+// neighbouring auth reads: visibility transitions are user-driven and rare,
+// and the throttle is the backstop against a stuck script looping the probe.
+Route::get('/auth/status', AuthStatusController::class)
+    ->middleware('throttle:60,1')
+    ->name('auth.status');
+
 // Staging's QA route is deliberately absent from every other environment. The
 // controller repeats the environment check so a cached or manually registered
 // route still fails closed, and it owns the secret comparison before fixture lookup.
@@ -167,7 +184,11 @@ if (app()->environment('staging')) {
 }
 
 // POST only. A logout on GET can be fired by any <img src> a member loads.
-Route::post('/logout', [DiscordLoginController::class, 'logout'])->name('logout');
+// Throttled like every other write (TOG-8709): the audit test fails a new
+// POST route that ships without one, and this line is what keeps that true.
+Route::post('/logout', [DiscordLoginController::class, 'logout'])
+    ->middleware('throttle:30,1')
+    ->name('logout');
 
 Route::middleware('auth')->group(function () {
     // The singular URL remains the post-login destination. Canonical member
@@ -177,8 +198,6 @@ Route::middleware('auth')->group(function () {
         ->middleware('member-access-log:member,view')->name('profile');
     Route::get('/members/{user}', [ProfileController::class, 'show'])
         ->middleware('member-access-log:member,view')->name('profiles.show');
-    Route::patch('/members/{user}', [ProfileController::class, 'update'])
-        ->middleware('member-access-log:member,update')->name('profiles.update');
 
     // Events. The wildcard binds on `event_key`, not the autoincrement id — see
     // Event::getRouteKeyName(). That is the same string the bot keys its Discord
@@ -192,11 +211,22 @@ Route::middleware('auth')->group(function () {
     // serves the HTML page (see above) and one URL answering with two media types
     // is how you end up with a crawler and a browser seeing different sites.
     Route::get('/events.json', [EventController::class, 'index'])->name('events.json');
-    Route::post('/events', [EventController::class, 'store'])->name('events.store');
+    Route::post('/events', [EventController::class, 'store'])
+        ->middleware('throttle:30,1')->name('events.store');
     Route::get('/events/{event}', [EventController::class, 'show'])->name('events.show');
-    Route::patch('/events/{event}', [EventController::class, 'update'])->name('events.update');
-    Route::post('/events/{event}/publish', [EventStatusController::class, 'publish'])->name('events.publish');
-    Route::post('/events/{event}/cancel', [EventStatusController::class, 'cancel'])->name('events.cancel');
+    Route::patch('/events/{event}', [EventController::class, 'update'])
+        ->middleware('throttle:30,1')->name('events.update');
+    Route::post('/events/{event}/publish', [EventStatusController::class, 'publish'])
+        ->middleware('throttle:30,1')->name('events.publish');
+    Route::post('/events/{event}/cancel', [EventStatusController::class, 'cancel'])
+        ->middleware('throttle:30,1')->name('events.cancel');
+    // Pause and reopen answers (TOG-8725). Same deliberate-verb shape as
+    // publish/cancel rather than a `status` field on the update — and the
+    // same `throttle:30,1` line, or the TOG-8709 coverage test fails.
+    Route::post('/events/{event}/rsvp-pause', [EventStatusController::class, 'pauseRsvps'])
+        ->middleware('throttle:30,1')->name('events.rsvp.pause');
+    Route::post('/events/{event}/rsvp-reopen', [EventStatusController::class, 'reopenRsvps'])
+        ->middleware('throttle:30,1')->name('events.rsvp.reopen');
 
     // One answer per member per event, so the RSVP is a singular sub-resource:
     // there is no collection to list and no id to hand back.
@@ -206,10 +236,15 @@ Route::middleware('auth')->group(function () {
     // the middleware refuses a hammering run before validation, policy and
     // the database run, keyed per member like the controller limiter. Both
     // verbs share the one bucket, so switching PUT/DELETE cannot multiply it.
+    //
+    // TOG-8824: a named limiter, not bare `throttle:12,1`. The bare form keys
+    // an authenticated request by sha1(user id) alone, so RSVP writes shared
+    // one counter with every `throttle:10,1` route (/join/discord,
+    // /auth/discord/*) and hammering one side could 429 the other.
     Route::put('/events/{event}/rsvp', [RsvpController::class, 'update'])
-        ->middleware('throttle:12,1')
+        ->middleware('throttle:rsvp-writes')
         ->name('events.rsvp.update');
     Route::delete('/events/{event}/rsvp', [RsvpController::class, 'destroy'])
-        ->middleware('throttle:12,1')
+        ->middleware('throttle:rsvp-writes')
         ->name('events.rsvp.destroy');
 });

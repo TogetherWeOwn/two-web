@@ -30,7 +30,10 @@ return [
 
     // The one admitted caller. Never accepted from the request: the credential
     // alone identifies the grant, and the grant carries this value for audit.
-    'caller_agent_id' => env('AGENT_EVENTS_CALLER_AGENT_ID') ?: 'c1f22b2f-d85f-41e1-9c16-9ca24ac06a11',
+    // Env-only with no default: an unconfigured caller denies every call
+    // (see AgentEventService), so no real agent id can leak into the repo
+    // through this default.
+    'caller_agent_id' => env('AGENT_EVENTS_CALLER_AGENT_ID'),
 
     // Gate 2 limits: 10 mutating and 30 reads per minute per grant, with a
     // service-level ceiling so one grant cannot spend the whole budget.
@@ -38,4 +41,22 @@ return [
     'reads_per_minute' => (int) env('AGENT_EVENTS_READS_PER_MINUTE', 30),
     'service_mutating_per_minute' => (int) env('AGENT_EVENTS_SERVICE_MUTATING_PER_MINUTE', 60),
     'service_reads_per_minute' => (int) env('AGENT_EVENTS_SERVICE_READS_PER_MINUTE', 300),
+
+    /*
+     | How long a caller-scoped idempotency replay row is kept.
+     |
+     | Ninety days is well past any retry horizon (job backoffs top out at
+     | hours) and short enough that one row per agent operation does not grow
+     | the table forever. A retry arriving after its row was pruned
+     | re-executes; the quota guard and optimistic-concurrency version
+     | underneath make that duplicate-safe. Pruning runs daily —
+     | routes/console.php.
+     */
+    'idempotency_retention_days' => (int) env('AGENT_EVENTS_IDEMPOTENCY_RETENTION_DAYS', 90),
+
+    // The outer route shield (TOG-8402): every hit per credential per minute,
+    // counted before auth, the grant lookup and the audit write. Sits above
+    // the inner budgets' sum on purpose — a flood guard, not the allowance —
+    // so the bot's normal burst never sees it.
+    'route_per_minute' => (int) env('AGENT_EVENTS_ROUTE_PER_MINUTE', 60),
 ];

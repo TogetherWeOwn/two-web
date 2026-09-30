@@ -64,7 +64,7 @@ publication blocker.
 | `togetherweown.com` mentions in prose docs | `docs/member-data-model.md:110` (withdrawn import), `README.md:112` (subdomain launch language — **stale**: `docs/dns.md` now recommends skipping the intermediate subdomain and launching at the apex), `docs/wordpress-apex/README.md` | KEEP, with one note: README's "launches on a subdomain" paragraph drifts from the current apex-swap decision. Docs tidy-up, not a scrub issue. |
 | `Paperclip/Coolify` in `.env.example:89` (comment), `docs/cold-setting-restart-cards.md:96` (restart command deliberately **not** pinned — host-ops knowledge, fail-closed via `RestartCommandNotPinnedException`) | comments + decision record | KEEP — no live command, hostname, or credential is present; the decision record explicitly refuses to fabricate one. |
 | `services.paperclip` block (`PAPERCLIP_API_URL/TOKEN/COMPANY_ID/OPERATOR_*`) | `config/services.php:148-159` | KEEP — already fully parameterized (env-only, fail-closed when absent). No live URL, token, or UUID in the repo. |
-| Audited runner prefixes (`coolify-vps-*`, `ci-rbx1-*`, `ci-w2494-*` — operator-audited per `ab9d101`), `COOLIFY_*_DEPLOY_HOOK`, `STAGING_URL` | `.github/workflows/*.yml`, `ci/deploy-target.sh`, `ci/attest-runner*.sh`, `ci/runner-ports.sh`, `ci/reclaim-ports.sh` | KEEP while private — see §4. |
+| Self-hosted runner-name prefixes (operator-audited), `COOLIFY_*_DEPLOY_HOOK`, `STAGING_URL` | `.github/workflows/*.yml`, `ci/deploy-target.sh`, `ci/attest-runner*.sh`, `ci/runner-ports.sh`, `ci/reclaim-ports.sh` | KEEP while private — see §4. The hosted-runner migration (TOG-8909, PR #468) owns the removal of the private runner names from `ci/attest-runner*.sh`, not this scrub. |
 
 ## 4. Build / deployment separation while private
 

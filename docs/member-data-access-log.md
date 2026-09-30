@@ -80,10 +80,13 @@ it is the one test here whose job starts later.
 
 ## Member-profile coverage (TOG-7057)
 
-`profile`, `profiles.show`, and `profiles.update` carry the same control behind
-`auth`. Reads use `member,view`; PATCH uses `member,update`. The viewer remains the
+`profile` and `profiles.show` carry the same control behind
+`auth` (`member,view`). The viewer remains the
 signed-in actor, never the route's target. The viewer-own-record exclusion below
-is unchanged, so viewing or updating your own profile writes no row.
+is unchanged, so viewing your own profile writes no row. (TOG-8440, per the
+TOG-8433 spec: PATCH /members/{user} — `profiles.update` — is deleted;
+MemberProfile::save() is the single writer and its Livewire update endpoint
+never runs this middleware, so profile writes log nothing here by construction.)
 
 Laravel can bind `{user}` before this middleware arms its Eloquent listener. The
 middleware therefore also observes bound `User`/`Profile` parameters before
@@ -94,7 +97,7 @@ targets are not added by this fallback.
 
 `tests/Feature/MemberDataAccessCompletenessTest.php` commits the TOG-6776 proposed
 gate and covers both HTML and JSON Accept headers, profiles present/absent, exact
-actor/subject fields, own-record exclusions, guest/404/denied-PATCH no-write
+actor/subject fields, own-record exclusions, guest/404/denied-save no-write
 behavior, and log-outage refusal. The profile route still serves HTML; the test
 also exercises a JSON response from a bound-member fixture. No JSON endpoint is
 introduced. A route-table guard covers the `members` namespace, profile controller,

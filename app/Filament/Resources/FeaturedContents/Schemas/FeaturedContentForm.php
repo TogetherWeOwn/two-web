@@ -2,6 +2,7 @@
 
 namespace App\Filament\Resources\FeaturedContents\Schemas;
 
+use App\Rules\HttpsImageUrl;
 use Filament\Forms\Components\DateTimePicker;
 use Filament\Forms\Components\Textarea;
 use Filament\Forms\Components\TextInput;
@@ -43,10 +44,25 @@ class FeaturedContentForm
                             ->maxLength(255),
                         TextInput::make('image_url')
                             ->url()
+                            // TOG-7473: `url()` alone accepts ftp:// and any
+                            // https:// host, including .svg and tracking
+                            // pixels, rendered to every visitor. HttpsImageUrl
+                            // narrows it to https still-photo URLs.
+                            ->rule(new HttpsImageUrl)
                             ->live()
                             ->label('Image URL')
                             ->placeholder('https://example.org/photo.jpg')
-                            ->helperText('Optional. A direct link to a real community photo — never stock or generated imagery. Shown full-width below the text.')
+                            ->helperText('Optional. An https link to a real community photo (jpg, png, webp, gif, avif) — never stock or generated imagery. Shown full-width below the text.')
+                            ->maxLength(255),
+                        TextInput::make('image_alt')
+                            ->live()
+                            ->label('Image alt text')
+                            ->placeholder('Members playing board games at the summer social')
+                            ->helperText('Required when an image URL is set. One plain sentence describing the photo for screen-reader visitors.')
+                            // An image with no description is silent for
+                            // screen-reader visitors (TOG-8707): the URL and
+                            // its description arrive together or not at all.
+                            ->requiredWith('image_url')
                             ->maxLength(255),
                     ]),
 
@@ -100,6 +116,7 @@ class FeaturedContentForm
         $body = trim((string) ($get('body') ?? ''));
         $url = trim((string) ($get('url') ?? ''));
         $imageUrl = trim((string) ($get('image_url') ?? ''));
+        $imageAlt = trim((string) ($get('image_alt') ?? ''));
 
         $html = '<div data-testid="featured-preview" style="border:1px solid #d6d3cb;border-radius:0.5rem;padding:1rem;max-width:42rem;">'
             .'<p style="font-size:0.7rem;text-transform:uppercase;letter-spacing:0.12em;opacity:0.65;margin:0;">From the community team</p>';
@@ -118,7 +135,12 @@ class FeaturedContentForm
                 $html .= '<p style="margin:0.5rem 0 0;">'.nl2br(e($body)).'</p>';
             }
             if ($imageUrl !== '') {
-                $html .= '<img src="'.e($imageUrl).'" alt="" loading="lazy" decoding="async" style="margin-top:0.75rem;max-width:100%;">';
+                // Same contract as the public cards: written alt wins, the
+                // headline stands in while the moderator is still typing, and
+                // the 16:9 ratio box reserves layout (TOG-7331) — moderator
+                // URLs carry no dimensions, same as the home/taste cards.
+                $previewAlt = $imageAlt !== '' ? $imageAlt : $title;
+                $html .= '<img src="'.e($imageUrl).'" alt="'.e($previewAlt).'" loading="lazy" decoding="async" style="margin-top:0.75rem;width:100%;aspect-ratio:16/9;object-fit:cover;">';
             }
         }
 

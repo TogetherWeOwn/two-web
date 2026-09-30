@@ -36,6 +36,7 @@ function eventJsonKeys(): array
         'capacity',
         'going_count',
         'status',
+        'rsvp_open',
         'synced_to_discord',
     ];
 }

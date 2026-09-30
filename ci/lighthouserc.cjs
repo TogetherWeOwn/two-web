@@ -1,11 +1,11 @@
-// Performance budget. These numbers came from the CEO and are enforced as build
+// Performance budget. These numbers came from the maintainers and are enforced as build
 // failures, not warnings:
 //
 //     LCP < 2.0s   on a mid-range phone profile
 //     CLS < 0.1
 //
-// Do not edit a threshold to make a build go green. Lowering a budget is a CEO
-// decision made in writing on the issue, and then reflected here in its own commit
+// Do not edit a threshold to make a build go green. Lowering a budget is a
+// maintainers' decision made in writing on the issue, and then reflected here in its own commit
 // that says so. A budget quietly relaxed inside a feature PR is the failure mode
 // this whole file exists to prevent.
 
@@ -46,10 +46,10 @@ function buildAssertions(lcpBudgetMs) {
     // invented here — worth knowing that Lighthouse asks developers to aim for
     // 100ms. It sits far below the 2.0s LCP budget on purpose: this is a
     // tripwire for a server that has fallen over, not a second performance
-    // target competing with the CEO's.
+    // target competing with the maintainers' budget.
     'server-response-time': ['error', { maxNumericValue: 600, aggregationMethod: 'median' }],
 
-    // Not a CEO budget, so not a failure. They are the two numbers that move
+    // Not a maintainers' budget, so not a failure. They are the two numbers that move
     // first when a page starts getting slow, and a warning in the log is a
     // cheap early signal before LCP actually breaches.
     'total-blocking-time': ['warn', { maxNumericValue: 300, aggregationMethod: 'median' }],
@@ -142,7 +142,7 @@ module.exports = {
 
     // Two sets of thresholds, split by URL, and the split is the point.
     //
-    // The CEO's budget is a promise about the *public site* — the pages a visitor
+    // The maintainers' budget is a promise about the *public site* — the pages a visitor
     // arrives on from a Discord link, on a phone, deciding whether to join. Those
     // keep LCP < 2.0s and nothing here relaxes that by a millisecond.
     //

@@ -6,7 +6,7 @@
 
 ## What runs on every pull request
 
-`.github/workflows/ci.yml`. Four jobs in parallel, plus a gate.
+`.github/workflows/ci.yml`. Five jobs in parallel, plus a gate.
 
 | Job | What it does | Fails when |
 |---|---|---|
@@ -14,57 +14,55 @@
 | `pest` | Pest unit + feature, real Postgres 17 | any test fails |
 | `dusk` | Laravel Dusk, real Chrome, real server | any journey fails |
 | `budgets` | Lighthouse mobile + axe-core at 360px and 1280px | LCP ≥ 2.0s, CLS ≥ 0.1, server response ≥ 600ms, or any WCAG 2.2 AA violation |
-| `tests` | aggregates the four | any of them is not green, including *skipped* |
+| `deps-audit` | `composer audit` + `npm audit` on the lockfiles | a high/critical advisory, or an advisory with no severity |
+| `tests` | aggregates the five | any of them is not green, including *skipped* |
 
-All five are required checks on `main`, plus `gitleaks` from `secret-scan.yml`.
+Seven required checks on `main`: the five ci.yml leaves, the `tests` aggregate, plus `gitleaks` from `secret-scan.yml`.
 
 `static` is deliberately first to finish — it catches the ordinary mistakes in under
 a minute so you are not waiting on Dusk to be told about an unused import.
 
 Locally, `composer check` runs the first two.
 
-### Everything runs on our own runners
+### Everything runs on GitHub-hosted runners
 
-Every job in every workflow is `runs-on: [self-hosted, two-selfhosted]` — the
-org's own runners, on audited hosts only (TOG-2847): `coolify-vps-<n>` on the
-Coolify VPS, `ci-rbx1-<n>` in the LXD CI VM on the rbx1 host, and `ci-w2494-<n>`
-on worker host vps-2494bf63. `ci/attest-runner.sh` holds that prefix list; a job
-on any other runner fails its first step. There are no GitHub-hosted jobs in this repository and no
-`ubuntu-latest` fallback: Actions spend is not available to us, so a job that lands
-on a hosted runner does not cost a little extra, it fails before its first step.
+Every job in every workflow is `runs-on: ubuntu-latest` — GitHub-hosted runners
+(TOG-8909; the pre-flip self-hosted gate was TOG-2847). This repository is public,
+so hosted minutes are free, and the private `two-selfhosted` runner group cannot
+serve a public repo at all. `ci/attest-runner.sh` holds that contract; a job on
+any other runner fails its first step. There are no `self-hosted` jobs in this
+repository and no other fallback: a job that lands off the hosted runners does
+not cost a little extra, it is misrouted and fails before its first step.
 
 Three consequences you will actually run into:
 
-**The runners are persistent.** Same host, same checkout path, same ports, run after
-run. A process a job leaks outlives the job and breaks *the next* run on that
-runner — so anything you start, stop, with `if: always()`. `budgets` learned this
-the expensive way: it leaked `artisan serve`, and the next run's readiness probe was
-answered by the stale process, which was still holding the previous run's `APP_KEY`.
-The job then failed at the `/admin` session mint, several steps and one very
-misleading error message away from the actual cause. `ci/reclaim-ports.sh` now
-clears the block first and the job tears down after itself; do both for anything new
-that binds a port.
+**The runners are ephemeral.** Fresh VM per job: clean checkout, no ports in use,
+no processes left over from a previous run. A process a job leaks dies with the
+job instead of breaking the *next* run — but stop what you start with
+`if: always()` anyway, so the shutdown is visible in the logs when you need it.
 
-**They share one network namespace.** Five runners, one host, so fixed host ports
-collide between parallel jobs. `ci/runner-ports.sh` derives a stable ten-port block
-per runner — use it rather than hardcoding a port. For service containers, map with
-no host port (`ports: ["5432"]`) and read `${{ job.services.postgres.ports[5432] }}`.
+**Each job gets its own VM.** No shared network namespace, so parallel jobs never
+bind the same socket and fixed host ports cannot collide between them.
+`ci/runner-ports.sh` still derives the per-job port block — keep using it rather
+than hardcoding a port. For service containers, map with no host port
+(`ports: ["5432"]`) and read `${{ job.services.postgres.ports[5432] }}`.
 
 **Every job attests where it ran.** `ci/attest-runner.sh` runs as the first step of
-all nine jobs and fails on a hosted runner — `runs-on:` is only a request, and a
-label typo silently reroutes rather than erroring. It also emits the runner name as
-a `::notice`, which lands in the check-run *annotations* API. That is deliberate: it
-makes the per-job runner readable with `checks=read`, without the `actions:read`
-scope this repo's token broker does not issue.
+every job in every workflow and fails on a non-hosted runner — `runs-on:` is only
+a request, and a label typo silently reroutes rather than erroring. It also emits
+the runner name as a `::notice`, which lands in the check-run *annotations* API.
+That is deliberate: it makes the per-job runner readable with `checks=read`,
+without the `actions:read` scope this repo's token broker does not issue.
 
 ```
 GET /repos/TogetherWeOwn/two-web/check-runs/{id}/annotations
-notice  runner  job=budgets runner_name=coolify-vps-2 environment=self-hosted
+notice  runner  job=budgets runner_name=github-hosted-abc123 environment=github-hosted
 ```
 
-The runners are lean: php8.3, composer, node 22, go, the psql/mysql/redis clients,
-jq, shellcheck, git, curl, rootless docker. Anything else, install it in the job —
-`dusk` installs Chrome that way. `gha-runner` has passwordless sudo, so
+The hosted image ships a broad toolset (git, curl, docker, common languages);
+tool versions are pinned in the workflow (setup-php, setup-node), never assumed
+from the image. Anything else, install it in the job — `dusk` installs Chrome
+that way. The runner user has passwordless sudo, so
 `sudo apt-get install -y <pkg>` works.
 
 ### Job names are a contract
@@ -103,17 +101,18 @@ with no GitHub. Run it after any edit to `ci.yml` or to the protection rules.
 
 ### Required checks on `main`
 
-Six, applied by the setup script (TWO-36). This is the list, and it is the same
+Seven, applied by the setup script (TWO-36). This is the list, and it is the same
 list in `ci/verify-pipeline.sh` — `--lint` fails if the two disagree:
 
 - `static` — Pint, PHPStan, and the gate's own wiring
 - `pest` — unit + feature
 - `dusk` — the browser journeys
 - `budgets` — Lighthouse and WCAG 2.2 AA
-- `tests` — the aggregate over the four above
+- `deps-audit` — `composer audit` + `npm audit`, high/critical (TOG-8405)
+- `tests` — the aggregate over the five above
 - `gitleaks` — the secret scan
 
-The four leaves are required *as well as* the aggregate, deliberately: protection
+The five leaves are required *as well as* the aggregate, deliberately: protection
 then does not depend on the aggregate's `if: always()` guard staying correct
 through future edits. The price is that a newly added job is not required until
 someone adds it here — so `--lint` prints a warning for every job that reports on
@@ -186,14 +185,14 @@ release sign-off.
 
 ## The budgets
 
-Set by the CEO. Enforced as **failures, not warnings**.
+Set by the maintainers. Enforced as **failures, not warnings**.
 
 - **LCP < 2.0s** on a mid-range phone profile — Moto G Power class, 4× CPU
   slowdown, simulated Slow 4G. Configured in `ci/lighthouserc.cjs`.
 - **CLS < 0.1**, same profile.
 - **WCAG 2.2 AA**, zero violations, in `ci/a11y.mjs`.
 
-One more assertion sits alongside them, and it is not a CEO budget:
+One more assertion sits alongside them, and it is not a maintainers' budget:
 
 - **Server response time < 600ms** for the main document.
 
@@ -246,7 +245,7 @@ is about LCP:
 | `slowserver` — three seconds of server think-time | `server-response-time`, for the reason above. **Not** `largest-contentful-paint`. |
 | `lcp` — a 1.6 MB uncompressed hero above the fold | `largest-contentful-paint`, and nothing else |
 
-The `lcp` case exists because without it the CEO's headline budget has no live proof
+The `lcp` case exists because without it the maintainers' headline budget has no live proof
 that it fires at all: `slowserver` is a server-side breach, so a broken
 `largest-contentful-paint` assertion would be invisible to every job in the pipeline.
 Measured on the settings in `ci/lighthouserc.cjs`, varying only the image:
@@ -270,7 +269,7 @@ Three Lighthouse runs per URL, median asserted — see the flake policy on why t
 is sampling and not a retry.
 
 **Nobody lowers a budget to unblock a release.** Not QA, not the Lead, not the
-Frontend Engineer. It is a CEO decision, made in writing on the issue, and then
+Frontend Engineer. It is a maintainers' decision, made in writing on the issue, and then
 landed here as its own commit that says so. A threshold quietly relaxed inside a
 feature PR is the specific thing this file exists to prevent.
 
@@ -358,15 +357,16 @@ All six. A rejection cites the box by number.
 
 1. **Tests written first and passing.**
 2. **Dusk journey green** — the journey the change touches, not just the suite.
-3. **Design spec matched**, visually signed off by the Designer.
+3. **Design spec matched**, visually signed off by a maintainer against the
+   design-system specs.
 4. **Accessibility and performance budgets met** — the `budgets` job.
 5. **Deployed to staging.**
-6. **QA signed off.**
+6. **Maintainer signed off.**
 
 Boxes 1, 2 and 4 are machine-checked and are exactly what CI reports. Boxes 3, 5
-and 6 are human, and QA confirms 3 with the Designer before passing it.
+and 6 are human, and the reviewer confirms 3 before passing it.
 
-QA does not block on style preference. Only on the six boxes, and always by number.
+Review does not block on style preference. Only on the six boxes, and always by number.
 
 ---
 
@@ -587,13 +587,98 @@ probe reports and no critical line appears, the queue is healthy — the drill
 existing is what makes that reading trustworthy, in the same tradition as
 `discord:check-moderators` above.
 
+### Pre-deploy DB snapshot lives in Coolify, not in `deploy.yml` (TOG-9253)
+
+Migrations run on the box, inside Coolify's `post_deployment_command`
+(`php artisan migrate --force`), after the deploy webhook fires. The staging
+database (`two-web-staging-db`) is not public and GitHub Actions never SSHes
+in, so no step in `deploy.yml` can reach it — and `bin/pg-backup.sh` refuses
+any host that is not local docker, so it cannot run there either. A snapshot
+step in the workflow would be TOG-913 theater: green without doing anything.
+That is why `deploy.yml` has no snapshot step, and why none should be added:
+the snapshot is a Coolify database backup instead (provider-native `pg_dump`
+custom format — the same shape `docs/runbook.md` restores from).
+
+1. **Scheduled backup on `two-web-staging-db`**, daily, keeping the newest 7
+   local copies — the same 7-daily rule `bin/pg-backup.sh rotate` enforces
+   ([TOG-8418](/TOG/issues/TOG-8418)). Set once, in the Coolify panel
+   (database → Backups → Add). Agents have no host access, so enabling it was
+   the one host step for this wiring.
+2. **Before any deploy carrying migrations: Backup Now** on the same schedule,
+   and log the execution ID and size on the release card. The execution ID is
+   the proof a snapshot exists; the deploy log's migration lines are the proof
+   it ran before them. The release checklist (QA-owned, below) names whether a
+   release migrates — when it does, this Backup Now is mandatory, not optional.
+3. **Restore rehearsal stays quarterly on staging** (`docs/runbook.md`); a
+   backup with no restore test is a rumour.
+
+The bound, stated plainly: the schedule is cron-based, not per-deploy — a
+deploy nobody flagged as migration-carrying has only the last daily snapshot
+to fall back on. That is why step 2 keys off the checklist, not off the clock.
+
+Pinned by `tests/Unit/PreDeploySnapshotDocTest.php`, which asserts this section
+still names the schedule, the Backup Now rule, the bound — and that
+`deploy.yml` still carries no snapshot step of its own.
+
+### Who polls `/up`, and who gets paged (TOG-7327)
+
+`/up` is Laravel's health endpoint (`health: '/up'` in `bootstrap/app.php`,
+pinned by `tests/Feature/HealthCheckTest.php`). It answers 200 when the
+application boots far enough to serve. What polls it today, and what does
+not:
+
+- **Deploy time.** `deploy.yml` polls `${STAGING}/up` for up to ten minutes
+  after triggering the Coolify staging deploy — a queued deploy that never
+  answers fails the job. Then `bin/smoke-staging.sh` asserts `/up` → 200
+  again, alongside `/discord`, `/`, and `/events.json`. Green `staging`
+  means the new release answered, and nothing more.
+- **CI time.** The Dusk, budgets, and opcache jobs poll a local `/up` to
+  learn when the throwaway `artisan serve` under test is ready, and how fast
+  it answers. That proves the build boots; it says nothing about any
+  deployed host.
+- **Continuously, on any environment: nobody.** No cron, no scheduled
+  workflow, and no third-party pinger polls `/up` on a deployed host (this
+  repo uses no paid services) — the one scheduled workflow that does exist,
+  `codeowners.yml`'s weekly check, has nothing to do with `/up`. When
+  staging or production stops answering between deploys, nothing notices
+  until a human loads the page or the next deploy's poll fails. The release
+  checklist's "someone is available to watch it after it goes out" is,
+  today, the entire paging policy: the person who triggered the deploy
+  watches it by hand.
+
+The bound, stated plainly: every `/up` poll in this repo is attached to a
+deploy or a CI run. There is no standing watch, and this section must not be
+read as one. Adding one is a small, free step for the day production exists
+— a Coolify HTTP healthcheck on the app pointed at `/up`, or a scheduled
+workflow that curls the production URL and files an issue on failure — but
+that step is not taken here: no prod activation happens on this card, and no
+monitor is wired to a host that does not exist yet.
+
+Pinned by `tests/Unit/HealthMonitoringRunbookTest.php`, which asserts this
+section still names each poller, the gap, and the bound.
+
+### Error drill: prove a 500 pages (TOG-8730)
+
+The queue drill proves dead jobs surface. This proves 500s do too — same
+shape, different half: `php artisan error-alert:probe --json` throws a marker
+exception through the `report` listener in `bootstrap/app.php` and reports
+whether the `Unhandled exception.` alert fired and the repeat was muted (the
+`ErrorAlertRateLimit` noise guard: one alert per exception class + route per
+5 minutes). Then tail the log for the line. The cron watcher
+(`bin/error-log-watch.sh`, every 5 minutes — docs/runbook.md "Error
+alerting") scans the delta for that line and `Queue job failed.` and mails
+on either, so a 500 in staging produces an operator-visible alert within the
+documented path. The chain is pinned by
+`tests/Feature/Console/ErrorAlertProbeTest.php`. No Sentry, no Flare, no
+Bugsnag — none installed, none allowed.
+
 ### Production deploys are dispatch-only, behind a required reviewer
 
 Production ships from GitHub Actions, and only ever that way: `workflow_dispatch`
 with `production` chosen, on `main`, behind the `production` environment's
 required reviewer. Reaching the deploy step already means a human asked and a
-reviewer approved. The checklist below is still the release sign-off — QA owns it
-— and the environment gate is its technical half.
+reviewer approved. The checklist below is still the release sign-off — a maintainer
+owns it — and the environment gate is its technical half.
 
 This used to say "manual, in the hosting dashboard", and that was right at the
 time. When this file was written, `two-web` was private on GitHub Free, and on
@@ -641,14 +726,15 @@ Everything above the last two proves the *jobs* go red for the right reasons. Th
 is not the same as proving a red job blocks the merge — see "Reading the rule, not
 the list" above for the fact none of them ever read it.
 
-`--run` is the expensive one, and it got more expensive when the `lcp` case split
-off `slowserver`: **eleven pull requests** now, ten deliberate breakages and one
-clean control, each waiting on a full CI run. They run concurrently, so the cost is
-one CI run's wall clock plus the pushes, not eleven of them. Measured end to end on
+`--run` is the expensive one, and it got more expensive twice: the `lcp` case
+split off `slowserver`, and the `audit` case split off the job list. **Twelve
+pull requests** now, eleven deliberate breakages and one clean control, each
+waiting on a full CI run. They run concurrently, so the cost is
+one CI run's wall clock plus the pushes, not twelve of them. Measured end to end on
 2026-08-25 against `72f3dea`: **under five minutes**, of which the clean control's
 own six checks were 2m34s. "Budget most of an hour", which this used to say, was a
 guess written before anyone had sat through one — and it was the reason to put the
-run off. Do not put it off; sit with it. One of the eleven also pushes a 1.6 MB image on
+run off. Do not put it off; sit with it. One of the twelve also pushes a 1.6 MB image on
 purpose — the `lcp` breakage below — and since TWO-109 `--cleanup` deletes the
 `ci-verify/*` refs as well as closing the pull requests, so that blob does not
 outlive the run.
@@ -715,6 +801,7 @@ caught a real LCP breach, and only one of those means the gate works.
 | An image with no alt text | `budgets` |
 | Three seconds of server think-time before paint | `budgets` (via `server-response-time`) |
 | A 1.6 MB uncompressed hero image above the fold | `budgets` (via `largest-contentful-paint`) |
+| A dependency with a known-high advisory in the lockfile | `deps-audit` |
 | A budget threshold relaxed, downgraded to a warning, deleted, shadowed by a second entry, or its aggregation swapped | `static` |
 | Deleting the aggregate's `if: always()` | `static` — see below |
 | A credential committed to a tracked file | `gitleaks` — see below |
@@ -724,7 +811,7 @@ The Dusk case is hidden with CSS rather than deleted on purpose: the HTML still
 contains the text, so the feature test passes and only the real browser notices.
 A breakage that trips `pest` too would prove nothing about the browser job.
 
-Seven of the nine cases also assert that the aggregate `tests` check went red, not
+Eight of the ten cases also assert that the aggregate `tests` check went red, not
 merely the named job. A job failing while the required check stays green is the one
 failure mode that lets a broken PR merge while looking perfectly healthy.
 
@@ -915,7 +1002,7 @@ acceptance run. That exists because the wrong assertion here was only reachable 
 forty-minute live run, so it survived review and cost a full run to find.
 
 Run it when the repo lands, and again after any change to `ci.yml` that alters what
-fails. **QA does not sign off TWO-22 until this has passed once, for real.**
+fails. **Nobody signs off TWO-22 until this has passed once, for real.**
 
 ### One `--run` at a time
 
@@ -1005,7 +1092,7 @@ the end of its run is not — another reason `--run` refuses to use one it does 
 
 ## Release checklist
 
-QA signs this off. Nothing reaches production without it.
+A maintainer signs this off. Nothing reaches production without it.
 
 This checklist **is** the release sign-off. The `production` environment's required
 reviewer is its technical half on our plan (see *Production deploys are
@@ -1013,7 +1100,7 @@ dispatch-only* above) — the reviewer approves only a signed-off SHA — and th
 person triggering the deploy refusing to trigger it unsigned is the other half.
 Note the commit SHA you signed off, and deploy that SHA.
 
-- [ ] `main` is green — all of `static`, `pest`, `dusk`, `budgets`, and the `tests` aggregate
+- [ ] `main` is green — all of `static`, `pest`, `dusk`, `budgets`, `deps-audit`, and the `tests` aggregate
 - [ ] All six Dusk journeys present and passing, including the degraded path
 - [ ] Flake rate for the week is zero, or every open flake has an issue and a decision
 - [ ] Staging deployed from this exact commit, and smoke-tested by hand
@@ -1027,7 +1114,7 @@ Note the commit SHA you signed off, and deploy that SHA.
       counters fall back, queued actions retry, member sees a clear message
 - [ ] Manual accessibility pass — keyboard only, and a screen reader on the join path
 - [ ] Budgets met on staging, not only on the CI runner
-- [ ] Designer has signed off (box 3)
+- [ ] Design spec matched and signed off (box 3)
 - [ ] Migrations reviewed for a safe forward path, and a rollback that is understood
 - [ ] No secret in the diff, no secret in the history
 - [ ] Someone is available to watch it after it goes out
@@ -1037,7 +1124,6 @@ Note the commit SHA you signed off, and deploy that SHA.
       says TWO Web may go live.
 
 If a deadline would require shipping something that has not passed this, that goes
-to the CEO in writing. It is not QA's trade-off to make alone, and it is not the
-Lead's either.
+to a maintainer in writing. It is not one reviewer's trade-off to make alone.
 
 See also: [testing-strategy.md](testing-strategy.md), [flake-policy.md](flake-policy.md).

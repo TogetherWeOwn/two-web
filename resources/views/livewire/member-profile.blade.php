@@ -117,7 +117,59 @@
                             </div>
                         @endif
 
+                        {{-- TOG-8137: the save (or cancel) arrived with no
+                             signed-in member behind it — the form was opened
+                             authenticated and the session died underneath it
+                             (SESSION_LIFETIME). The form stays open with the
+                             member's input intact; only the write was refused.
+                             Distinct from the $saveFailed alert on purpose:
+                             the next action is to log in again, not to try
+                             once more, so the message says that. Mirrors the
+                             RSVP session-expired banner (TOG-8135). --}}
+                        @if ($sessionExpired ?? false)
+                            <div class="mt-5 flex items-start gap-3 rounded-lg border border-line bg-alert-quiet p-4"
+                                 role="alert"
+                                 tabindex="-1"
+                                 data-testid="profile-session-expired">
+                                <svg class="mt-0.5 size-5 shrink-0 text-alert" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+                                    <path d="M8 1.5 15 14H1L8 1.5Zm0 4a.75.75 0 0 0-.75.75v3a.75.75 0 0 0 1.5 0v-3A.75.75 0 0 0 8 5.5Zm0 6.75a.9.9 0 1 0 0-1.8.9.9 0 0 0 0 1.8Z"/>
+                                </svg>
+                                <div>
+                                    <p class="text-sm font-medium text-ink">Your session expired.</p>
+                                    <p class="mt-0.5 text-sm text-ink-muted">
+                                        Your changes are still here.
+                                        <a href="{{ route('login') }}" class="font-semibold text-ink underline underline-offset-4 hover:text-ink">Log in with Discord</a>
+                                        and save again.
+                                    </p>
+                                </div>
+                            </div>
+                        @endif
+
                         <form wire:submit="save" class="mt-6 flex flex-col gap-5" data-testid="profile-edit-form">
+                            {{--
+                                Honeypot decoy (TOG-8715). Visually hidden and
+                                removed from the tab order and the accessibility
+                                tree, with no <label> on purpose: a screen reader
+                                must never announce it, and the label audit in
+                                FormLabelCoverageTest must never see it as a
+                                labelled control. Bots filling every input fill
+                                this; humans never do. autocomplete="off" keeps
+                                password managers from touching it.
+                            --}}
+                            <div aria-hidden="true" style="position:absolute;left:-9999px;top:auto;width:1px;height:1px;overflow:hidden;">
+                                {{-- id="website": not for a <label> (there is
+                                     none on purpose — the audit below exempts
+                                     this exact decoy) but so the static label
+                                     scan sees an identifiable control rather
+                                     than an id-less orphan. --}}
+                                <input id="website"
+                                       type="text"
+                                       name="website"
+                                       wire:model="website"
+                                       tabindex="-1"
+                                       autocomplete="off"
+                                       data-testid="profile-website-trap">
+                            </div>
                             <div>
                                 <label for="bio" class="mb-1.5 block text-sm font-medium text-ink">Bio</label>
                                 <textarea id="bio"
@@ -130,10 +182,7 @@
                                           class="w-full rounded-md border bg-canvas px-3 py-2.5 text-ink placeholder:text-ink-muted transition-colors duration-fast ease-out-quick hover:border-ink-muted @error('bio') border-alert @else border-line-strong @enderror"></textarea>
                                 <p class="mt-1.5 text-sm text-ink-muted">A few sentences is plenty.</p>
                                 @error('bio')
-                                    <p id="bio-error" class="mt-1.5 flex items-start gap-1.5 text-sm text-alert">
-                                        <svg class="mt-0.5 size-4 shrink-0" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 1.5 15 14H1L8 1.5Zm0 4a.75.75 0 0 0-.75.75v3a.75.75 0 0 0 1.5 0v-3A.75.75 0 0 0 8 5.5Zm0 6.75a.9.9 0 1 0 0-1.8.9.9 0 0 0 0 1.8Z"/></svg>
-                                        <span>{{ $message }}</span>
-                                    </p>
+                                    @include('partials.field-error', ['id' => 'bio-error', 'message' => $message])
                                 @enderror
                             </div>
 
@@ -148,10 +197,7 @@
                                           class="w-full rounded-md border bg-canvas px-3 py-2.5 text-ink placeholder:text-ink-muted transition-colors duration-fast ease-out-quick hover:border-ink-muted @error('gamesText') border-alert @else border-line-strong @enderror"></textarea>
                                 <p class="mt-1.5 text-sm text-ink-muted">Up to 20. Duplicates are removed.</p>
                                 @error('gamesText')
-                                    <p id="games-error" class="mt-1.5 flex items-start gap-1.5 text-sm text-alert">
-                                        <svg class="mt-0.5 size-4 shrink-0" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 1.5 15 14H1L8 1.5Zm0 4a.75.75 0 0 0-.75.75v3a.75.75 0 0 0 1.5 0v-3A.75.75 0 0 0 8 5.5Zm0 6.75a.9.9 0 1 0 0-1.8.9.9 0 0 0 0 1.8Z"/></svg>
-                                        <span>{{ $message }}</span>
-                                    </p>
+                                    @include('partials.field-error', ['id' => 'games-error', 'message' => $message])
                                 @enderror
                             </div>
 
@@ -172,10 +218,7 @@
                                 </datalist>
                                 <p class="mt-1.5 text-sm text-ink-muted">Use an IANA timezone such as America/New_York.</p>
                                 @error('timezone')
-                                    <p id="timezone-error" class="mt-1.5 flex items-start gap-1.5 text-sm text-alert">
-                                        <svg class="mt-0.5 size-4 shrink-0" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 1.5 15 14H1L8 1.5Zm0 4a.75.75 0 0 0-.75.75v3a.75.75 0 0 0 1.5 0v-3A.75.75 0 0 0 8 5.5Zm0 6.75a.9.9 0 1 0 0-1.8.9.9 0 0 0 0 1.8Z"/></svg>
-                                        <span>{{ $message }}</span>
-                                    </p>
+                                    @include('partials.field-error', ['id' => 'timezone-error', 'message' => $message])
                                 @enderror
                             </div>
 
@@ -327,10 +370,12 @@
              (Edit opens the form, save/cancel removes it), dropping keyboard
              focus to <body>. The component dispatches `profile-state-changed`
              to itself on edit, cancel and save — save dispatches BEFORE
-             validation so a ValidationException cannot swallow it — which
-             fires after the morph, so the new state is already in the DOM.
-             The listener picks its target from what rendered, in priority
-             order: error alert (invalid save), saved confirmation (valid
+             validation so a ValidationException cannot swallow it, and the
+             session-expired early returns (TOG-8137) dispatch too so the
+             banner can take focus — which fires after the morph, so the new
+             state is already in the DOM. The listener picks its target from
+             what rendered, in priority order: error alert (invalid save),
+             session-expired banner (TOG-8137), saved confirmation (valid
              save), form heading (opened), Edit button (cancelled).
              `$wire.on` runs once per component lifecycle, never on re-render,
              so this cannot stack. --}}
@@ -341,6 +386,15 @@
                 const failed = root.querySelector('[data-testid="profile-edit-failed"]');
                 if (failed) {
                     failed.focus({ preventScroll: true });
+                    return;
+                }
+
+                // TOG-8137: the expired banner renders inside the still-open
+                // form, so without this the listener would fall through to
+                // the heading and skip the alert that interrupted them.
+                const expired = root.querySelector('[data-testid="profile-session-expired"]');
+                if (expired) {
+                    expired.focus({ preventScroll: true });
                     return;
                 }
 
