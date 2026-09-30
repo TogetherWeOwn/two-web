@@ -271,6 +271,31 @@ class MemberProfile extends Component
         // nothing attacker-shaped is logged.
         $validated = $this->validate(static::validationRules());
 
+        // Complete per-game validation before either trap or restored-draft
+        // handling can consume the input or replace its field errors.
+        $games = [];
+        foreach (preg_split('/\R/u', $validated['gamesText'] ?? '') ?: [] as $game) {
+            $game = trim($game);
+
+            if ($game !== '' && ! in_array($game, $games, true)) {
+                $games[] = $game;
+            }
+        }
+
+        if (count($games) > 20) {
+            $this->addError('gamesText', 'Add no more than 20 games.');
+
+            return;
+        }
+
+        foreach ($games as $game) {
+            if (mb_strlen($game) > 80) {
+                $this->addError('gamesText', 'Keep each game name to 80 characters or fewer.');
+
+                return;
+            }
+        }
+
         // A restored form is already filled when it opens. Refuse an early
         // retry without consuming the recovered text or claiming a save. The
         // refusal is decoy-independent on purpose (TOG-9355 review): an
@@ -301,29 +326,6 @@ class MemberProfile extends Component
             $this->dispatch('profile-draft-retired')->self();
 
             return;
-        }
-
-        $games = [];
-        foreach (preg_split('/\R/', $validated['gamesText'] ?? '') ?: [] as $game) {
-            $game = trim($game);
-
-            if ($game !== '' && ! in_array($game, $games, true)) {
-                $games[] = $game;
-            }
-        }
-
-        if (count($games) > 20) {
-            $this->addError('gamesText', 'Add no more than 20 games.');
-
-            return;
-        }
-
-        foreach ($games as $game) {
-            if (mb_strlen($game) > 80) {
-                $this->addError('gamesText', 'Keep each game name to 80 characters or fewer.');
-
-                return;
-            }
         }
 
         $this->saveFailed = false;

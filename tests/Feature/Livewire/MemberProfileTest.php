@@ -541,6 +541,26 @@ it('saves 21 lines with duplicates as 20 distinct games', function () {
         ->toBe(array_map(fn (int $i) => "Game {$i}", range(1, 20)));
 });
 
+it('preserves accented game names in a patient save after trimming and deduplication', function () {
+    $member = User::factory()->create();
+    $games = array_map(fn (int $i) => "ÅGame {$i}", range(1, 20));
+    $gamesText = "\n".implode("\r\n", $games)."\n  ÅGame 7  \n";
+
+    Livewire::actingAs($member)
+        ->test(MemberProfile::class, ['member' => $member, 'stats' => profileStats($member->discord_id)])
+        ->call('edit')
+        ->tap(fn () => pausePastFillFloor())
+        ->set('gamesText', $gamesText)
+        ->call('save')
+        ->assertSet('editing', false)
+        ->assertSet('saved', true)
+        ->assertSet('gamesText', implode("\n", $games))
+        ->assertHasNoErrors()
+        ->assertSee('Profile saved.');
+
+    expect($member->profile()->first()->games)->toBe($games);
+});
+
 it('rejects more than 20 distinct games without changing the profile', function () {
     $member = User::factory()->create();
     $profile = Profile::factory()->for($member)->create([
