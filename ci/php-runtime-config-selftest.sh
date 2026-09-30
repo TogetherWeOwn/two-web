@@ -85,17 +85,40 @@ pass "nginx emits X-Robots-Tag only for staging.togetherweown.com"
 # must appear exactly once with exactly the documented value, so a later
 # template edit cannot silently drop HSTS or loosen framing back to SAMEORIGIN.
 check_header() {
-  # Literal whole-line comparison: ignore commented directives without reading
-  # parentheses and semicolons in header values as regex.
+  # Split statements outside quotes/comments, not lines. Keep quoted values
+  # literal while accepting token whitespace and multiple directives per line.
   local name="$1" value="$2" line count
   line="add_header ${name} \"${value}\""
   count="$(awk -v directive="$line" '
     {
-      line = $0
-      sub(/\r$/, "", line)
-      sub(/^[[:blank:]]+/, "", line)
-      sub(/[[:blank:]]*(#.*)?$/, "", line)
-      if (line == directive ";" || line == directive " always;") count++
+      input = $0 "\n"
+      for (i = 1; i <= length(input); i++) {
+        char = substr(input, i, 1)
+        if (escaped) {
+          statement = statement char
+          escaped = 0
+        } else if (char == sprintf("%c", 92)) {
+          statement = statement char
+          escaped = 1
+        } else if (quote != "") {
+          statement = statement char
+          if (char == quote) quote = ""
+        } else if (char == "#") {
+          if (statement != "" && substr(statement, length(statement), 1) != " ") statement = statement " "
+          break
+        } else if (char == "\"" || char == sprintf("%c", 39)) {
+          quote = char
+          statement = statement char
+        } else if (char == ";" || char == "{" || char == "}") {
+          sub(/[[:space:]]+$/, "", statement)
+          if (char == ";" && (statement == directive || statement == directive " always")) count++
+          statement = ""
+        } else if (char ~ /[[:space:]]/) {
+          if (statement != "" && substr(statement, length(statement), 1) != " ") statement = statement " "
+        } else {
+          statement = statement char
+        }
+      }
     }
     END { print count + 0 }
   ' "$CONFIG")"
