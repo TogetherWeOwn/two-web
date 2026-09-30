@@ -27,7 +27,7 @@ test('the compiled calendar loader respects reduced motion during a month change
 
                 $browser->click('[data-testid="events-view-calendar"]')
                     ->waitFor('[data-testid="events-calendar-grid"]')
-                    ->assertNotVisible('[data-testid="events-loading"]')
+                    ->assertMissing('[data-testid="events-loading"]')
                     ->assertVisible('[data-testid="events-content"]');
 
                 $month = trim($browser->text('[data-testid="calendar-month"]'));
@@ -105,7 +105,7 @@ test('the compiled calendar loader respects reduced motion during a month change
                 JS);
 
                 $browser->assertVisible('[data-testid="events-loading"]')
-                    ->assertNotVisible('[data-testid="events-content"]');
+                    ->assertMissing('[data-testid="events-content"]');
 
                 expect($pending)->not->toHaveKey('error');
                 expect($pending['reducedMotion'])->toBeTrue();
@@ -156,7 +156,7 @@ test('the compiled calendar loader respects reduced motion during a month change
 
                 expect($settled)->toBe(['month' => $nextMonth, 'status' => $nextMonth, 'count' => 1]);
                 $browser->assertSeeIn('[data-testid="calendar-month"]', $nextMonth)
-                    ->assertNotVisible('[data-testid="events-loading"]')
+                    ->assertMissing('[data-testid="events-loading"]')
                     ->assertVisible('[data-testid="events-content"]');
             } finally {
                 $browser->script('window.calendarLoaderGate?.restore(); delete window.calendarLoaderGate;');
