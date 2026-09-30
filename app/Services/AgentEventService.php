@@ -655,9 +655,11 @@ class AgentEventService
         return AgentEventAudit::query()
             ->where('grant_id', $grant->getKey())
             ->where('event_key', $event->event_key)
-            ->orderBy('id')
+            ->orderByDesc('id')
             ->limit(50)
             ->get()
+            ->reverse()
+            ->values()
             ->map(fn (AgentEventAudit $audit): array => [
                 'operation' => $audit->operation,
                 'result' => $audit->result,
