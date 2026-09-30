@@ -72,6 +72,16 @@ it('orders rows the way moderators arranged them', function () {
         ->assertSeeInOrder(['First thing', 'Second thing', 'Third thing']);
 });
 
+it('breaks default-position ties by id rather than insertion order on the homepage', function () {
+    FeaturedContent::factory()->published()->create(['id' => 103, 'title' => 'Second tied row', 'position' => 0]);
+    FeaturedContent::factory()->published()->create(['id' => 101, 'title' => 'First tied row', 'position' => 0]);
+    FeaturedContent::factory()->published()->create(['id' => 100, 'title' => 'Later positioned row', 'position' => 1]);
+
+    $this->get('/')
+        ->assertOk()
+        ->assertSeeInOrder(['First tied row', 'Second tied row', 'Later positioned row']);
+});
+
 it('links a featured row when a moderator gave it a url', function () {
     FeaturedContent::factory()->published()->create([
         'title' => 'Read the charter',
