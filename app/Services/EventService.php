@@ -19,6 +19,7 @@ use Carbon\CarbonImmutable;
 use Illuminate\Database\QueryException;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Validation\ValidationException;
 
 /**
  * Everything that changes an event or an answer to one.
@@ -339,6 +340,14 @@ class EventService
                 throw EventNotOpenException::forTransition($locked, $to);
             }
 
+            // A draft can outlive its dates without reconcile touching it.
+            // Refuse publication before saving or scheduling any Discord sync.
+            if ($to === EventStatus::Published && $locked->status === EventStatus::Draft && $locked->ends_at->isPast()) {
+                throw ValidationException::withMessages([
+                    'ends_at' => 'An event that has already ended cannot be published. Update its dates first.',
+                ]);
+            }
+
             if ($locked->status !== $to) {
                 $locked->status = $to;
                 $locked->save();
@@ -379,6 +388,12 @@ class EventService
     {
         if ($row->status === EventStatus::Cancelled) {
             throw EventNotOpenException::forTransition($row, $to);
+        }
+
+        if ($to === EventStatus::Published && $row->status === EventStatus::Draft && $row->ends_at->isPast()) {
+            throw ValidationException::withMessages([
+                'ends_at' => 'An event that has already ended cannot be published. Update its dates first.',
+            ]);
         }
 
         if ($row->status !== $to) {
