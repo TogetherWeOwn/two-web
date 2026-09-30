@@ -41,6 +41,12 @@ jobs:
       prs_created: ${{ steps.release.outputs.prs_created }}
       pr: ${{ steps.release.outputs.pr }}
     steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+
+      # Every job attests where it ran. See ci/attest-runner.sh (TOG-2847).
+      - name: Attest the runner
+        run: ./ci/attest-runner.sh
+
       - uses: googleapis/release-please-action@45996ed1f6d02564a971a2fa1b5860e934307cf7 # v5.0.0
         id: release
         with:
@@ -54,9 +60,15 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+
+      # Every job attests where it ran. See ci/attest-runner.sh (TOG-2847).
+      - name: Attest the runner
+        run: ./ci/attest-runner.sh
+
       - env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # No checkout in this job: gh needs the repo named explicitly.
+          # GH_REPO stays explicit: gh targets the release branch head, not the checkout.
           GH_REPO: ${{ github.repository }}
           PR_JSON: ${{ needs.release-please.outputs.pr }}
         run: |
