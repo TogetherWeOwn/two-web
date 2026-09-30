@@ -938,12 +938,14 @@ it('restores an unsent profile draft without writing until the member saves', fu
         ->assertSet('gamesText', "Chess\nCo-op")
         ->assertSet('timezone', 'Europe/London')
         ->assertSeeHtml('data-testid="profile-draft-restored"')
-        ->assertSeeHtml('Unsent &lt;bio&gt;')
         ->assertDispatched('profile-state-changed');
 
     expect($member->profile()->first()->bio)->toBe('Before');
     pausePastFillFloor();
-    $component->call('save')->assertSet('draftRestored', false)->assertSet('saved', true);
+    $component->call('save')
+        ->assertSet('draftRestored', false)
+        ->assertSet('saved', true)
+        ->assertSeeHtml('Unsent &lt;bio&gt;');
     expect($member->profile()->first()->bio)->toBe('Unsent <bio>');
 });
 
@@ -996,6 +998,7 @@ it('renders a page-specific login return and the scoped 419 recovery hook', func
 
     expect($html)->toContain('data-login-url="'.$url.'"')
         ->toContain('data-draft-owner="1"')
-        ->toContain("\$wire.\$hook('request'")
+        ->toContain('$wire.$hook(')
+        ->toContain('&#039;request&#039;')
         ->toContain('status !== 419');
 });
