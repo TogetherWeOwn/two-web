@@ -244,10 +244,15 @@ it('stashes the draft without starting login when another tab broadcasts sign-ou
             ->assertVisible('[data-testid="profile-edit-form"]')
             ->assertInputValue('bio', 'Sign-out broadcast draft');
 
-        // Leave no stored draft behind. This tab is shared with the next
-        // test and profile ids are reused across tests, so a leftover here
-        // would restore on their page load and open a form they never
-        // asked for (docs/flake-policy.md: order dependence).
+        // Leave no stored draft behind, after parking on a page with no
+        // form on purpose: a stray focus probe between cleanup and the next
+        // test's visit would re-stash this still-open form. This tab is
+        // shared with the next test and profile ids are reused across
+        // tests, so a leftover here would restore on their page load and
+        // open a form they never asked for (docs/flake-policy.md: order
+        // dependence).
+        $browser->visit('/')
+            ->assertPathIs('/');
         $browser->script("sessionStorage.removeItem('{$key}');");
     });
 });
@@ -294,13 +299,20 @@ it('keeps an open editor on the page when a second tab signs out for real', func
             ->assertInputValue('timezone', 'Europe/London');
         expect($member->profile()->first())->toBeNull();
 
-        // Same leak guard as the broadcast test: tab A's sign-out stash
-        // must not restore into the next test's fresh page.
-        $browser->script("sessionStorage.removeItem('{$key}');");
-
         $browser->driver->switchTo()->window($tabB);
         $browser->driver->close();
         $browser->driver->switchTo()->window($tabA);
+
+        // Same leak guard as the broadcast test, after the window
+        // juggling on purpose: refocusing tab A can fire its signed-out
+        // probe, which re-stashes the open form after an earlier cleanup.
+        // Park the tab on a guest page with no form and no probes, then
+        // remove the stash — a leftover here would restore on the next
+        // test's page load and open a form they never asked for
+        // (docs/flake-policy.md: order dependence).
+        $browser->visit('/')
+            ->assertPathIs('/');
+        $browser->script("sessionStorage.removeItem('{$key}');");
     });
 });
 
