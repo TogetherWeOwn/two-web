@@ -21,12 +21,12 @@
 # chatty QUIET would page the on-call every 5 minutes forever. Pass --verbose
 # for the QUIET one-liner when running by hand.
 #
-# State: the byte offset of the last read, in a state file (default
-# `storage/logs/.error-log-watch.offset` next to the log). Only the delta is
-# scanned, so a crashing deploy produces one mail per cron tick, not the whole
-# log every tick. A rotated or truncated log (offset past EOF) re-reads from
-# the top rather than going blind — the price is one duplicate mail after a
-# rotation, which is the right way round for a pager.
+# State: the device/inode and byte offset of the last read, in a state file
+# (default `LOG_PATH.watch-offset`). Only the delta is scanned, so a crashing
+# deploy produces one mail per cron tick, not the whole log every tick. A
+# replacement file or truncation below the offset re-reads from the top. Old
+# numeric-only cursors replay once on upgrade: one duplicate mail beats a pager
+# that goes blind after rotation.
 #
 # Cron (on the box, owned by DevOps — see docs/runbook.md "Error alerting"):
 #   MAILTO=devops@example.com
@@ -91,17 +91,30 @@ watch() {
     # failed.` is the failed-job half from AppServiceProvider (TOG-6948).
     # Fixed strings (-F), not regexes: a dot that means "any character"
     # would match log lines that are not alerts.
+    # Follow symlinks and support both GNU and BSD stat. The byte offset only
+    # belongs to this device/inode; a same-sized replacement is still a new log.
+    log_identity=$(stat -L -c '%d:%i' "$LOG_PATH" 2>/dev/null ||
+                   stat -L -f '%d:%i' "$LOG_PATH" 2>/dev/null) || {
+        echo "ALERT error-log-watch cannot identify log: $LOG_PATH" >&2
+        return 1
+    }
     log_size=$(wc -c < "$LOG_PATH")
     offset=0
     if [ -r "$STATE_PATH" ]; then
-        offset=$(cat "$STATE_PATH" 2>/dev/null)
-        case "$offset" in
-            ''|*[!0-9]*) offset=0 ;;
-        esac
+        saved_identity=""; saved_offset=""; extra=""
+        if IFS=' ' read -r saved_identity saved_offset extra < "$STATE_PATH"; then
+            case "$saved_offset" in
+                ''|*[!0-9]*) ;;
+                *)
+                    if [ "$saved_identity" = "$log_identity" ] && [ -z "$extra" ]; then
+                        offset=$saved_offset
+                    fi ;;
+            esac
+        fi
     fi
 
-    # Rotated or truncated since the last run: re-read from the top. One
-    # duplicate mail beats a pager that goes blind after every rotation.
+    # Missing, legacy or mismatched identity replays from zero. Same-file
+    # truncation still needs the size check (e.g. copytruncate rotation).
     if [ "$offset" -gt "$log_size" ]; then
         offset=0
     fi
@@ -119,7 +132,7 @@ watch() {
     # Advance the offset even when the delta held an alert: the mail carries
     # the lines, and re-mailing them every tick until somebody clears the
     # log is noise, not persistence. The next *new* alert still pages.
-    printf '%s' "$log_size" > "$STATE_PATH"
+    printf '%s %s\n' "$log_identity" "$log_size" > "$STATE_PATH"
 
     if [ -z "$alerts" ]; then
         if [ "$VERBOSE" -eq 1 ]; then
@@ -145,6 +158,11 @@ selftest() {
         out=""; rc=0
         sh "$0" --log "$stub/$name.log" --state "$stub/$name.offset" >"$stub/out.txt" 2>&1 || rc=$?
         out=$(cat "$stub/out.txt")
+        if [ -z "$expect_word" ] && [ -n "$out" ]; then
+            echo "FAIL  $name -> expected silence, out='$out' (rc=$rc)"
+            failures=$((failures + 1))
+            return
+        fi
         case "$out" in
             *"$expect_word"*)
                 if [ "$rc" -eq "$expect_rc" ]; then
@@ -201,6 +219,46 @@ selftest() {
     sh "$0" --log "$stub/rotation.log" --state "$stub/rotation.offset" >/dev/null 2>&1 || true
     printf '%s\n' '[2026-09-29 10:03:00] testing.CRITICAL: Unhandled exception. {"exception":"RuntimeException"}' > "$stub/rotation.log"
     run_case rotation 1 "Unhandled exception."
+    run_case rotation 0 ""
+
+    # Replacement files must reset the cursor even when not shorter. The alert
+    # is before the consumed offset; the following unchanged run must be silent.
+    for replacement in equal larger; do
+        name="replacement-$replacement"
+        printf '%-256s\n' 'testing.INFO: consumed quiet log' > "$stub/$name.log"
+        run_case "$name" 0 ""
+        printf '%-256s\n' 'testing.CRITICAL: Unhandled exception. replacement' > "$stub/new.log"
+        if [ "$replacement" = larger ]; then
+            printf '%s\n' 'testing.INFO: extra padding after the old offset' >> "$stub/new.log"
+        fi
+        old_size=$(wc -c < "$stub/$name.log")
+        new_size=$(wc -c < "$stub/new.log")
+        if { [ "$replacement" = equal ] && [ "$new_size" -ne "$old_size" ]; } ||
+           { [ "$replacement" = larger ] && [ "$new_size" -le "$old_size" ]; }; then
+            echo "FAIL  $name -> fixture size $new_size vs $old_size"
+            failures=$((failures + 1))
+        fi
+        mv "$stub/new.log" "$stub/$name.log"
+        run_case "$name" 1 "Unhandled exception. replacement"
+        run_case "$name" 0 ""
+    done
+
+    # Appending to the same file keeps the cursor: only the new alert pages.
+    printf '%s\n' 'testing.CRITICAL: Queue job failed. appended' >> "$stub/fires.log"
+    run_case fires 1 "Queue job failed. appended"
+    case "$out" in
+        *"Unhandled exception."*)
+            echo "FAIL  append -> replayed an already consumed alert"
+            failures=$((failures + 1)) ;;
+    esac
+    run_case fires 0 ""
+
+    # An old numeric-only cursor cannot prove which file it consumed. Upgrade
+    # by replaying once rather than trusting an ambiguous offset after rotation.
+    printf '%s\n' 'testing.CRITICAL: Unhandled exception. legacy' > "$stub/legacy.log"
+    wc -c < "$stub/legacy.log" > "$stub/legacy.offset"
+    run_case legacy 1 "Unhandled exception. legacy"
+    run_case legacy 0 ""
 
     # missing-log: an unreadable log is itself a page, not a quiet pass.
     rm -f "$stub/missing.log"
