@@ -155,7 +155,7 @@ it('never serves one member the answer belonging to another', function () {
    Answers that do not hold a seat
    --------------------------------------------------------------------------- */
 
-it('shows the JSON answer without offering an unnoticed seat-taking upgrade', function (RsvpStatus $status, string $copy, bool $full, bool $synced) {
+it('shows the JSON answer without offering an unnoticed seat-taking upgrade', function (RsvpStatus $status, string $copy, bool $full, bool $stamped) {
     if ($full) {
         $this->event->update(['capacity' => 1]);
         Rsvp::factory()->create(['event_id' => $this->event->id, 'status' => RsvpStatus::Going]);
@@ -165,7 +165,9 @@ it('shows the JSON answer without offering an unnoticed seat-taking upgrade', fu
         ->putJson(route('events.rsvp.update', $this->event), ['status' => $status->value])
         ->assertSuccessful();
 
-    if ($synced) {
+    // The stamp a metadata write-back leaves on the row: it must not change
+    // the copy, because it is not proof this answer was mirrored (TOG-8826).
+    if ($stamped) {
         Rsvp::query()->where('event_id', $this->event->id)->where('user_id', $this->member->id)
             ->update(['synced_to_discord_at' => now()]);
     }
@@ -181,8 +183,14 @@ it('shows the JSON answer without offering an unnoticed seat-taking upgrade', fu
         ->assertDontSeeHtml('data-testid="event-full"')
         ->assertDontSeeHtml('data-testid="rsvp-confirmed"');
 
-    $component->assertSeeHtml($synced ? 'data-testid="rsvp-synced"' : 'data-testid="rsvp-syncing"')
-        ->assertDontSeeHtml($synced ? 'data-testid="rsvp-syncing"' : 'data-testid="rsvp-synced"');
+    // TOG-8826: a Maybe/NotGoing answer is saved here and never mirrored —
+    // `event.upsert` carries event metadata only — so it must never claim a
+    // Discord sync, stamped or not.
+    $component->assertSeeHtml('data-testid="rsvp-saved"')
+        ->assertSee('Your answer is saved here.')
+        ->assertDontSeeHtml('data-testid="rsvp-syncing"')
+        ->assertDontSeeHtml('data-testid="rsvp-synced"')
+        ->assertDontSeeHtml('data-testid="rsvp-sync-failed"');
 
     expect(Rsvp::query()->where('event_id', $this->event->id)->where('user_id', $this->member->id)->sole()->status)
         ->toBe($status);
@@ -190,7 +198,7 @@ it('shows the JSON answer without offering an unnoticed seat-taking upgrade', fu
     'maybe' => [RsvpStatus::Maybe, "You're a maybe"],
     'not going' => [RsvpStatus::NotGoing, "You're not going"],
 ])->with(['room available' => false, 'full' => true])
-    ->with(['sync pending' => false, 'synced' => true]);
+    ->with(['unstamped' => false, 'stamped' => true]);
 
 it('shows an eager-loaded non-seat answer honestly', function (RsvpStatus $status, string $copy) {
     Rsvp::factory()->create([
@@ -206,7 +214,12 @@ it('shows an eager-loaded non-seat answer honestly', function (RsvpStatus $statu
         ->test(RsvpButton::class, ['event' => $event])
         ->assertSee($copy)
         ->assertSee('Remove answer')
-        ->assertDontSeeHtml('data-testid="rsvp-going"');
+        ->assertSeeHtml('data-testid="rsvp-saved"')
+        ->assertSee('Your answer is saved here.')
+        ->assertDontSeeHtml('data-testid="rsvp-going"')
+        ->assertDontSeeHtml('data-testid="rsvp-syncing"')
+        ->assertDontSeeHtml('data-testid="rsvp-synced"')
+        ->assertDontSeeHtml('data-testid="rsvp-sync-failed"');
 })->with([
     'maybe' => [RsvpStatus::Maybe, "You're a maybe"],
     'not going' => [RsvpStatus::NotGoing, "You're not going"],
@@ -283,15 +296,23 @@ it('keeps non-seat answers removable while RSVPs are paused', function (RsvpStat
         ->assertDontSeeHtml('data-testid="rsvp-paused"')
         ->assertDontSeeHtml('data-testid="rsvp-going"')
         ->call('withdraw')
+        ->assertDispatched('rsvp-state-changed')
         ->assertDontSeeHtml('data-testid="rsvp-answer"')
-        ->assertSeeHtml('data-testid="rsvp-paused"');
+        ->assertSeeHtml('data-testid="rsvp-paused"')
+        // TOG-8826: removing an answer while paused swaps the controls for
+        // the notice alone — the same focus loss as a successful RSVP — so
+        // the notice must be focusable for the rsvp-state-changed handler.
+        ->assertSeeHtml('role="status" tabindex="-1" data-testid="rsvp-paused"');
 
     expect(Rsvp::query()->where('event_id', $this->event->id)->where('user_id', $this->member->id)->exists())
         ->toBeFalse();
 })->with([RsvpStatus::Maybe, RsvpStatus::NotGoing])
     ->with(['room available' => false, 'full' => true]);
 
-it('does not describe a failed non-seat sync as a held spot or a successful sync', function (RsvpStatus $status) {
+it('never describes a non-seat answer as a Discord sync outcome, even when the mirror failed', function (RsvpStatus $status) {
+    // TOG-8826: a terminally-refused mirror concerns the aggregate metadata
+    // write, not this answer — a Maybe was never in the payload — so the row
+    // must neither claim a sync nor deny one. It is simply saved here.
     Rsvp::factory()->create([
         'event_id' => $this->event->id,
         'user_id' => $this->member->id,
@@ -303,11 +324,11 @@ it('does not describe a failed non-seat sync as a held spot or a successful sync
     Livewire::actingAs($this->member)
         ->test(RsvpButton::class, ['event' => $this->event->fresh()])
         ->assertSeeHtml('data-testid="rsvp-answer"')
-        ->assertSeeHtml('data-testid="rsvp-sync-failed"')
-        ->assertSee("Saved. Discord sync didn't go through — your answer is still saved.", false)
-        ->assertDontSee('your spot is still held')
+        ->assertSeeHtml('data-testid="rsvp-saved"')
+        ->assertSee('Your answer is saved here.')
         ->assertDontSeeHtml('data-testid="rsvp-syncing"')
-        ->assertDontSeeHtml('data-testid="rsvp-synced"');
+        ->assertDontSeeHtml('data-testid="rsvp-synced"')
+        ->assertDontSeeHtml('data-testid="rsvp-sync-failed"');
 })->with([RsvpStatus::Maybe, RsvpStatus::NotGoing]);
 
 it('offers a focusable answer after a non-seat Livewire write', function (RsvpStatus $status) {
