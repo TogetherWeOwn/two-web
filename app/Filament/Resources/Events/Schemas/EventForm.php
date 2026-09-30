@@ -73,6 +73,7 @@ class EventForm
                     ->required(),
 
                 TextInput::make('location')
+                    ->required()
                     ->placeholder('Voice: General')
                     ->maxLength(255),
                 TextInput::make('capacity')
