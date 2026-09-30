@@ -24,8 +24,8 @@ use Laravel\Dusk\Browser;
  * The focus event is dispatched synthetically. A real tab-switch focus change
  * is a window-manager act WebDriver cannot promise headless Chrome will
  * report, and waiting on it would be a flake (docs/flake-policy.md). The
- * dispatch only rings the doorbell — the fetch, the session verdict and the
- * reload into the guest render are all real.
+ * dispatch only rings the fallback doorbell — the session verdict and reload
+ * are real, whether storage or the focus re-check gets there first.
  */
 
 test('a second tab re-renders to the guest pitch after sign-out elsewhere', function () {
@@ -70,11 +70,12 @@ test('a second tab re-renders to the guest pitch after sign-out elsewhere', func
             ->assertPathIs('/')
             ->assertSeeLink('Log in with Discord');
 
-        // Back to tab A: still showing the stale authenticated render.
+        // Back to tab A: the storage event may already have refreshed it to
+        // the guest render. Requiring a stale RSVP control here races that
+        // intended reload. Both tabs' signed-in controls were checked above.
         $browser->driver->switchTo()->window($tabA);
-        $browser->assertVisible('[data-testid="rsvp-going"]');
-        // Ring the doorbell; the fetch, verdict and reload are real. `script`
-        // returns the evaluation result, not the browser, so it stands alone.
+        // Ring the fallback doorbell if the storage path has not refreshed it.
+        // `script` returns the evaluation result, not the browser.
         $browser->script('window.dispatchEvent(new Event("focus"));');
 
         // No failing click needed: the tab reloads into the guest pitch.
