@@ -6,6 +6,9 @@ import test from 'node:test';
 // Execute the shipped component script, not a second implementation.
 const blade = readFileSync(new URL('../resources/views/livewire/member-profile.blade.php', import.meta.url), 'utf8');
 const script = blade.match(/@script[\s\S]*?<script>([\s\S]*?)<\/script>/)[1];
+const layout = readFileSync(new URL('../resources/views/components/layouts/app.blade.php', import.meta.url), 'utf8');
+const authScript = layout.match(/<script data-testid="auth-tab-sync">([\s\S]*?)<\/script>/)[1]
+    .replace(/@js\(route\('auth.status'\)\)/, '"/auth/status"');
 const key = 'two:profile-draft:42';
 const input = { bio: 'Unsent <bio>\nsecond line', gamesText: 'Chess\nCo-op', timezone: 'Europe/London' };
 
@@ -17,8 +20,14 @@ function page({ stored = null, owner = true, storageFails = false, restoreFails 
     let click;
     const restores = [];
     const navigations = [];
+    const document = Object.assign(new EventTarget(), { visibilityState: 'visible' });
+    const window = Object.assign(new EventTarget(), {
+        localStorage: { setItem() {} },
+        location: { assign(url) { navigations.push(url); }, reload() { navigations.push('reload'); } },
+    });
     const wire = {
         el: {
+            isConnected: true,
             dataset: { profileId: '42', draftOwner: owner ? '1' : '0', loginUrl: '/login?next=%2Fmembers%2F42' },
             querySelector(selector) {
                 if (selector === '[data-testid="profile-edit-form"]') return form ? {} : null;
@@ -34,18 +43,28 @@ function page({ stored = null, owner = true, storageFails = false, restoreFails 
             return restoreFails ? Promise.reject(new Error('offline')) : Promise.resolve();
         },
     };
-    runInNewContext(script, {
+    const context = {
         $wire: wire,
-        window: { location: { assign(url) { navigations.push(url); } } },
+        window, document, CustomEvent,
+        fetch: async () => ({ ok: true, json: async () => ({ authenticated: false }) }),
         sessionStorage: {
             getItem(k) { if (storageFails) throw new Error('disabled'); return storage.get(k) ?? null; },
             setItem(k, v) { if (storageFails) throw new Error('quota'); storage.set(k, v); },
             removeItem(k) { if (storageFails) throw new Error('disabled'); storage.delete(k); },
         },
         Date, JSON,
-    });
+    };
+    runInNewContext(script, context);
+    runInNewContext(authScript, context);
     return {
         storage, warning, restores, navigations,
+        authExpiry(source) {
+            if (source === 'focus') window.dispatchEvent(new Event('focus'));
+            else if (source === 'visibility') document.dispatchEvent(new Event('visibilitychange'));
+            else if (source === 'pageshow') window.dispatchEvent(Object.assign(new Event('pageshow'), { persisted: true }));
+            else window.dispatchEvent(Object.assign(new Event('storage'), { key: 'two-auth', newValue: 'signed-out' }));
+        },
+        detach() { wire.el.isConnected = false; },
         fail(status) {
             let prevented = false;
             assert.ok(request, 'missing request hook');
@@ -122,6 +141,45 @@ test('draft remains recoverable if the restore request fails', async () => {
     await settle();
     assert.equal(p.restores.length, 1);
     assert.equal(p.storage.has(key), true);
+});
+
+for (const source of ['focus', 'visibility', 'pageshow', 'storage']) {
+    test(`${source} auth expiry preserves deferred input before login instead of reloading`, async () => {
+        const p = page();
+        p.authExpiry(source);
+        await settle();
+        assert.equal(JSON.parse(p.storage.get(key)).bio, input.bio);
+        assert.deepEqual(p.navigations, ['/login?next=%2Fmembers%2F42']);
+        const returned = page({ stored: p.storage.get(key), form: false });
+        await settle();
+        assert.deepEqual(Array.from(returned.restores[0] ?? []), Object.values(input));
+    });
+
+    test(`${source} auth expiry cannot discard input when storage is unavailable`, async () => {
+        const p = page({ storageFails: true });
+        p.authExpiry(source);
+        await settle();
+        assert.deepEqual(p.navigations, []);
+        assert.equal(p.warning.hidden, false);
+        assert.equal(p.warning.focused, true);
+    });
+
+    test(`${source} auth expiry still reloads pages without an open profile form`, async () => {
+        const p = page({ form: false });
+        p.authExpiry(source);
+        await settle();
+        assert.deepEqual(p.navigations, ['reload']);
+        assert.equal(p.storage.size, 0);
+    });
+}
+
+test('a detached profile cannot interfere with the current pages auth reload', async () => {
+    const p = page();
+    p.detach();
+    p.authExpiry('focus');
+    await settle();
+    assert.deepEqual(p.navigations, ['reload']);
+    assert.equal(p.storage.size, 0);
 });
 
 test('419 without an open form goes to login without inventing a draft', () => {

@@ -104,6 +104,70 @@ it('recovers deferred profile input after a real CSRF 419 and page round trip', 
         ->timezone->toBe('Europe/London');
 });
 
+it('preserves unsent profile input when auth sync navigates before save', function (string $source) {
+    $member = User::factory()->create();
+
+    $this->browse(function (Browser $browser) use ($member, $source) {
+        $browser->loginAs($member)
+            ->visit('/profile')
+            ->press('Add profile details')
+            ->waitFor('[data-testid="profile-edit-form"]')
+            ->type('bio', 'Auth-sync draft')
+            ->type('gamesText', "Chess\nCo-op")
+            ->type('timezone', 'Europe/London');
+
+        // Exercise the shipped layout and component listeners, then a real
+        // page round trip. Stub only the probe verdict/login destination;
+        // Discord and an actual logout are covered by their own journeys.
+        $browser->script(<<<'JS'
+            document.querySelector('[data-profile-id]').dataset.loginUrl = '/profile';
+            const originalFetch = window.fetch;
+            window.fetch = (url, options) => String(url).endsWith('/auth/status')
+                ? Promise.resolve(new Response(JSON.stringify({ authenticated: false }), { status: 200 }))
+                : originalFetch(url, options);
+        JS);
+        $browser->script($source === 'focus'
+            ? 'window.dispatchEvent(new Event("focus"));'
+            : 'window.dispatchEvent(new StorageEvent("storage", { key: "two-auth", newValue: "signed-out" }));');
+
+        $browser->waitFor('[data-testid="profile-draft-restored"]')
+            ->assertInputValue('bio', 'Auth-sync draft')
+            ->assertInputValue('gamesText', "Chess\nCo-op")
+            ->assertInputValue('timezone', 'Europe/London');
+        expect($member->profile()->first())->toBeNull();
+    });
+})->with(['focus', 'storage']);
+
+it('blocks auth-sync navigation when profile draft storage is unavailable', function (string $source) {
+    $member = User::factory()->create();
+
+    $this->browse(function (Browser $browser) use ($member, $source) {
+        $browser->loginAs($member)
+            ->visit('/profile')
+            ->press('Add profile details')
+            ->waitFor('[data-testid="profile-edit-form"]')
+            ->type('bio', 'Copy this before login');
+
+        $browser->script(<<<'JS'
+            window.__draftRecoveryProbe = 'unsent';
+            Object.defineProperty(window, 'sessionStorage', { get() { throw new Error('disabled'); } });
+            const originalFetch = window.fetch;
+            window.fetch = (url, options) => String(url).endsWith('/auth/status')
+                ? Promise.resolve(new Response(JSON.stringify({ authenticated: false }), { status: 200 }))
+                : originalFetch(url, options);
+        JS);
+        $browser->script($source === 'focus'
+            ? 'window.dispatchEvent(new Event("focus"));'
+            : 'window.dispatchEvent(new StorageEvent("storage", { key: "two-auth", newValue: "signed-out" }));');
+
+        $browser->waitFor('[data-testid="profile-draft-unavailable"]')
+            ->assertInputValue('bio', 'Copy this before login')
+            ->assertScript('window.__draftRecoveryProbe', 'unsent')
+            ->waitUntil('document.activeElement?.dataset?.testid === "profile-draft-unavailable"');
+        expect($member->profile()->first())->toBeNull();
+    });
+})->with(['focus', 'storage']);
+
 it('keeps an invalid edit open and gives the field an accessible error', function () {
     $member = User::factory()->create();
 

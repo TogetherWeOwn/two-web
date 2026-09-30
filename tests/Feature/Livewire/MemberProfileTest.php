@@ -949,6 +949,52 @@ it('restores an unsent profile draft without writing until the member saves', fu
     expect($member->profile()->first()->bio)->toBe('Unsent <bio>');
 });
 
+it('retains a restored draft on an immediate save and accepts a later retry', function () {
+    $this->freezeTime();
+    $member = User::factory()->create();
+    Profile::factory()->for($member)->create(['bio' => 'Before']);
+
+    $component = Livewire::actingAs($member)
+        ->test(MemberProfile::class, ['member' => $member, 'stats' => profileStats($member->discord_id)])
+        ->call('restoreDraft', 'Recovered', "Chess\nCo-op", 'Europe/London');
+
+    $this->travel(500)->milliseconds();
+    $component->call('save')
+        ->assertHasErrors(['bio'])
+        ->assertSet('saved', false)
+        ->assertSet('editing', true)
+        ->assertSet('draftRestored', true)
+        ->assertSet('bio', 'Recovered')
+        ->assertSet('gamesText', "Chess\nCo-op")
+        ->assertSet('timezone', 'Europe/London');
+    expect($member->profile()->sole()->bio)->toBe('Before');
+
+    $this->travel(SpamTrap::MIN_FILL_MS)->milliseconds();
+    $component->call('save')
+        ->assertHasNoErrors()
+        ->assertSet('saved', true)
+        ->assertSet('draftRestored', false);
+    expect($member->profile()->sole())
+        ->bio->toBe('Recovered')
+        ->games->toBe(['Chess', 'Co-op'])
+        ->timezone->toBe('Europe/London');
+});
+
+it('still swallows a filled honeypot on a restored draft', function () {
+    $this->freezeTime();
+    $member = User::factory()->create();
+
+    Livewire::actingAs($member)
+        ->test(MemberProfile::class, ['member' => $member, 'stats' => profileStats($member->discord_id)])
+        ->call('restoreDraft', 'Bot draft', '', '')
+        ->set('website', 'filled decoy')
+        ->call('save')
+        ->assertHasNoErrors()
+        ->assertSet('saved', true)
+        ->assertSet('editing', false);
+    expect($member->profile()->first())->toBeNull();
+});
+
 it('refuses to restore a draft onto another members profile', function () {
     $member = User::factory()->create();
     $viewer = User::factory()->create();

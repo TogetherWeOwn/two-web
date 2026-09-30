@@ -147,6 +147,15 @@
 
                 let checking = false;
 
+                function reloadAfterAuthChange() {
+                    // Editors may preserve unsent input or refuse navigation
+                    // when storage is unavailable. Other pages still reload.
+                    const beforeReload = new CustomEvent('two:before-auth-reload', { cancelable: true });
+                    if (document.dispatchEvent(beforeReload)) {
+                        window.location.reload();
+                    }
+                }
+
                 async function recheck() {
                     if (checking || document.visibilityState === 'hidden') {
                         return;
@@ -160,7 +169,7 @@
                         if (res.ok) {
                             const body = await res.json();
                             if (body && body.authenticated === false) {
-                                window.location.reload();
+                                reloadAfterAuthChange();
                             }
                         }
                     } catch (e) {
@@ -184,7 +193,7 @@
                 });
                 window.addEventListener('storage', (event) => {
                     if (event.key === STORAGE_KEY && event.newValue === 'signed-out') {
-                        window.location.reload();
+                        reloadAfterAuthChange();
                     }
                 });
 

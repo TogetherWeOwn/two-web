@@ -54,6 +54,7 @@ class MemberProfile extends Component
      * names the kept draft, not the expiry. Cleared on the next edit, save
      * or cancel like the other banners.
      */
+    #[Locked]
     public bool $draftRestored = false;
 
     /**
@@ -245,6 +246,18 @@ class MemberProfile extends Component
         // A distinct response would be an oracle the trap must not give, and
         // nothing attacker-shaped is logged.
         $validated = $this->validate(static::validationRules());
+
+        // A restored form is already filled when it opens. Refuse an early
+        // human retry without consuming the recovered text or claiming a save.
+        // The server-set stamp is not backdated: no write gets past the floor,
+        // and a filled decoy still takes the ordinary silent-trap path below.
+        if ($this->draftRestored
+            && ! SpamTrap::honeypotFilled($this->website)
+            && SpamTrap::tooFast($this->formOpenedAt)) {
+            $this->addError('bio', 'Please wait a moment and save again. Your changes are still here.');
+
+            return;
+        }
 
         if (SpamTrap::honeypotFilled($this->website) || SpamTrap::tooFast($this->formOpenedAt)) {
             // Mirror the genuine path's resets: the trap must end in the

@@ -498,6 +498,21 @@
                 }
             };
 
+            // Focus/visibility checks and another tab's logout can navigate
+            // before a save ever sends a request. Preserve input before those
+            // reloads too, and go through login rather than a guest render that
+            // cannot restore this owner's draft. Ignore unmounted components.
+            document.addEventListener('two:before-auth-reload', (event) => {
+                if (!$wire.el.isConnected || !$wire.el.querySelector('[data-testid="profile-edit-form"]')) {
+                    return;
+                }
+
+                event.preventDefault();
+                if (keepDraft()) {
+                    window.location.assign($wire.el.dataset.loginUrl);
+                }
+            });
+
             $wire.$hook('request', ({ fail }) => {
                 fail(({ status, preventDefault }) => {
                     if (status !== 419) {
