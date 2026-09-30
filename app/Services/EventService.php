@@ -327,48 +327,30 @@ class EventService
         return DB::transaction(function () use ($event, $to): Event {
             $locked = Event::query()->whereKey($event->getKey())->lockForUpdate()->firstOrFail();
 
-            // Cancelled is terminal. Discord has already told everyone it is off;
-            // un-cancelling would mean a second announcement nobody asked for, and
-            // the members who dropped their RSVP are not coming back for it.
-            if ($locked->status === EventStatus::Cancelled) {
-                throw EventNotOpenException::forTransition($locked, $to);
-            }
-
-            // Reconcile closed this event; publishing it again would resurrect
-            // a finished meeting and queue an upsert Discord no longer needs.
-            if ($to === EventStatus::Published && $locked->status === EventStatus::Past) {
-                throw EventNotOpenException::forTransition($locked, $to);
-            }
-
-            // A draft can outlive its dates without reconcile touching it.
-            // Refuse publication before saving or scheduling any Discord sync.
-            if ($to === EventStatus::Published && $locked->status === EventStatus::Draft && $locked->ends_at->isPast()) {
-                throw ValidationException::withMessages([
-                    'ends_at' => 'An event that has already ended cannot be published. Update its dates first.',
-                ]);
-            }
+            $now = CarbonImmutable::now();
+            $this->assertCanTransition($locked, $to, $now);
 
             if ($locked->status !== $to) {
+                // Lock and preflight the whole series before writes or dispatches.
+                // A later rejection must not orphan an earlier child's unique
+                // queue lock, which can live outside the SQL rollback.
+                $children = [];
+                if ($locked->isSeriesParent()) {
+                    // Past instances keep their history; cancelled weeks stay off.
+                    $children = $locked->childEvents()
+                        ->whereIn('status', [EventStatus::Draft, EventStatus::Published])
+                        ->lockForUpdate()->get()->all();
+
+                    foreach ($children as $child) {
+                        $this->assertCanTransition($child, $to, $now);
+                    }
+                }
+
                 $locked->status = $to;
                 $locked->save();
 
-                // A series moves together: publishing the parent announces every
-                // instance that exists, cancelling it calls them all off. Each
-                // child is transitioned through the same path, so the terminal
-                // rule holds for every row and every row gets its write-back —
-                // a child that already reached the target state (a week skipped
-                // by cancelling early) is skipped, never forced.
-                if ($locked->isSeriesParent()) {
-                    foreach ($locked->childEvents()->lockForUpdate()->get() as $child) {
-                        // Only the states this action applies to: a past instance
-                        // keeps its history ("it ran" is not "called off"), and a
-                        // week skipped by cancelling early stays as it is.
-                        if (! in_array($child->status, [EventStatus::Draft, EventStatus::Published], true)) {
-                            continue;
-                        }
-
-                        $this->transitionRow($child, $to);
-                    }
+                foreach ($children as $child) {
+                    $this->transitionRow($child, $to);
                 }
 
                 $this->syncAfterCommit($locked);
@@ -380,22 +362,30 @@ class EventService
         });
     }
 
-    /**
-     * Transition one row without touching its children. A series child is a
-     * leaf: cancelling one instance to skip a week must not cascade anywhere.
-     */
-    private function transitionRow(Event $row, EventStatus $to): void
+    private function assertCanTransition(Event $row, EventStatus $to, CarbonImmutable $now): void
     {
+        // Cancelled is terminal: Discord has already told everyone it is off.
         if ($row->status === EventStatus::Cancelled) {
             throw EventNotOpenException::forTransition($row, $to);
         }
 
-        if ($to === EventStatus::Published && $row->status === EventStatus::Draft && $row->ends_at->isPast()) {
+        // Reconcile already closed this meeting; never resurrect it.
+        if ($to === EventStatus::Published && $row->status === EventStatus::Past) {
+            throw EventNotOpenException::forTransition($row, $to);
+        }
+
+        if ($to === EventStatus::Published && $row->status === EventStatus::Draft && $row->ends_at->lt($now)) {
             throw ValidationException::withMessages([
                 'ends_at' => 'An event that has already ended cannot be published. Update its dates first.',
             ]);
         }
+    }
 
+    /**
+     * Apply an already-preflighted, locked child transition without cascading.
+     */
+    private function transitionRow(Event $row, EventStatus $to): void
+    {
         if ($row->status !== $to) {
             $row->status = $to;
             $row->save();
