@@ -31,10 +31,11 @@ namespace Tests\Support;
  *   - Otherwise require the `two_web_test` prefix. Plain `two_web_test` locally
  *     and in CI, suffixed per-worktree names (`two_web_test_tog7330`) elsewhere.
  *
- * Host and port are deliberately NOT checked. The documented sandbox flow points
- * `.env` at a shared Postgres the developer is allowed to wipe, and that server
- * legitimately hosts both `two_web` and `two_web_test` — refusing its host would
- * break that flow, while the name check already protects the data on it.
+ * Host and port are NOT checked: this name/role guard is not host authorization.
+ * Agents must use approved agent-testdb or disposable CI services; developers
+ * may use dedicated disposable local instances. Never test or probe staging or
+ * production databases, even with a test-prefixed name. See README.md and
+ * docs/testing-strategy.md; credential failures mean stop/report, not substitution.
  *
  * There is deliberately no escape hatch. A `TEST_ALLOW_ANY_DB=1` seam would be
  * exactly the mechanism a future misconfigured worker inherits, and the suite has

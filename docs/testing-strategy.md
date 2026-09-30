@@ -87,9 +87,11 @@ layers stop a repeat — keep both:
    values beat `.env`-file values. (They do not beat a *real* process
    environment variable for a Laravel app — PHPUnit sets `putenv`/`$_ENV` but
    never `$_SERVER`, which Laravel reads first. That case is what layer 2 is
-   for.) Host, port and credentials stay env-supplied on purpose, so the suite
-   runs against whatever Postgres you can reach — `TestDatabaseIsNotPinnedTest`
-   fails the build if anyone pins them.
+   for.) Host, port and credentials stay env-supplied to support the approved
+   agent test service, disposable local developer instances and disposable CI
+   service containers — not arbitrary reachable servers.
+   `TestDatabaseIsNotPinnedTest` checks that these values are not pinned; it
+   does not authorize a host or credential.
 2. **`Tests\TestCase::setUpTraits()` refuses the wrong database before the first
    migration runs** (`tests/Support/TestDatabaseGuard.php`). The check sees the
    resolved config after boot, so it covers every repointing mechanism —
@@ -102,13 +104,34 @@ layers stop a repeat — keep both:
 
 Rules that follow from the contract:
 
+- **Agent test-container-only setup:** use `DB_HOST=agent-testdb`, `DB_PORT=5432`,
+  `DB_USERNAME=agent_test` and an empty `DB_PASSWORD`, with
+  `DB_DATABASE=two_web_test` (or a unique `two_web_test_<something>`), or use
+  disposable CI service containers with their test-only credentials. The agent
+  service's default database `agent_test` is not a valid name for this suite.
+  See the [README setup](../README.md#database-setup-agents-developers-and-ci).
+- If a test needs Redis, use `redis://agent-testredis:6379` or a disposable CI
+  service container. This app does not otherwise require Redis.
+- Never run database tests or database probes against staging or production,
+  even if the database name begins with `two_web_test`. The guard checks names
+  and controller roles, **not host approval**; reachability is not authorization.
+- Developer tests may use dedicated disposable local Postgres instances
+  (`docker compose` provisions `two_web_test`); CI tests use disposable workflow
+  services. Neither is permission for an agent to choose another reachable host.
+- Missing test services or connection/authentication/ownership/permission errors
+  mean stop and report the expected test service and error. Never substitute
+  credentials from inherited runtime URLs, environment variables, files, process
+  information or other tool results. Do not weaken the guard to get a green run.
 - Never point `DB_DATABASE` at `two_web` (dev) or `paperclip` (controller) and
-  run the suite. The guard will refuse; that refusal is the feature working.
-- Per-worktree databases must be named `two_web_test_<something>` — the prefix
-  is what the guard checks.
-- Dusk is outside this contract by design: it drives a real browser against a
-  real server on your local `two_web` and never comes through `Tests\TestCase`.
-  Do not point Dusk at staging or production either (see `phpunit.dusk.xml`).
+  run the Pest suite. The guard will refuse; that refusal is the feature working.
+- Per-worktree Pest databases must be named `two_web_test_<something>` — the
+  prefix is what the guard checks, not evidence that the host is safe.
+- Dusk is outside this **name-guard** contract by design: it drives a real browser
+  against a separately configured server and never comes through
+  `Tests\TestCase`. Developer Dusk uses disposable local `two_web`; agents must
+  configure both the server and Dusk to use the approved test service or
+  disposable CI services. The test-container-only, no staging/production and
+  no credential-substitution rules still apply (see `phpunit.dusk.xml`).
 
 ### The Integration suite is the exception to the transaction rule
 
