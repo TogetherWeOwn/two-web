@@ -19,11 +19,13 @@
 #
 # Both PATH and CI_PHP_BIN select local stubs, so these are real executions of
 # the real script against a controlled artisan, not reasoning about it. Ambient
-# CI_PHP_BIN is cleared for every invocation. What is pinned:
+# CI_PHP_BIN is cleared and BASH_ENV is neutralized for every child invocation.
+# What is pinned:
 #
 #   unset-selects-path        inherited CI_PHP_BIN cannot bypass the PATH stub
 #   explicit-selects-bin      explicit CI_PHP_BIN wins over the PATH stub
 #   selection-exports        each branch exports its own synthetic cookie
+#   startup-config-isolated  inherited BASH_ENV cannot restore CI_PHP_BIN
 #
 #   nonzero-names-the-code    artisan exits 42 -> message names 42, not 0 or 1
 #   nonzero-shows-stderr      ...and the stack trace Laravel wrote is printed
@@ -81,15 +83,16 @@ COOKIE_NAME="two_session"
 COOKIE_VALUE="eyJpdiI6ImFiY2RlZmdoaWprbG1ub3AiLCJ2YWx1ZSI6Inp6enp6enp6enp6enp6eiJ9"
 
 # Clear ambient executable selection in the child environment; only a test's
-# explicit argument may set it. stdout+stderr merged because the *step log* is
-# what a reader actually sees.
+# explicit argument may set it. Non-interactive Bash sources BASH_ENV after env
+# starts the child, so neutralize it before it can undo the fixture selection.
+# stdout+stderr merged because the *step log* is what a reader actually sees.
 run_mint() {
   local php_env=()
   if [ -n "${1:-}" ]; then
     php_env=("CI_PHP_BIN=$1")
   fi
   : > "$STUB_DIR/php-trace"
-  env -u CI_PHP_BIN "${php_env[@]}" \
+  env -u CI_PHP_BIN BASH_ENV=/dev/null "${php_env[@]}" \
     PATH="$STUB_DIR:$PATH" GITHUB_ENV="$ENV_FILE" STUB_TRACE_FILE="$STUB_DIR/php-trace" \
     ./ci/mint-session-cookie.sh 2>&1
 }
@@ -118,10 +121,12 @@ else
   indent < "$ENV_FILE"
 fi
 
+# Select the distinct command through fixture PATH: TMPDIR may contain spaces,
+# while the unchanged mint script expands CI_PHP_BIN as an unquoted command.
 : > "$ENV_FILE"
 out="$(CI_PHP_BIN="$STUB_DIR/php" \
        STUB_RC=0 STUB_STDOUT="two_session=synthetic-path-cookie" STUB_STDERR="" \
-       run_mint "$STUB_DIR/php-explicit")"
+       run_mint php-explicit)"
 status=$?
 
 n=$((n + 1))
@@ -137,6 +142,29 @@ if [ "$(< "$ENV_FILE")" = 'CI_SESSION_COOKIE=two_session=synthetic-explicit-cook
   pass "explicit-selection-exports"
 else
   fail "explicit-selection-exports: expected only the explicit stub's synthetic cookie"
+  indent < "$ENV_FILE"
+fi
+
+# A synthetic startup hook would otherwise restore CI_PHP_BIN after env -u.
+# Trace the hook as well as the stub so equal cookie output cannot hide leakage.
+cat > "$STUB_DIR/bash-env" <<'STUB'
+printf '%s\n' 'startup-hook' >> "$STUB_TRACE_FILE"
+export CI_PHP_BIN=php-explicit
+STUB
+: > "$ENV_FILE"
+out="$(BASH_ENV="$STUB_DIR/bash-env" CI_PHP_BIN=php-explicit \
+       STUB_RC=0 STUB_STDOUT="two_session=synthetic-path-cookie" STUB_STDERR="" \
+       run_mint)"
+status=$?
+
+n=$((n + 1))
+if [ "$status" -eq 0 ] && [ "$(< "$STUB_DIR/php-trace")" = 'path-php' ] \
+   && [ "$(< "$ENV_FILE")" = 'CI_SESSION_COOKIE=two_session=synthetic-path-cookie' ]; then
+  pass "startup-config-isolated"
+else
+  fail "startup-config-isolated: inherited BASH_ENV changed the fixture selection (exit ${status})"
+  indent <<< "$out"
+  indent < "$STUB_DIR/php-trace"
   indent < "$ENV_FILE"
 fi
 
