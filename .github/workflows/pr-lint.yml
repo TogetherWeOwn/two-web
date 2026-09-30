@@ -47,7 +47,7 @@ jobs:
       # The lint step itself needs no checkout: it reads the title and body from
       # env vars. The checkout is only so the job can attest its own runner, like
       # every other job here — see ci/attest-runner.sh (TOG-2847).
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7.0.1
 
       - name: Attest the runner
         run: ./ci/attest-runner.sh

@@ -37,7 +37,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       # Where did this job actually run? `runs-on:` asks; only the job can
       # answer. Fails on a non-hosted runner (the private group cannot serve
@@ -391,7 +391,7 @@ jobs:
           --health-retries 20
 
     steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       # See the note in `static`. Every job attests; a job that does not could be
       # moved onto a misrouted runner with nothing going red (TOG-8909; pre-flip gate TOG-2847).
@@ -513,7 +513,7 @@ jobs:
           --health-retries 20
 
     steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       # See the note in `static`. Every job attests; a job that does not could be
       # moved onto a misrouted runner with nothing going red (TOG-8909; pre-flip gate TOG-2847).
@@ -716,7 +716,7 @@ jobs:
           --health-retries 20
 
     steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       # See the note in `static`. Every job attests; a job that does not could be
       # moved onto a misrouted runner with nothing going red (TOG-8909; pre-flip gate TOG-2847).
@@ -1054,7 +1054,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       # See the note in `static`. Every job attests; a job that does not could be
       # moved onto a billable runner with nothing going red
@@ -1117,7 +1117,7 @@ jobs:
       # This job had no checkout: it only reads `needs` results. It needs one now
       # so it can attest its own runner — a job that does not attest could be
       # misrouted with nothing going red (TOG-8909).
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Attest the runner
         run: ./ci/attest-runner.sh
