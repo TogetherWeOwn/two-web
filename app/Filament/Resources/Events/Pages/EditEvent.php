@@ -9,6 +9,7 @@ use App\Support\EventInput;
 use Carbon\CarbonImmutable;
 use Filament\Resources\Pages\EditRecord;
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Validation\ValidationException;
 
 class EditEvent extends EditRecord
 {
@@ -144,6 +145,18 @@ class EditEvent extends EditRecord
             );
         }
 
-        return app(EventService::class)->update($record, $input);
+        try {
+            return app(EventService::class)->update($record, $input);
+        } catch (ValidationException $exception) {
+            // The service uses API field names; the panel error bag addresses
+            // those same fields under the form's Livewire state path.
+            $errors = [];
+
+            foreach ($exception->errors() as $field => $messages) {
+                $errors[$this->form->getStatePath().'.'.$field] = $messages;
+            }
+
+            throw ValidationException::withMessages($errors);
+        }
     }
 }
