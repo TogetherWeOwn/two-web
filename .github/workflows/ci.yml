@@ -53,7 +53,7 @@ jobs:
       # preinstalled, but every other job here pins the version and this should not
       # be the exception — an unpinned interpreter is exactly the kind of thing that
       # works until somebody upgrades the host. No install step follows it; seconds.
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: ${{ env.NODE_VERSION }}
 
@@ -534,7 +534,7 @@ jobs:
           [ "$("$php_bin" -r 'echo PHP_MAJOR_VERSION, ".", PHP_MINOR_VERSION;')" = "$PHP_VERSION" ] || { echo "::error::pinned PHP is $("$php_bin" -v | head -1), not PHP ${PHP_VERSION} — refusing to run on the wrong interpreter (TOG-5877)"; exit 1; }
           "$php_bin" "$RUNNER_TEMP/composer-pinned" --version
 
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: npm
@@ -767,7 +767,7 @@ jobs:
           printf 'opcache.enable=1\nopcache.enable_cli=1\nopcache.validate_timestamps=0\n' > "$dir/zz-opcache-budgets.ini"
           echo "PHP_INI_SCAN_DIR=:$dir" >> "$GITHUB_ENV"
 
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: npm
@@ -1053,7 +1053,7 @@ jobs:
       - name: Attest the runner
         run: ./ci/attest-runner.sh
 
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: ${{ env.NODE_VERSION }}
 
