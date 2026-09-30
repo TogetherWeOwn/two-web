@@ -55,7 +55,7 @@ expect() {
     rc=1
     return
   fi
-  if [ -n "$forbidden_pattern" ] && printf '%s' "$out" | grep -qE "$forbidden_pattern"; then
+  if [ -n "$forbidden_pattern" ] && printf '%s' "$out" | sed $'s/\033\\[[0-9;]*m//g' | grep -qE "$forbidden_pattern"; then
     fail "$slug: output contained a forbidden verdict ('$forbidden_pattern')"
     printf '%s\n' "$out" | sed 's/^/        /' >&2
     rc=1
@@ -138,8 +138,16 @@ expect empty-docs 2 "no keys parsed" "$WORK/base.example" "$WORK/empty.docs"
 # mistaken for agreement or ordinary documentation drift.
 printf '# APP_ENV=local\n\n# No active assignments.\n' > "$WORK/empty.example"
 printf '`APP_ENV` selects the environment.\n' > "$WORK/one-key.docs"
+# Match verdict lines, not words in paths inside parse-error diagnostics.
+forbidden_verdicts='^(PASS: |FAIL: (undocumented:|missing:|stale allowlist:))'
 expect empty-example 2 "no keys parsed from $WORK/empty.example" "$WORK/empty.example" "$WORK/one-key.docs" \
-  'agree|undocumented:|missing:|stale allowlist'
+  "$forbidden_verdicts"
+
+mkdir "$WORK/agreement-undocumented:-missing:-stale allowlist"
+collision_example="$WORK/agreement-undocumented:-missing:-stale allowlist/empty.example"
+cp "$WORK/empty.example" "$collision_example"
+expect empty-example-verdict-path 2 "no keys parsed from $collision_example" "$collision_example" "$WORK/one-key.docs" \
+  "$forbidden_verdicts"
 
 printf '\n'
 if [ "$rc" -ne 0 ]; then
