@@ -14,7 +14,7 @@
 # two-design. Both were captured from the live endpoint, not invented, so a case
 # passing here means the script handles an answer GitHub really gives.
 #
-# No network, no gh, no credential.
+# No network, no real gh, no credential.
 #
 # Usage: ./ci/verify-codeowners-selftest.sh
 
@@ -183,20 +183,47 @@ fi
 # `main`, passes, and never looks at the broken file in the PR. It went green on
 # a branch that really did name a non-collaborator.
 #
-# Asserted by reading the source, because the failure is a missing query
-# parameter on a network call this offline suite cannot make. Both halves matter:
-# the ref must be built into the URL, and GITHUB_HEAD_REF must be preferred on a
-# pull request (GITHUB_SHA there is the ephemeral merge commit, which the API
-# will not resolve).
-n=$((n + 1))
-if grep -q 'codeowners/errors?ref=' "$SCRIPT" \
-   && grep -q 'GITHUB_HEAD_REF' "$SCRIPT" \
-   && grep -q 'refusing to ask without an explicit ref' "$SCRIPT"; then
-  pass "ref-is-always-explicit"
-else
-  fail "ref-is-always-explicit: the script must pin ?ref=, prefer GITHUB_HEAD_REF, and refuse a no-ref query"
-  rc=1
-fi
+# Execute the request path with a fake gh that records every argument. Merely
+# finding GITHUB_HEAD_REF in the source cannot detect reversed precedence:
+# GITHUB_SHA on a PR is the ephemeral merge commit, not the proposed branch.
+REF_ROOT="$WORK/refs"
+mkdir -p "$REF_ROOT/ci" "$REF_ROOT/.github" "$WORK/bin"
+cp "$SCRIPT" "$REF_ROOT/ci/verify-codeowners.sh"
+printf '* @fixture-owner\n' > "$REF_ROOT/.github/CODEOWNERS"
+cat > "$WORK/bin/gh" <<'GH'
+#!/usr/bin/env bash
+printf '%s\n' "$@" >> "$GH_STUB_LOG"
+printf '{"errors":[]}\n'
+GH
+chmod +x "$WORK/bin/gh"
+
+expect_ref() {
+  local slug="$1" head_ref="$2" sha="$3" want_ref="$4"
+  local out got_rc
+  local -a head_env=()
+  n=$((n + 1))
+  [ -z "$head_ref" ] || head_env=("GITHUB_HEAD_REF=$head_ref")
+  : > "$WORK/gh-args"
+  printf 'api\nrepos/fixture/repo/codeowners/errors?ref=%s\n' "$want_ref" \
+    > "$WORK/expected-args"
+
+  # Drop inherited credentials and point HOME at the fixture, not gh's config.
+  out="$(env -i PATH="$WORK/bin:$PATH" HOME="$WORK" TMPDIR="$WORK" \
+    GH_STUB_LOG="$WORK/gh-args" GH_REPO="fixture/repo" GITHUB_SHA="$sha" \
+    "${head_env[@]}" "$REF_ROOT/ci/verify-codeowners.sh" 2>&1)"; got_rc=$?
+  if [ "$got_rc" -eq 0 ] && cmp -s "$WORK/expected-args" "$WORK/gh-args"; then
+    pass "$slug (exit 0, ref $want_ref)"
+  else
+    fail "$slug: expected exit 0 and exactly one gh api request at ref $want_ref, got exit $got_rc"
+    printf '%s\n' "$out" | sed 's/^/        /' >&2
+    rc=1
+  fi
+}
+
+expect_ref pr-head-precedes-sha "feature/codeowners-head" \
+  "1111111111111111111111111111111111111111" "feature/codeowners-head"
+expect_ref absent-head-uses-sha "" \
+  "2222222222222222222222222222222222222222" "2222222222222222222222222222222222222222"
 
 # And the workflow must not defeat it by checking out the merge commit without
 # the branch context the script needs.
