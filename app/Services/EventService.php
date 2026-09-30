@@ -16,6 +16,7 @@ use App\Support\EventInput;
 use Illuminate\Database\QueryException;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Validation\ValidationException;
 
 /**
  * Everything that changes an event or an answer to one.
@@ -56,6 +57,7 @@ class EventService
             // capacity check in rsvp() locks against.
             $locked = Event::query()->whereKey($event->getKey())->lockForUpdate()->firstOrFail();
 
+            $this->validateCapacity($locked, $input->capacity);
             $this->fill($locked, $input);
             $locked->save();
 
@@ -119,6 +121,7 @@ class EventService
                 throw new StaleAgentVersionException($locked, $expectedVersion);
             }
 
+            $this->validateCapacity($locked, $input->capacity);
             $this->fill($locked, $input);
             $locked->agent_version = $expectedVersion + 1;
             $locked->save();
@@ -353,6 +356,17 @@ class EventService
 
             return $event;
         });
+    }
+
+    private function validateCapacity(Event $locked, ?int $capacity): void
+    {
+        // Count inside the event row lock shared with RSVP writes, before saving
+        // any fields or dealing waitlisted seats. Only Going answers hold seats.
+        if ($capacity !== null && $capacity < $locked->goingCount()) {
+            throw ValidationException::withMessages([
+                'capacity' => 'Capacity cannot be lower than the number of members already going.',
+            ]);
+        }
     }
 
     private function fill(Event $event, EventInput $input): void
