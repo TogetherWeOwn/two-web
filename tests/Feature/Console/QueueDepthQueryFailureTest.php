@@ -6,7 +6,6 @@ use Illuminate\Database\PostgresConnection;
 use Illuminate\Database\QueryException;
 use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\DB;
-use Mockery;
 use PDOException;
 use Tests\TestCase;
 
@@ -27,12 +26,29 @@ final class QueueDepthQueryFailureTest extends TestCase
             [],
             new PDOException('synthetic queue read failure'),
         );
-        $database = Mockery::mock(PostgresConnection::class, [
-            fn () => throw new \LogicException('The queue-depth fixture must not connect to a database.'),
-            'queue_depth_fixture',
-        ])->makePartial();
-        // Keep the real query builder; fail only when it attempts the SQL read.
-        $database->shouldReceive('select')->once()->andThrow($failure);
+        // A real connection: real constructor, real grammar, real query
+        // builder — only the SQL read itself is replaced. A Mockery partial
+        // cannot do this: Mockery::mock() runs the real Connection::__construct
+        // against still-mocked methods, which throws before makePartial().
+        $database = new class($failure) extends PostgresConnection
+        {
+            public int $selectCalls = 0;
+
+            public function __construct(private readonly QueryException $syntheticFailure)
+            {
+                parent::__construct(
+                    fn () => throw new \LogicException('The queue-depth fixture must not connect to a database.'),
+                    'queue_depth_fixture',
+                );
+            }
+
+            public function select($query, $bindings = [], $useReadPdo = true)
+            {
+                $this->selectCalls++;
+
+                throw $this->syntheticFailure;
+            }
+        };
         DB::shouldReceive('connection')->once()->with('queue_depth_fixture')->andReturn($database);
 
         $exit = Artisan::call('queue:check-depth', ['--json' => true]);
@@ -45,5 +61,6 @@ final class QueueDepthQueryFailureTest extends TestCase
         $this->assertSame('database', $payload['connection']);
         $this->assertSame('database', $payload['driver']);
         $this->assertSame('could not read the queue table: '.$failure->getMessage(), $payload['detail']);
+        $this->assertSame(1, $database->selectCalls);
     }
 }
