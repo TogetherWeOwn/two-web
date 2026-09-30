@@ -149,21 +149,35 @@ delete_one() {
 
 # prune_env <env> — list every deployment for the env, keep newest KEEP.
 prune_env() {
-  local env="$1" page=1 all='[]' body count total kept=0 deleted=0
+  local env="$1" page=1 all='[]' body page_ids count total victim_ids kept=0 deleted=0
+  local -a victims=()
   while :; do
     if ! body="$(gh api "repos/${REPO}/deployments?environment=${env}&per_page=100&page=${page}" 2>&1)"; then
       fail "could not list deployments for env ${env} (page ${page}): $(tail -n 2 <<< "$body" | tr -d '\n' | cut -c1-300)"
       return 1
     fi
-    # A body that is valid JSON but not an array is an error document, not an
-    # empty environment — reading it as "nothing to prune" is the TWO-96 shape
-    # (an apology parsed as an answer). Refuse instead.
-    if ! jq -e 'type == "array"' >/dev/null 2>&1 <<< "$body"; then
-      fail "the deployments response for env ${env} is not an array — refusing to read it as an empty environment."
+    # Keep only validated ids. Real Deployment objects can make even one
+    # page exceed Linux's per-argument limit; JSON belongs on stdin, not argv.
+    if ! page_ids="$(jq -ce '
+        if type == "array" and all(.[];
+          type == "object" and (.id | type == "number" and . > 0 and . == floor))
+        then map(.id)
+        else error("expected an array of deployments with positive integer ids")
+        end' <<< "$body")"; then
+      fail "invalid deployments response for env ${env} (page ${page}); refusing to prune."
       return 1
     fi
-    count="$(jq 'length' <<< "$body")"
-    all="$(jq -n --argjson a "$all" --argjson b "$body" '$a + $b')"
+    if ! count="$(jq -e 'length' <<< "$page_ids")"; then
+      fail "could not count deployments for env ${env} (page ${page}); refusing to prune."
+      return 1
+    fi
+    # Concurrent inserts can shift pagination and repeat ids across pages.
+    # Deduplicate before retention so repeats neither consume KEEP nor delete
+    # twice. Check every jq exit: an empty failed plan must never look green.
+    if ! all="$(printf '%s\n%s\n' "$all" "$page_ids" | jq -ces 'add | unique')"; then
+      fail "could not combine deployments for env ${env}; refusing to prune."
+      return 1
+    fi
     [ "$count" -lt 100 ] && break
     page=$((page + 1))
     # Unbounded growth is the defect being fixed; an unbounded page loop is
@@ -175,7 +189,10 @@ prune_env() {
     fi
   done
 
-  total="$(jq 'length' <<< "$all")"
+  if ! total="$(jq -e 'length' <<< "$all")"; then
+    fail "could not count unique deployments for env ${env}; refusing to prune."
+    return 1
+  fi
   if [ "$total" -eq 0 ]; then
     say "env ${env}: no deployments; nothing to do"
     summarise "env ${env}: no deployments"
@@ -186,8 +203,16 @@ prune_env() {
   # to empty, which is the whole keep path — never a negative index.
   # Ids only on this list: the dry-run line below prints them, and iterating
   # ids keeps word splitting out of the delete path entirely.
-  mapfile -t victims < <(jq -r --argjson keep "$KEEP" \
-    '[sort_by(.id) | reverse | .[$keep:] | reverse | .[].id] | .[]' <<< "$all")
+  # Do not hide jq's exit in process substitution: mapfile would succeed even
+  # if selection crashed. Capture the plan first and refuse any failed split.
+  if ! victim_ids="$(jq -r --argjson keep "$KEEP" \
+      'sort | reverse | .[$keep:] | reverse | .[]' <<< "$all")"; then
+    fail "could not select deployments to prune for env ${env}; refusing to prune."
+    return 1
+  fi
+  if [ -n "$victim_ids" ]; then
+    mapfile -t victims <<< "$victim_ids"
+  fi
   kept=$((total - ${#victims[@]}))
   say "env ${env}: ${total} deployments, keeping newest ${kept}"
 

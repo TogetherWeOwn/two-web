@@ -719,7 +719,10 @@ rest, and a prune that quietly skipped is the defect this card exists to fix.
 Pinned two ways: `ci/prune-deployments-selftest.sh` executes the pruner
 against a stub `gh` and pins that the newest are kept, the oldest go first,
 active records retire, stuck ids fail loudly, and API errors are never read
-as empty environments — it runs in `static`, offline. And
+as empty environments — it runs in `static`, offline. Large API pages are
+processed through stdin, ids are deduplicated before retention, and any JSON
+planning failure stops the environment before deletion. The scheduled job
+uses `ubuntu-latest`, matching the hosted-runner attestation above. And
 `tests/Unit/DeploymentRecordsPruneTest.php` pins this section's lines, so a
 future edit cannot silently drop the schedule, the per-environment rule, or
 the bound while deploys keep looking green.

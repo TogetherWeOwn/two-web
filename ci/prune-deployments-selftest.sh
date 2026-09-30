@@ -27,7 +27,11 @@
 #   error-not-empty     error JSON body     -> exit 2, deletes nothing
 #   keep-zero           --keep 0            -> exit 2, no API call
 #   no-repo             no repo resolvable  -> exit 2, no API call
-#   workflow-scheduled  prune workflow exists, scheduled, runs --apply
+#   large-pages         real-sized objects  -> all oldest victims deleted
+#   overlapping-pages   repeated ids        -> unique newest kept, delete once
+#   invalid-response    malformed ids/body  -> exit 1, deletes nothing
+#   jq-failure          aggregation/split   -> exit 1, deletes nothing
+#   workflow-scheduled  hosted + attested, scheduled, runs --apply
 #
 # Usage: ./ci/prune-deployments-selftest.sh
 
@@ -78,6 +82,10 @@ case "${1:-}" in
         fi
         env_name="$(sed -n 's/.*environment=\([^&]*\).*/\1/p' <<< "$endpoint")"
         page="$(sed -n 's/.*page=\([^&]*\).*/\1/p' <<< "$endpoint")"
+        if [ -f "$FIX/${env_name}-page-${page}.json" ]; then
+          cat "$FIX/${env_name}-page-${page}.json"
+          exit 0
+        fi
         jq --arg env "$env_name" --argjson page "${page:-1}" \
           '[.[] | select(.environment == $env)] as $all
            | $all[($page - 1) * 100:$page * 100]' "$FIX/deployments.json"
@@ -113,6 +121,20 @@ esac
 STUB_EOF
 chmod +x "$STUB/gh"
 
+# Fault injection for jq stages whose failure used to be swallowed. Normal
+# fixture reads and all other cases still execute the installed jq.
+REAL_JQ="$(command -v jq)"
+export REAL_JQ
+cat > "$STUB/jq" <<'JQ_EOF'
+#!/usr/bin/env bash
+case "${GH_STUB_JQ_FAILURE:-}" in
+  combine) [[ "$*" == *'add | unique'* ]] && exit 3 ;;
+  select) [[ "$*" == *'sort | reverse'* ]] && exit 3 ;;
+esac
+exec "$REAL_JQ" "$@"
+JQ_EOF
+chmod +x "$STUB/jq"
+
 # fixture <slug> — fresh dir with 5 staging deployments (ids 1..5, created in
 # order), empty deleted/retired logs. Prints the dir.
 fixture() {
@@ -134,7 +156,7 @@ fixture() {
 # run_prune <fixture-dir> [args...] — OUT holds output, STATUS the exit.
 run_prune() {
   local dir="$1"; shift
-  OUT="$(cd "$REPO_ROOT" && PATH="$STUB:$PATH" GH_STUB_DIR="$dir" GH_REPO="TogetherWeOwn/two-web" bash "$SCRIPT" "$@" 2>&1)"
+  OUT="$(cd "$REPO_ROOT" && PATH="$STUB:$PATH" GH_STUB_DIR="$dir" GH_STUB_JQ_FAILURE="${JQ_FAILURE:-}" GH_REPO="TogetherWeOwn/two-web" bash "$SCRIPT" "$@" 2>&1)"
   STATUS=$?
 }
 
@@ -247,6 +269,65 @@ else
   pass error-not-empty
 fi
 
+printf '\n\033[1m==> Large and overlapping pages produce a unique retention plan\033[0m\n'
+
+n=$((n + 1))
+dir="$(fixture large-pages)"
+jq -n '[range(1; 106) | {id: ., environment: "staging", payload: ("x" * 2000)}]' > "$dir/deployments.json"
+run_prune "$dir" --keep 3 --env staging --apply
+if [ "$STATUS" -ne 0 ] || [ "$(wc -l < "$dir/deleted.log")" -ne 102 ] \
+  || ! diff -q <(seq 1 102) "$dir/deleted.log" >/dev/null; then
+  fail "large-pages: exit ${STATUS}, expected ids 1..102 deleted exactly once, in order"
+  printf '%s\n' "$OUT" | sed 's/^/        /'
+else
+  pass large-pages
+fi
+
+n=$((n + 1))
+dir="$(fixture overlapping-pages)"
+jq -n '[range(2; 102) | {id: ., environment: "staging"}]' > "$dir/staging-page-1.json"
+# Repeat both a victim and a retained id. Neither may consume a KEEP slot.
+printf '[{"id":2},{"id":101},{"id":102}]\n' > "$dir/staging-page-2.json"
+run_prune "$dir" --keep 3 --env staging --apply
+if [ "$STATUS" -ne 0 ] || ! diff -q <(seq 2 99) "$dir/deleted.log" >/dev/null \
+  || ! grep -qF '101 deployments, keeping newest 3' <<< "$OUT"; then
+  fail "overlapping-pages: exit ${STATUS}, expected unique ids 2..99 deleted, 100..102 kept"
+  printf '%s\n' "$OUT" | sed 's/^/        /'
+else
+  pass overlapping-pages
+fi
+
+printf '\n\033[1m==> Malformed responses and jq failures never become green empty plans\033[0m\n'
+
+for bad_body in '{"message":"unreadable"}' '[{"id":"not-an-id"}]' 'not json'; do
+  n=$((n + 1))
+  dir="$(fixture "invalid-response-${n}")"
+  printf '%s\n' "$bad_body" > "$dir/staging-page-1.json"
+  run_prune "$dir" --keep 3 --env staging --apply
+  if [ "$STATUS" -ne 1 ] || [ -s "$dir/deleted.log" ] \
+    || ! grep -qF 'invalid deployments response' <<< "$OUT"; then
+    fail "invalid-response-${n}: exit ${STATUS}, wanted 1 with no deletes and a named response failure"
+    printf '%s\n' "$OUT" | sed 's/^/        /'
+  else
+    pass "invalid-response-${n}"
+  fi
+done
+
+for stage in combine select; do
+  n=$((n + 1))
+  dir="$(fixture "jq-failure-${stage}")"
+  JQ_FAILURE="$stage"
+  run_prune "$dir" --keep 3 --env staging --apply
+  unset JQ_FAILURE
+  if [ "$STATUS" -ne 1 ] || [ -s "$dir/deleted.log" ] \
+    || ! grep -qF 'refusing to prune' <<< "$OUT"; then
+    fail "jq-failure-${stage}: exit ${STATUS}, wanted 1 with no deletes and a named planning failure"
+    printf '%s\n' "$OUT" | sed 's/^/        /'
+  else
+    pass "jq-failure-${stage}"
+  fi
+done
+
 printf '\n\033[1m==> Misconfiguration refuses before any API call\033[0m\n'
 
 n=$((n + 1))
@@ -286,6 +367,8 @@ if [ ! -r "$WORKFLOW" ]; then
 else
   problems=""
   grep -qE '^\s+schedule:' "$WORKFLOW" || problems="${problems} no schedule trigger;"
+  grep -qE '^[[:space:]]*runs-on:[[:space:]]*ubuntu-latest[[:space:]]*$' "$WORKFLOW" \
+    || problems="${problems} job is not GitHub-hosted (attest-runner would refuse it);"
   if grep -qE '^[[:space:]]*run:[[:space:]]*\./ci/prune-deployments\.sh[[:space:]]' "$WORKFLOW" \
     && grep -qF -- '--apply' "$WORKFLOW"; then
     : # runs the prune, and applies it — a scheduled dry run would be theater
