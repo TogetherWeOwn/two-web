@@ -76,105 +76,57 @@ usage() {
   exit 2
 }
 
-# Read one KEY from .env without sourcing it: sourcing executes whatever the
-# file contains, and .env on a real box holds secrets that must not be
-# reinterpreted by a backup script. Handles `KEY=value`, `KEY="quoted value"`,
-# `export KEY=value` and trailing `#` comments, reading them the way the
-# application (dotenv, vlucas/phpdotenv v5.7.0 as pinned in composer.lock)
-# does: a quoted value ends at its closing quote and an unquoted value ends
-# at the first `#`. A line with no valid value (unterminated quote, or
-# anything but blanks and a comment after the closing quote) exits nonzero
-# and warns, so callers fall back to the default instead of comparing a value
-# the application reads differently — and the connecting commands refuse
-# outright on such a line (see require_parseable_dotenv_db and the
-# restore-proof guard).
-#
-# Name matching follows dotenv's EntryParser too: each line splits on the
-# first `=`, the name is trimmed of surrounding blanks, one leading `export`
-# and one matching quote pair are stripped — so `KEY=v`, `KEY = v`,
-# `"KEY"=v` and `export KEY = v` all set KEY, and the last such line wins, as
-# in the application. A line dotenv itself would reject outright makes the
-# application refuse to boot at all (Laravel's LoadEnvironmentVariables calls
-# writeErrorAndDie on InvalidFileException), so there is no live application
-# value to diverge from — but it must still fail closed, not fall back to a
-# default the application would never use. dotenv_rhs_for therefore exits 2
-# when a non-blank, non-comment line cannot be a dotenv assignment at all
-# (no `=` after an optional `export`, or a name with interior blanks), and
-# the connecting commands refuse on exit 2 (see require_parseable_dotenv_db
-# and the restore-proof guard).
+# Never source .env. Support the single-line subset of the pinned
+# vlucas/phpdotenv parser: export/quoted names, quoted values and # comments.
+# Refuse unsupported syntax rather than compare a name the app reads differently.
+# In particular, validate EVERY entry before selecting a key: a DB_DATABASE-
+# looking line inside another key's multiline value is not a new assignment.
+# Return 1 for an absent key, 2 for an unsafe file; connecting commands preserve
+# the refusal diagnostic, while rotate/promote-weekly remain file-only.
 dotenv_rhs_for() {
-  local key="$1" line name rhs out found=0 trimmed bare stripped
+  local key="$1" line name rhs out found=0 has_value
+  local LC_ALL=C
   [ -f .env ] || return 1
+  # Bash read drops NUL bytes; dotenv does not. Don't silently alter the file.
+  if ! tr -d '\000' < .env | cmp -s - .env; then
+    echo "pg-backup: refusing: cannot parse .env containing NUL bytes — use single-line assignments." >&2
+    return 2
+  fi
   while IFS= read -r line || [ -n "$line" ]; do
-    name="$line"
-    case "$name" in *'='*) rhs="${name#*=}"; name="${name%%=*}" ;; *)
-      # No `=` at all. A blank line or `#` comment is not an entry; a bare
-      # NAME (optionally `export`ed, optionally quoted) is a valueless name
-      # dotenv reads as blank without failing the file — it can never set
-      # KEY, so it is neither a match nor a refusal reason. Anything else
-      # (interior blanks, or `export` with no usable name) is a name dotenv
-      # rejects, so the application never boots with any value from this
-      # file: fail closed instead of comparing a default dotenv would never
-      # use.
-      trimmed="$(printf '%s' "$name" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
-      case "$trimmed" in ''|'#'*) continue ;; esac
-      bare="$trimmed"
-      case "$bare" in
-        export)
-          continue
-          ;;
-        export[[:space:]]*)
-          bare="$(printf '%s' "$bare" | sed -e 's/^export[[:space:]][[:space:]]*//' -e 's/[[:space:]]*$//')"
-          ;;
-      esac
-      if [ "${#bare}" -ge 3 ]; then
-        case "$bare" in
-          '"'*'"'|"'"*"'")
-            bare="${bare:1:${#bare}-2}"
-            ;;
-        esac
-      fi
-      case "$bare" in
-        ''|*[!a-zA-Z0-9_.]*)
-          echo "pg-backup: refusing: the .env file has a line dotenv itself rejects (a name dotenv would not accept) — fix or remove that line first." >&2
-          return 2
-          ;;
-      esac
-      continue
-      ;;
-    esac
-    name="$(printf '%s' "$name" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
-    case "$name" in ''|'#'*) continue ;; esac
-    case "$name" in
-      export)
-        # `export` alone with no value: dotenv reads the entry as a
-        # valueless name (blank), not as an assignment — never a KEY match,
-        # and never a reason to fail the whole file.
-        continue
-        ;;
-      export[[:space:]]*)
-        name="$(printf '%s' "$name" | sed -e 's/^export[[:space:]][[:space:]]*//')"
-        ;;
-    esac
-    case "$name" in
-      ''|'#'*)
-        continue
-        ;;
-      *[[:space:]]*)
-        # A name with interior blanks: dotenv rejects the whole file
-        # (invalid name), so the application never boots with any value from
-        # it. Fail closed instead of comparing a default dotenv would never
-        # use.
-        echo "pg-backup: refusing: the .env file has a line dotenv itself rejects (a name with spaces) — fix or remove that line first." >&2
+    line="${line%$'\r'}" # CRLF is supported; embedded CR is another entry in dotenv.
+    case "$line" in
+      *$'\r'*|*$'\f'*)
+        echo "pg-backup: refusing: cannot parse .env containing unsupported control bytes — use single-line assignments." >&2
         return 2
         ;;
     esac
+    line="$(printf '%s' "$line" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
+    case "$line" in ''|'#'*) continue ;; esac
+    has_value=0
+    case "$line" in
+      *'='*) name="${line%%=*}"; rhs="${line#*=}"; has_value=1 ;;
+      *) name="$line"; rhs="" ;;
+    esac
+    name="$(printf '%s' "$name" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
+    case "$name" in
+      export[[:space:]]*)
+        name="$(printf '%s' "$name" | sed 's/^export[[:space:]][[:space:]]*//')"
+        ;;
+    esac
     if [ "${#name}" -ge 3 ]; then
-      case "$name" in
-        '"'*'"'|"'"*"'")
-          name="${name:1:${#name}-2}"
-          ;;
-      esac
+      case "$name" in '"'*'"'|"'"*"'") name="${name:1:${#name}-2}" ;; esac
+    fi
+    case "$name" in
+      ''|*[!a-zA-Z0-9_.]*)
+        echo "pg-backup: refusing: the .env file has a name dotenv itself rejects or this script cannot parse — use ASCII letters, digits, dots and underscores." >&2
+        return 2
+        ;;
+    esac
+    [ "$has_value" -eq 1 ] || continue # dotenv's valueless entries don't set a value.
+    rhs="$(printf '%s' "$rhs" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
+    if ! dotenv_unquote "$rhs" >/dev/null; then
+      echo "pg-backup: refusing: cannot parse the ${name} line in .env — multiline values, double-quoted escapes and malformed values are unsupported; use a single-line literal." >&2
+      return 2
     fi
     if [ "$name" = "$key" ]; then out="$rhs"; found=1; fi
   done < .env
@@ -182,101 +134,56 @@ dotenv_rhs_for() {
   return 1
 }
 
-env_get() {
-  local key="$1" rhs val parsed
-  if rhs="$(dotenv_rhs_for "$key" 2>/dev/null)"; then
-    :
-  else
-    # Absent (1) or rejected (2): either way there is no readable value, so
-    # fall back to the default here. The connecting commands re-check and
-    # refuse outright on rejected lines (see require_parseable_dotenv_db).
-    return 0
-  fi
-  val="$(printf '%s' "$rhs" | sed -e 's/^[[:space:]]*//')"
-  if ! parsed="$(dotenv_unquote "$val")"; then
-    echo "pg-backup: warning: ignoring unparseable ${key} line in .env — expected 'KEY=value', a quoted value, or a trailing '# comment'." >&2
-    return 1
-  fi
-  printf '%s' "$parsed"
-}
-
-# Print the dotenv value of a raw right-hand side (leading blanks already
-# stripped). Exits nonzero when the line carries no valid dotenv value.
-# Double-quoted values honour backslash escapes when finding the closing
-# quote; single-quoted values are literal. Escape *expansion* is deliberately
-# not performed: the value is returned as written, and restore-proof refuses
-# any dotenv database value dotenv would expand differently.
+# Only return values whose quote/comment boundaries are unambiguous. Reject
+# double-quoted escapes instead of partially emulating dotenv's transducer.
 dotenv_unquote() {
-  local raw="$1" q rest inner closed tail
+  local raw="$1" q rest inner="" closed=0 val
   q="${raw:0:1}"
   case "$q" in
     '"'|"'")
       rest="${raw:1}"
-      inner=""
-      closed=0
       while [ -n "$rest" ]; do
-        if [ "$q" = '"' ]; then
-          case "$rest" in
-            '\'*)
-              inner="${inner}${rest:0:2}"
-              rest="${rest:2}"
-              continue
-              ;;
-          esac
+        if [ "$q" = '"' ] && [ "${rest:0:1}" = '\' ]; then return 1; fi
+        if [ "${rest:0:1}" = "$q" ]; then
+          rest="${rest:1}"; closed=1; break
         fi
-        case "$rest" in
-          "$q"*)
-            rest="${rest:1}"
-            closed=1
-            break
-            ;;
-          *)
-            inner="${inner}${rest:0:1}"
-            rest="${rest:1}"
-            ;;
-        esac
+        inner="${inner}${rest:0:1}"
+        rest="${rest:1}"
       done
       [ "$closed" -eq 1 ] || return 1
-      # After the closing quote only blanks and one trailing comment fit.
-      # (Herestring, not `printf %s |`: with an empty tail printf emits zero
-      # bytes, which is no line for grep to match.)
-      tail="$rest"
-      grep -Eq '^[[:space:]]*(#.*)?$' <<< "$tail" || return 1
+      grep -Eq '^[[:space:]]*(#.*)?$' <<< "$rest" || return 1
       printf '%s' "$inner"
       ;;
-    '#')
-      # A comment where the value would be: dotenv reads this as empty.
-      printf '%s' ""
-      ;;
     *)
-      # Unquoted: the value ends at the first `#`, which dotenv lexes as the
-      # start of a comment in every state (see EntryParser::processToken:
-      # INITIAL and UNQUOTED both enter COMMENT_STATE on `#`, with no
-      # whitespace required). Trailing blanks go.
-      printf '%s' "$raw" | sed -e 's/#.*$//' -e 's/[[:space:]]*$//'
+      val="$(printf '%s' "$raw" | sed -e 's/#.*$//' -e 's/[[:space:]]*$//')"
+      case "$val" in *[[:space:]]*|*'"'*|*"'"*) return 1 ;; esac
+      printf '%s' "$val"
       ;;
   esac
+}
+
+env_get() {
+  local rhs
+  rhs="$(dotenv_rhs_for "$1" 2>/dev/null)" || return 0
+  dotenv_unquote "$rhs"
+}
+
+require_parseable_dotenv_db() {
+  local rc
+  if dotenv_rhs_for DB_DATABASE >/dev/null; then return 0; else rc=$?; fi
+  [ "$rc" -ne 2 ] # An absent key is safe; an invalid file is not.
 }
 
 # Environment first, .env second, compose defaults last. The `:-` form (not
 # `:=` on an unconditional assignment) is what keeps a real environment
 # variable from being overridden by the file.
-# Provenance for the restore-proof guard: dotenv prefers a real environment
-# variable over the file, and the guard must evaluate the winning source.
-# (`:-` treats set-but-empty as unset, so this test matches the resolution.)
 DB_DATABASE_FROM_ENV=0
 if [ -n "${DB_DATABASE:-}" ]; then DB_DATABASE_FROM_ENV=1; fi
-# `|| true`: an unparseable line warns and falls back to the default here, so
-# file-only commands (rotate, promote-weekly) survive a broken line the way
-# they always have. The connecting commands — backup and restore-proof, which
-# are the only ones that address a database by name — re-check before touching
-# docker (see require_parseable_dotenv_db), so the fallback never masks an
-# alias or a broken line where it matters.
-DB_HOST="${DB_HOST:-$(env_get DB_HOST || true)}"
-DB_PORT="${DB_PORT:-$(env_get DB_PORT || true)}"
-DB_DATABASE="${DB_DATABASE:-$(env_get DB_DATABASE || true)}"
-DB_USERNAME="${DB_USERNAME:-$(env_get DB_USERNAME || true)}"
-DB_PASSWORD="${DB_PASSWORD:-$(env_get DB_PASSWORD || true)}"
+DB_HOST="${DB_HOST:-$(env_get DB_HOST)}"
+DB_PORT="${DB_PORT:-$(env_get DB_PORT)}"
+DB_DATABASE="${DB_DATABASE:-$(env_get DB_DATABASE)}"
+DB_USERNAME="${DB_USERNAME:-$(env_get DB_USERNAME)}"
+DB_PASSWORD="${DB_PASSWORD:-$(env_get DB_PASSWORD)}"
 : "${DB_HOST:=127.0.0.1}"
 : "${DB_PORT:=5432}"
 : "${DB_DATABASE:=two_web}"
@@ -303,39 +210,6 @@ require_local_docker() {
     echo "pg-backup: refusing: \`docker\` is not installed. Start the compose database first: docker compose up -d" >&2
     exit 1
   }
-}
-
-# A .env line this script cannot parse the same way as the application is a
-# name the application and this script could read differently — and `backup`
-# dumps whichever database the local client resolves, so failing closed here
-# is load-bearing too. Each connecting command calls this before touching
-# docker. File-only commands (rotate, promote-weekly) never call it: they
-# address no database, and the `|| true` fallback above keeps them working
-# with a broken line the way they always have. Environment values need no
-# parsing — they arrive already resolved.
-require_parseable_dotenv_db() {
-  local key rhs val rc
-  if [ "$DB_DATABASE_FROM_ENV" -eq 1 ]; then return 0; fi
-  for key in DB_DATABASE DB_USERNAME DB_PASSWORD DB_HOST DB_PORT; do
-    if rhs="$(dotenv_rhs_for "$key" 2>/dev/null)"; then
-      rc=0
-    else
-      rc=$?
-    fi
-    if [ "$rc" -eq 2 ]; then
-      # dotenv_rhs_for already named the offending line; refuse without
-      # adding a second diagnosis.
-      dotenv_rhs_for "$key" >/dev/null 2>&1 || true
-      return 1
-    fi
-    if [ "$rc" -eq 0 ]; then
-      val="$(printf '%s' "$rhs" | sed -e 's/^[[:space:]]*//')"
-      if ! dotenv_unquote "$val" >/dev/null 2>&1; then
-        echo "pg-backup: refusing: cannot parse the ${key} line in .env — fix it to a plain '${key}=<value>' before running a command that connects." >&2
-        return 1
-      fi
-    fi
-  done
 }
 
 # Everything runs inside the compose container, so no host Postgres client is
@@ -374,8 +248,8 @@ table_counts() {
 }
 
 cmd_backup() {
-  require_local_docker
   require_parseable_dotenv_db || return 1
+  require_local_docker
   local out="${1:-}"
   if [ -z "$out" ]; then
     mkdir -p "$BACKUP_DIR"
@@ -478,68 +352,35 @@ cmd_promote_weekly() {
 }
 
 cmd_restore_proof() {
-  # Evaluate the effective source name the way the application does, then
-  # refuse before arming cleanup or touching docker: both dropdb paths must
+  # Check before arming cleanup or touching docker: both dropdb paths must
   # target a scratch database, never the source whose backup we are proving.
-  # A dotenv line this script cannot parse the same way would compare one
-  # name while the application connects to another, so ambiguity fails
-  # closed here instead of falling back to the compose default.
-  local src_db db_rhs db_inner dotenv_rc
-  if [ "$DB_DATABASE_FROM_ENV" -eq 1 ]; then
-    src_db="$DB_DATABASE"
-  else
-    if db_rhs="$(dotenv_rhs_for DB_DATABASE 2>/dev/null)"; then
-      dotenv_rc=0
-    else
-      dotenv_rc=$?
-    fi
-    if [ "$dotenv_rc" -eq 2 ]; then
-      # A line dotenv itself rejects, so the application never boots with any
-      # value from this file: refuse instead of comparing the fallback
-      # default. Re-run unredirected so the refusal names the offending line.
-      dotenv_rhs_for DB_DATABASE >/dev/null || true
-      return 1
-    elif [ "$dotenv_rc" -eq 0 ]; then
-      db_rhs="$(printf '%s' "$db_rhs" | sed -e 's/^[[:space:]]*//')"
-      src_db="$(env_get DB_DATABASE 2>/dev/null)" || {
-        echo "pg-backup: refusing: cannot parse the DB_DATABASE line in .env — set a plain 'DB_DATABASE=<name>' before proving a restore." >&2
-        return 1
-      }
-      # dotenv resolves $VAR/${VAR} inside unquoted and double-quoted values
-      # (single-quoted values stay literal); this script does not expand them,
-      # so such a line would compare a different name than the application
-      # connects to. Values reaching libpq keep their backslash escapes, so
-      # unescape \" sequences the same way before looking for expansion too.
-      db_inner="$(dotenv_unquote "$db_rhs" 2>/dev/null || true)"
-      case "$db_rhs" in
-        "'"*) ;;
-        '"'*) db_inner="$(printf '%s' "$db_inner" | sed -e 's/\\"/"/g')" ;;
-      esac
-      case "$db_inner" in
-        *'$'*)
-          echo "pg-backup: refusing: .env DB_DATABASE uses variable expansion, which restore-proof does not evaluate — set a literal database name." >&2
-          return 1
-          ;;
-      esac
-      if [ "$src_db" != "$DB_DATABASE" ]; then
-        echo "pg-backup: refusing: the .env DB_DATABASE line is ambiguous — set a plain 'DB_DATABASE=<name>' before proving a restore." >&2
-        return 1
-      fi
-    else
-      src_db="$DB_DATABASE"
-    fi
+  require_parseable_dotenv_db || return 1
+  local rhs value
+  if [ "$DB_DATABASE_FROM_ENV" -eq 0 ] && rhs="$(dotenv_rhs_for DB_DATABASE)"; then
+    # Dotenv expands $VAR in unquoted/double-quoted values. Never compare the
+    # literal text with a name the application could expand into the scratch DB.
+    value="$(dotenv_unquote "$rhs")"
+    case "$rhs" in
+      "'"*) ;;
+      *)
+        case "$value" in
+          *'$'*)
+            echo "pg-backup: refusing: .env DB_DATABASE uses variable expansion — set a literal database name." >&2
+            return 1
+            ;;
+        esac
+        ;;
+    esac
   fi
-  # The libpq clients this script shells out to accept keyword/value and URI
-  # connection strings in place of a database name, so a value that merely
-  # differs textually from the scratch name can still address it. Only plain
-  # names reach the comparison.
-  case "$src_db" in
+  # libpq accepts connection strings and URIs as -d arguments; different text
+  # can still resolve to the scratch DB. Only a plain name may reach the guard.
+  case "$DB_DATABASE" in
     *'='*|*'://'*|*[[:space:]]*)
       echo "pg-backup: refusing: DB_DATABASE must be a plain database name, not a connection string or URI." >&2
       return 1
       ;;
   esac
-  if [ "$src_db" = "$SCRATCH_DB" ]; then
+  if [ "$DB_DATABASE" = "$SCRATCH_DB" ]; then
     echo "pg-backup: refusing: DB_DATABASE must differ from scratch database '${SCRATCH_DB}'." >&2
     return 1
   fi

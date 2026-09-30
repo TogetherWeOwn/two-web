@@ -543,6 +543,82 @@ else
   printf '%s\n' "$(< "$dir/docker.log")" | sed 's/^/        /'
 fi
 
+# A multiline value for ANY key hides assignment-looking lines from dotenv.
+# Refuse the unsupported file before selecting DB_DATABASE, even if the real
+# environment supplies the source. Invalid names and values elsewhere must
+# also refuse with one actionable diagnostic, not a silent fallback dump.
+for mode in backup restore-proof; do
+  for scenario in multiline multiline-env invalid-hyphen invalid-spaces invalid-quoted \
+      malformed-other escaped-other embedded-cr nul; do
+    dir="$(fixture "strict-${mode}-${scenario}")"
+    seed_dump "$dir"
+    : > "$dir/docker.log"
+    override=""
+    expected="cannot parse"
+    case "$scenario" in
+      multiline|multiline-env)
+        printf 'DB_DATABASE=two_web_restore_proof\nAPP_NOTE="begin\nDB_DATABASE=custom_source\nTAIL="\n' > "$dir/.env"
+        [ "$scenario" != multiline-env ] || override=custom_source
+        ;;
+      invalid-hyphen|invalid-spaces|invalid-quoted)
+        case "$scenario" in
+          invalid-hyphen) spelling='DB-NAME' ;;
+          invalid-spaces) spelling='DB NAME' ;;
+          invalid-quoted) spelling='"DB-NAME"' ;;
+        esac
+        printf 'DB_DATABASE=custom_source\n%s=oops\n' "$spelling" > "$dir/.env"
+        expected="dotenv itself rejects"
+        ;;
+      malformed-other) printf 'DB_DATABASE=custom_source\nAPP_NOTE="missing\n' > "$dir/.env" ;;
+      escaped-other) printf 'DB_DATABASE=custom_source\nAPP_NOTE="one\\ntwo"\n' > "$dir/.env" ;;
+      embedded-cr) printf 'DB_DATABASE=two_web_restore_proof\rDB_DATABASE=custom_source\n' > "$dir/.env" ;;
+      nul) printf 'DB_DATABASE=two_web_restore_proof\000suffix\n' > "$dir/.env" ;;
+    esac
+    out="$(cd "$dir" && env -u DB_DATABASE PATH="$STUB_DIR:$PATH" STUB_LOG="$dir/docker.log" \
+      DB_HOST=127.0.0.1 DB_DATABASE="$override" \
+      ./bin/pg-backup.sh "$mode" "$dir/backups/seed.dump" 2>&1)"; status=$?
+    if [ "$status" -eq 1 ] && grep -qF "$expected" <<< "$out" \
+        && [ "$(grep -cF 'pg-backup: refusing:' <<< "$out")" -eq 1 ] \
+        && [ ! -s "$dir/docker.log" ] \
+        && [ "$(< "$dir/backups/seed.dump")" = x ] \
+        && [ -z "$(ls "$dir"/backups/*.tmp.* 2>/dev/null || true)" ]; then
+      pass "strict-${mode}-${scenario}"
+    else
+      fail "strict-${mode}-${scenario}: expected exit 1, one refusal, no docker calls, and untouched dump (got ${status})"
+      printf '%s\n' "$out" | sed 's/^/        /'
+    fi
+  done
+done
+
+# CRLF, comments and assignment-looking text inside a single-line value are
+# supported. The value is data, not another assignment; use the actual source.
+dir="$(fixture proof-single-line-note)"
+seed_dump "$dir"
+printf 'APP_NOTE="DB_DATABASE=two_web_restore_proof"\r\nexport DB_DATABASE = "custom_source" # local\r\n' > "$dir/.env"
+out="$(cd "$dir" && env -u DB_DATABASE PATH="$STUB_DIR:$PATH" STUB_LOG="$dir/docker.log" \
+  DB_HOST=127.0.0.1 ./bin/pg-backup.sh restore-proof "$dir/backups/seed.dump" 2>&1)"; status=$?
+if [ "$status" -eq 0 ] && grep -qF "PROOF OK" <<< "$out" \
+    && grep -qF -- "-d custom_source" "$dir/docker.log"; then
+  pass "proof-single-line-note"
+else
+  fail "proof-single-line-note: expected the distinct dotenv source and PROOF OK (got ${status})"
+  printf '%s\n' "$out" | sed 's/^/        /'
+fi
+
+# File-only commands remain usable with unsupported dotenv syntax.
+dir="$(fixture rotate-multiline)"
+mkdir -p "$dir/backups"
+printf x > "$dir/backups/two-web-20260929T030000Z.dump"
+printf x > "$dir/backups/two-web-20260930T030000Z.dump"
+printf 'APP_NOTE="begin\nDB_DATABASE=two_web_restore_proof\nTAIL="\n' > "$dir/.env"
+out="$(BACKUP_KEEP_DAILY=1 run_script "$dir" rotate --dry-run)"; status=$?
+if [ "$status" -eq 0 ] && grep -qF 'Nothing removed' <<< "$out" && [ ! -s "$dir/docker.log" ]; then
+  pass "rotate-multiline"
+else
+  fail "rotate-multiline: expected docker-free file rotation despite unsupported dotenv (got ${status})"
+  printf '%s\n' "$out" | sed 's/^/        /'
+fi
+
 # Happy path: three tables, equal counts. Asserts the verdict, the per-table
 # listing (a PROOF OK with no table detail proves nothing to a reader), and
 # that both the scratch database and the container-side dump copy were removed.
