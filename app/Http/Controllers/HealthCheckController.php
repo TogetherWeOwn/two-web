@@ -3,13 +3,16 @@
 namespace App\Http\Controllers;
 
 use App\Support\QueueHealth;
+use Illuminate\Database\Migrations\Migrator;
 use Illuminate\Http\JsonResponse;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use Throwable;
 
 /**
  * `GET /up` — the deploy and uptime signal, with the queue depth folded in
- * ([TOG-8414](/TOG/issues/TOG-8414)).
+ * ([TOG-8414](/TOG/issues/TOG-8414)) and the database readiness folded in
+ * ([TOG-8711](/TOG/issues/TOG-8711)).
  *
  * Laravel's built-in `/up` (bootstrap/app.php `health: '/up'`) answers the
  * wrong question here: it only knows healthy (200) versus booting an exception
@@ -21,14 +24,23 @@ use Throwable;
  *
  * The contract the deploy poll and the monitors rely on:
  *
- *   - healthy or degraded both answer 200. A backlog is not an outage, and
- *     the deploy poll (`curl -f` in `.github/workflows/deploy.yml`) must keep
- *     passing through one — `/up` distinguishes shapes in the body, not the
- *     status code.
+ *   - healthy, or degraded by the queue alone, answers 200. A backlog is not
+ *     an outage, and the deploy poll (`curl -f` in
+ *     `.github/workflows/deploy.yml`) must keep passing through one — `/up`
+ *     distinguishes queue shapes in the body, not the status code.
+ *   - degraded by the database or the schema answers 503. An unreachable
+ *     database, a migration repository that will not answer, or pending
+ *     migrations all fail the deploy poll instead of shipping a not-ready
+ *     box. The queue slice still rides along, so the failure stays
+ *     diagnosable; `status` stays `degraded`, never down.
  *   - `status` is one of `healthy`, `degraded`. `degraded` at or above the
  *     warn threshold (QueueHealth::WARN_AT pending jobs), still `degraded` —
  *     never down — past critical. The queue numbers always ride along so a
  *     dashboard reads the lag without a second probe.
+ *   - `db` is `ok` when a read-only query on the default connection answers,
+ *     `error` when it does not. `pending_migrations` counts migration files
+ *     minus ran migrations (mirroring `migrate:status`), `null` when neither
+ *     the query nor the repository would answer.
  *   - the queue read can never sink the endpoint. A driver with no countable
  *     depth, or a queue table that will not answer, is reported in the body
  *     (`queue.status: unknown`) and the endpoint stays on the last known
@@ -53,13 +65,87 @@ class HealthCheckController
     public function __invoke(): JsonResponse
     {
         $queue = $this->queueHealth();
+        $readiness = $this->databaseReadiness();
+
+        // Readiness gates the status code, the queue never does: a deep or
+        // unreadable queue stays 200 (backlog is lag, not an outage), while
+        // an unreachable database or an unmigrated schema answers 503 so the
+        // deploy poll (`curl -f`) fails instead of shipping a not-ready box.
+        if ($readiness['db'] !== 'ok' || $readiness['pending_migrations'] !== 0) {
+            return response()->json([
+                'status' => 'degraded',
+                'db' => $readiness['db'],
+                'pending_migrations' => $readiness['pending_migrations'],
+                'queue' => $queue,
+            ], 503);
+        }
 
         $status = $queue['status'] === 'degraded' ? 'degraded' : 'healthy';
 
         return response()->json([
             'status' => $status,
+            'db' => 'ok',
+            'pending_migrations' => 0,
             'queue' => $queue,
         ], 200);
+    }
+
+    /**
+     * The database slice of the payload. Never throws: every probe failure
+     * is a reported `error`/`null`, never a 500.
+     *
+     * The ping is a real read-only query on the default connection, not a
+     * cached PDO handle: a pooled handle can stay open while the database
+     * is gone. The pending count mirrors `migrate:status` — migration file
+     * names from the registered paths plus `database/migrations`, minus the
+     * names in the migration repository. A missing repository table means
+     * nothing has run, so every file is pending. A repository that will not
+     * answer is distinct from a database that will not answer: `db` stays
+     * `ok` with `pending_migrations: null`, still 503, never an unhandled
+     * 500. Nothing thrown or read here reaches the wire — failures are
+     * reported server-side with the exception class only.
+     *
+     * @return array{db: string, pending_migrations: ?int}
+     */
+    private function databaseReadiness(): array
+    {
+        try {
+            DB::connection()->select('select 1');
+        } catch (Throwable $e) {
+            report($e);
+            Log::warning('Health check could not reach the database; reporting degraded.', [
+                'exception' => $e::class,
+            ]);
+
+            return ['db' => 'error', 'pending_migrations' => null];
+        }
+
+        try {
+            /** @var Migrator $migrator */
+            $migrator = app(Migrator::class);
+
+            $files = $migrator->getMigrationFiles(
+                array_merge($migrator->paths(), [database_path('migrations')])
+            );
+
+            if (! $migrator->repositoryExists()) {
+                return ['db' => 'ok', 'pending_migrations' => count($files)];
+            }
+
+            $ran = $migrator->getRepository()->getRan();
+
+            return [
+                'db' => 'ok',
+                'pending_migrations' => count(array_diff(array_keys($files), $ran)),
+            ];
+        } catch (Throwable $e) {
+            report($e);
+            Log::warning('Health check could not read the migration repository; reporting degraded.', [
+                'exception' => $e::class,
+            ]);
+
+            return ['db' => 'ok', 'pending_migrations' => null];
+        }
     }
 
     /**

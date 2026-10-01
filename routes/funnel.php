@@ -83,16 +83,20 @@ Route::view('/faq', 'faq')->middleware(AddContentSecurityPolicy::class)->name('f
 // alone for the same reason: it answers with an HTML document.
 Route::get('/privacy', PrivacyController::class)->middleware(AddContentSecurityPolicy::class)->name('privacy');
 
-// The deploy and uptime signal (TOG-8414). Replaces the framework's closure
-// `/up` from bootstrap/app.php `health: '/up'`: routes register into one
-// keyed collection (`RouteCollection::addToCollections`), so this later
-// `GET /up` wins the lookup and the framework closure never answers. Same
-// URI, so the deploy poll (`curl -f …/up` in .github/workflows/deploy.yml)
-// and the `GET|HEAD up` allowlist line in
-// tests/Unit/ProductionRouteAllowlistTest.php keep reading the same path —
-// only the payload grows. Empty middleware stack like everything else here:
-// `web` would open Postgres in StartSession before the controller runs, and
-// a route that 500s when the database is down is not a health check. The
-// controller touches no session, cache or auth — only the queue tables, which
-// fail into `queue.status: unknown` rather than into a 500.
+// The deploy and uptime signal (TOG-8414, readiness in TOG-8711). Replaces
+// the framework's closure `/up` from bootstrap/app.php `health: '/up'`:
+// routes register into one keyed collection
+// (`RouteCollection::addToCollections`), so this later `GET /up` wins the
+// lookup and the framework closure never answers. Same URI, so the deploy
+// poll (`curl -f …/up` in .github/workflows/deploy.yml) and the `GET|HEAD
+// up` allowlist line in tests/Unit/ProductionRouteAllowlistTest.php keep
+// reading the same path — only the payload grows. Empty middleware stack
+// like everything else here: `web` would open Postgres in StartSession
+// before the controller runs, and a route that 500s when the database is
+// down is not a health check. The controller touches no session, cache or
+// auth — only the queue tables, which fail into `queue.status: unknown`
+// rather than into a 500. The database readiness it probes (a read-only
+// query plus the pending-migration count) answers 503 when the database is
+// unreachable or the schema is behind, so the deploy poll fails instead of
+// shipping a not-ready box; a deep or unreadable queue alone stays 200.
 Route::get('/up', HealthCheckController::class)->name('up');

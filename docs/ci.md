@@ -626,19 +626,24 @@ still names the schedule, the Backup Now rule, the bound — and that
 
 ### Who polls `/up`, and who gets paged (TOG-7327)
 
-`/up` is Laravel's health endpoint (`health: '/up'` in `bootstrap/app.php`,
-pinned by `tests/Feature/HealthCheckTest.php`). It answers 200 when the
-application boots far enough to serve. What polls it today, and what does
-not:
+`/up` is the deploy health check (the funnel's `GET /up` in
+`routes/funnel.php` replaces the framework's `health: '/up'` closure in
+`bootstrap/app.php`, pinned by `tests/Feature/HealthCheckTest.php`). A ready
+app answers 200; an unreachable database or pending migrations answers 503
+`degraded` (TOG-8711), so the deploy poll fails instead of shipping a
+not-ready box. What polls it today, and what does not:
 
 - **Deploy time.** `deploy.yml` polls `${STAGING}/up` for up to ten minutes
   after triggering the Coolify staging deploy — a queued deploy that never
-  answers fails the job. Then `bin/smoke-staging.sh` asserts `/up` → 200
+  answers fails the job, and a release whose database is unreachable or
+  whose migrations are pending answers 503, failing the job the same way.
+  Then `bin/smoke-staging.sh` asserts `/up` → 200
   again, alongside `/discord`, `/`, and `/events.json`. Green `staging`
   means the new release answered, and nothing more.
 - **CI time.** The Dusk, budgets, and opcache jobs poll a local `/up` to
   learn when the throwaway `artisan serve` under test is ready, and how fast
-  it answers. That proves the build boots; it says nothing about any
+  it answers. Each migrates before serving, so the poll also proves the
+  schema is current. That proves the build boots; it says nothing about any
   deployed host.
 - **Continuously, on any environment: nobody.** No cron, no scheduled
   workflow, and no third-party pinger polls `/up` on a deployed host (this
