@@ -102,8 +102,12 @@ class HealthCheckController
      * nothing has run, so every file is pending. A repository that will not
      * answer is distinct from a database that will not answer: `db` stays
      * `ok` with `pending_migrations: null`, still 503, never an unhandled
-     * 500. Nothing thrown or read here reaches the wire — failures are
-     * reported server-side with the exception class only.
+     * 500. A missing or unreadable migration directory is unknown schema
+     * state, not proof the schema is current: discovery is globbing, so a
+     * missing path yields zero files and would otherwise read as healthy —
+     * it answers the same `null`-count 503. Nothing thrown or read here
+     * reaches the wire — failures are logged server-side, best-effort, with
+     * the exception class only, never the message.
      *
      * @return array{db: string, pending_migrations: ?int}
      */
@@ -112,10 +116,7 @@ class HealthCheckController
         try {
             DB::connection()->select('select 1');
         } catch (Throwable $e) {
-            report($e);
-            Log::warning('Health check could not reach the database; reporting degraded.', [
-                'exception' => $e::class,
-            ]);
+            $this->safeHealthLog('Health check could not reach the database; reporting degraded.', $e);
 
             return ['db' => 'error', 'pending_migrations' => null];
         }
@@ -124,9 +125,25 @@ class HealthCheckController
             /** @var Migrator $migrator */
             $migrator = app(Migrator::class);
 
-            $files = $migrator->getMigrationFiles(
-                array_merge($migrator->paths(), [database_path('migrations')])
-            );
+            $paths = array_merge($migrator->paths(), [database_path('migrations')]);
+
+            // Discovery is globbing: a missing or unreadable required path
+            // yields zero files, which would read as "current". Treat that
+            // as unknown, not healthy. An existing-but-empty directory stays
+            // valid — zero files is evidence, a missing path is not.
+            foreach ($paths as $path) {
+                $readable = str_ends_with($path, '.php')
+                    ? is_readable($path)
+                    : (is_dir($path) && is_readable($path));
+
+                if (! $readable) {
+                    $this->safeHealthLog('Health check could not read the migration files; reporting degraded.');
+
+                    return ['db' => 'ok', 'pending_migrations' => null];
+                }
+            }
+
+            $files = $migrator->getMigrationFiles($paths);
 
             if (! $migrator->repositoryExists()) {
                 return ['db' => 'ok', 'pending_migrations' => count($files)];
@@ -139,12 +156,32 @@ class HealthCheckController
                 'pending_migrations' => count(array_diff(array_keys($files), $ran)),
             ];
         } catch (Throwable $e) {
-            report($e);
-            Log::warning('Health check could not read the migration repository; reporting degraded.', [
-                'exception' => $e::class,
-            ]);
+            $this->safeHealthLog('Health check could not read the migration repository; reporting degraded.', $e);
 
             return ['db' => 'ok', 'pending_migrations' => null];
+        }
+    }
+
+    /**
+     * Best-effort, non-throwing, class-only diagnostic logging for the probe.
+     *
+     * The endpoint promises a JSON 503 on probe failure, never a 500 — so
+     * the diagnostics themselves must not be able to sink it. Neither
+     * `report()` nor `Log::warning()` carries a non-throwing guarantee (the
+     * logging stack runs with `ignore_exceptions: false`), and `report()`
+     * forwards the raw exception message to the error logger, contradicting
+     * the class-only contract. This wrapper logs the message with the
+     * exception class only, and swallows any logger failure so the degraded
+     * envelope is always returned.
+     */
+    private function safeHealthLog(string $message, ?Throwable $e = null): void
+    {
+        try {
+            Log::warning($message, $e === null ? [] : [
+                'exception' => $e::class,
+            ]);
+        } catch (Throwable) {
+            // Diagnostics must never sink the probe.
         }
     }
 
@@ -170,9 +207,9 @@ class HealthCheckController
         } catch (Throwable $e) {
             // Class only, never the message: the queue tables carry job
             // payloads, and the endpoint must not leak one into a log.
-            Log::warning('Health check could not read the queue depth; reporting unknown.', [
-                'exception' => $e::class,
-            ]);
+            // Best-effort through the shared helper: the diagnostics must
+            // not sink the endpoint the way a throwing catch would.
+            $this->safeHealthLog('Health check could not read the queue depth; reporting unknown.', $e);
 
             return $this->unknownQueue(null);
         }
