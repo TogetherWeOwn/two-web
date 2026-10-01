@@ -27,9 +27,9 @@ final class EventRss
      * moment it is rendered: defaulting to `now()` would stamp a fresh instant
      * into every body, so no two responses would ever share bytes and no ETag
      * could survive a second. The controller passes the newest `updated_at` in
-     * its scope (falling back to `now()` only when there are no items); callers
-     * that build a feed from unsaved models, like the unit test below, still get
-     * a truthful "just now".
+     * its scope. An empty feed without a content timestamp omits the optional
+     * `lastBuildDate`, keeping its bytes stable as the clock advances. Callers
+     * building a nonempty feed without a timestamp still get "just now".
      *
      * @param  iterable<int, Event>  $events
      */
@@ -41,7 +41,7 @@ final class EventRss
             $items .= self::item($event);
         }
 
-        $built = ($lastBuildDate ?? now('UTC'))->format(DATE_RSS);
+        $built = $lastBuildDate ?? ($items === '' ? null : now('UTC'));
 
         return '<?xml version="1.0" encoding="UTF-8"?>'."\n"
             .'<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom">'
@@ -53,7 +53,7 @@ final class EventRss
             // self-identifying and autodiscovery only works from our pages.
             .'<atom:link href="'.self::e(route('events.rss')).'" rel="self" type="application/rss+xml" />'
             .'<description>'.self::e('Upcoming events from '.config('app.name')).'</description>'
-            .'<lastBuildDate>'.$built.'</lastBuildDate>'
+            .($built === null ? '' : '<lastBuildDate>'.$built->format(DATE_RSS).'</lastBuildDate>')
             .$items
             .'</channel>'
             .'</rss>';
