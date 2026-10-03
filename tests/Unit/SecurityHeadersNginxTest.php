@@ -15,17 +15,14 @@
 // TrustedProxiesPinnedTest): it needs no nginx binary, no build and no
 // database — which is why it lives in Unit, not Feature.
 
-use App\Http\Middleware\AddSecurityHeaders;
+use Illuminate\Support\Facades\File;
+
+require_once __DIR__.'/../Support/NginxSecurityHeaders.php';
 
 it('keeps the nginx template carrying the identical security headers', function () {
-    $contents = file_get_contents(base_path('nginx.template.conf'));
+    $contents = File::get(base_path('nginx.template.conf'));
 
-    expect($contents)->not->toBeFalse('nginx.template.conf is missing or unreadable');
-
-    foreach (AddSecurityHeaders::HEADERS as $header => $value) {
-        expect(str_contains($contents, 'add_header '.$header.' "'.$value.'"'))
-            ->toBeTrue("nginx.template.conf no longer carries {$header}: \"{$value}\" — the edge and app copies drifted.");
-    }
+    assertNginxAppSecurityHeaders($contents);
 });
 
 it('keeps the nginx-only headers on the template too', function () {
@@ -35,19 +32,17 @@ it('keeps the nginx-only headers on the template too', function () {
     // robots tag is environment-conditional) — so the parity loop above
     // cannot see them. This pins both with their exact values, so dropping
     // either fails the build instead of shipping quiet.
-    $contents = file_get_contents(base_path('nginx.template.conf'));
-
-    expect($contents)->not->toBeFalse('nginx.template.conf is missing or unreadable');
+    $contents = File::get(base_path('nginx.template.conf'));
 
     // `always` is load-bearing: without it nginx skips error responses, and
     // an HSTS policy that stops at the first 404 is the defect this flags.
-    expect(str_contains($contents, 'add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;'))
-        ->toBeTrue('nginx.template.conf no longer emits HSTS with always — error responses would leave the policy.');
+    expect(countActiveNginxDirective($contents, 'add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;'))
+        ->toBe(1, 'nginx.template.conf no longer emits HSTS with always — error responses would leave the policy.');
 
     // The staging-only noindex: the map must send staging to noindex, and
     // the emission must read from the map with `always`. A mapping without
     // the emission (or vice versa) is a silent no-op, so both halves pin.
-    expect(str_contains($contents, 'staging.togetherweown.com "noindex, nofollow";'))
-        ->toBeTrue('nginx.template.conf no longer maps staging to noindex, nofollow.');
-    expect(substr_count($contents, 'add_header X-Robots-Tag $robots_tag always;'))->toBe(1);
+    expect(countActiveNginxDirective($contents, 'staging.togetherweown.com "noindex, nofollow";'))
+        ->toBe(1, 'nginx.template.conf no longer maps staging to noindex, nofollow.');
+    expect(countActiveNginxDirective($contents, 'add_header X-Robots-Tag $robots_tag always;'))->toBe(1);
 });
