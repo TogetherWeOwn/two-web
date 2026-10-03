@@ -185,17 +185,18 @@ expect_fail phantom-deploy-job 'required check `staging` is not reported' \
 expect_fail job-renamed 'required check `budgets` is not reported' \
   sed -i 's/^    name: budgets$/    name: Performance budgets/' .github/workflows/ci.yml
 
-# Legacy development freeze (TOG-12060): `ci.yml` has no automatic `pull_request`
-# trigger, so the checks it owns reach a PR only by dispatching it on the PR head.
-# Take `workflow_dispatch` away and no PR can ever get them: that has to stay red.
-expect_fail frozen-ci-dispatch-removed 'required check `tests` is not reported' \
-  sed -i '/^  workflow_dispatch:/d' .github/workflows/ci.yml
+# Legacy development freeze (TOG-12060, TOG-12971): `ci.yml` keeps only the
+# opt-in `pull_request` trigger (`types: [labeled]`), because dispatched runs never
+# enter the PR status rollup and cannot satisfy the required checks. Take the
+# `pull_request` trigger away entirely and no PR can ever get `tests`: red.
+expect_fail frozen-ci-pr-trigger-removed 'required check `tests` is not reported' \
+  sed -i '/^  pull_request:/d' .github/workflows/ci.yml
 
-# The dispatch exception is a named list, not "any workflow with workflow_dispatch"
-# (deploy.yml and release.yml have one too). Empty the name from the list and the
-# frozen workflow stops counting, which is what proves the list is what the lint reads.
-expect_fail frozen-dispatch-list-emptied 'required check `tests` is not reported' \
-  sed -i 's/^PR_DISPATCH_WORKFLOWS=(.*)$/PR_DISPATCH_WORKFLOWS=(pr-lint.yml)/' ci/verify-pipeline.sh
+# The opt-in shape is `types: [labeled]`, not a bare trigger: widen it to automatic
+# PR events and the freeze is silently gone. Check 14 names the file and the
+# offending types; that is the reason this case asserts.
+expect_fail frozen-ci-labeled-widened 'runs on automatic PR events' \
+  sed -i 's/    types: \[labeled\]/    types: [opened, synchronize]/' .github/workflows/ci.yml
 
 printf '\n\033[1m==> Docs and protection drift apart\033[0m\n'
 

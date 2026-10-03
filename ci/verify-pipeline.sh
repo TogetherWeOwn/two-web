@@ -196,24 +196,18 @@ job_block() { awk -v id="$2" '$0 ~ "^  " id ":[[:space:]]*$" {j=1;next} j && /^ 
 # The awk output goes through a here-string rather than a pipe. See the note on
 # `has_line` below: `awk | grep -q` under `pipefail` is a coin flip.
 #
-# Exception, and only this one: a workflow in PR_DISPATCH_WORKFLOWS has had its
-# automatic `pull_request` trigger removed on purpose (legacy development freeze,
-# TOG-12060). Its checks reach a PR only when someone dispatches the workflow on
-# the PR head — the path release-please PRs already use — so while it keeps
-# `workflow_dispatch` it still counts as a workflow a PR can be blocked on.
-# Naming the files, rather than accepting any `workflow_dispatch`, is what keeps
-# `deploy.yml` and `release.yml` un-requirable: they have that trigger too.
-PR_DISPATCH_WORKFLOWS=(ci.yml pr-lint.yml)
-
+# Only `pull_request`-event runs enter a PR's status rollup, so dispatched runs
+# never satisfy a required check (TOG-12971): the merge gate reads the rollup,
+# not the commit. `ci.yml` and `pr-lint.yml` therefore keep an opt-in
+# `pull_request` trigger (`types: [labeled]`) for the legacy freeze (TOG-12060) —
+# automatic PR runs stop, and a maintainer's label produces the real check runs.
+# No exception list: `deploy.yml` and `release.yml` have `workflow_dispatch` too
+# and must stay un-requirable, and any dispatch-only workflow would fail this lint
+# the same way a missing trigger would.
 triggers_on_pr() {
-  local on f
+  local on
   on=$(awk '/^on:/{o=1;next} o && /^[a-zA-Z]/{exit} o' "$1")
   grep -qE '^\s+pull_request:?' <<< "$on" && return 0
-  for f in "${PR_DISPATCH_WORKFLOWS[@]}"; do
-    if [ "$(basename "$1")" = "$f" ] && grep -qE '^\s+workflow_dispatch:?' <<< "$on"; then
-      return 0
-    fi
-  done
   return 1
 }
 
@@ -965,6 +959,37 @@ print("trivialAllowlist=%s" % ",".join(trivial))
   else
     pass "\`$(echo "$deps_selftest_jobs" | tr '\n' ' ' | sed 's/ $//')\` runs the audit predicate's self-test — a predicate that stops failing cannot go quiet"
   fi
+
+  # 14. The legacy development freeze is still a freeze (TOG-12060, TOG-12971).
+  #
+  #    `ci.yml` and `pr-lint.yml` run on pull requests only via the opt-in
+  #    `labeled` trigger. Two ways to silently unfreeze, and neither shows up
+  #    anywhere else in the pipeline: widen `types:` back to automatic events
+  #    (opened/synchronize/edit/reopen), or add a job-level `if:` that skips the
+  #    required jobs on `labeled` events — a skipped required check counts as
+  #    passed, so the gate would bless PRs it never tested. Dispatch is not a
+  #    third way back in: `workflow_dispatch` runs never enter the PR status
+  #    rollup, so they cannot satisfy a required check, and the lint does not
+  #    count them (see `triggers_on_pr` above).
+  local freeze_file freeze_on freeze_types
+  for freeze_file in .github/workflows/ci.yml .github/workflows/pr-lint.yml; do
+    freeze_on=$(awk '/^on:/{o=1;next} o && /^[a-zA-Z]/{exit} o' "$freeze_file")
+    if ! grep -qE '^\s+pull_request:?' <<< "$freeze_on"; then
+      fail "\`${freeze_file}\` has no \`pull_request\` trigger — no PR can ever get its checks. The freeze is opt-in (\`types: [labeled]\`), not trigger removal: dispatched runs never enter the PR rollup."
+      rc=1
+      continue
+    fi
+    freeze_types=$(grep -A3 -E '^\s+pull_request:?\s*$' <<< "$freeze_on" | grep -E '^\s+types:')
+    if [ -z "$freeze_types" ]; then
+      fail "\`${freeze_file}\` triggers on every \`pull_request\` event — the legacy freeze is gone. Only the opt-in \`labeled\` type may run it."
+      rc=1
+    elif grep -qE 'opened|synchronize|edited|reopened|ready_for_review|assigned|unassigned|review_requested' <<< "$freeze_types"; then
+      fail "\`${freeze_file}\` runs on automatic PR events (\`${freeze_types//  /}\`) — the legacy freeze is gone. Only the opt-in \`labeled\` type may run it."
+      rc=1
+    else
+      pass "\`${freeze_file}\` runs on pull requests only via the opt-in trigger — the freeze still holds"
+    fi
+  done
 
   return "$rc"
 }
