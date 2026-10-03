@@ -39,12 +39,17 @@ const AGENT_STAGING_GUILD = '1545644954272137297';
 /** @return array<string, mixed> */
 function agentFields(array $overrides = []): array
 {
+    // Relative to now: a literal date ends, and publish refuses an ended event
+    // (422 on ends_at), so a fixed one turns this suite red on a schedule.
+    // 20:00-22:00 wall time is never inside a London DST gap.
+    $start = Carbon::now('Europe/London')->addDays(30)->setTime(20, 0);
+
     return array_merge([
         'title' => 'Agent proof event',
         'game' => 'Helldivers 2',
         'description' => 'One uniquely labelled staging proof.',
-        'starts_at' => '2026-10-01 20:00',
-        'ends_at' => '2026-10-01 22:00',
+        'starts_at' => $start->format('Y-m-d H:i'),
+        'ends_at' => $start->copy()->setTime(22, 0)->format('Y-m-d H:i'),
         'timezone' => 'Europe/London',
         'location' => 'Voice: General',
         'capacity' => 4,
