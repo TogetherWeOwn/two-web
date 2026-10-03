@@ -76,7 +76,7 @@ class EventForm
                     ->placeholder('Voice: General')
                     ->maxLength(255),
                 TextInput::make('capacity')
-                    ->numeric()
+                    ->integer()
                     ->minValue(1)
                     ->helperText('Leave empty for unlimited. Enforced when members RSVP.'),
 
