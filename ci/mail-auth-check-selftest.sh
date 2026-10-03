@@ -118,9 +118,9 @@ check "2048-bit key split across TXT strings is rejoined" "$SPLIT_KEY" true 2048
 #    This cannot be tested against live DNS: a stale cache is transient by
 #    definition and no resolver can be asked for one. So a scripted responder is
 #    substituted for query() and the SHIPPED lookup() is driven through it.
-agree() { # <label> <cloudflare-seq-json> <google-seq-json> <expect-status>
-  local label="$1" cf="$2" g="$3" want="$4" got
-  got="$(CF="$cf" G="$g" MAIL_AUTH_DISAGREE_PAUSE_MS=1 node --input-type=module -e "
+agree() { # <label> <cloudflare-seq-json> <google-seq-json> <expect-status> [expect-calls]
+  local label="$1" cf="$2" g="$3" want="$4" want_calls="${5:-}" out got calls
+  out="$(CF="$cf" G="$g" MAIL_AUTH_DISAGREE_PAUSE_MS=1 node --input-type=module -e "
     const m = await import('./ci/mail-auth-check.mjs');
     const seq = { cloudflare: JSON.parse(process.env.CF), google: JSON.parse(process.env.G) };
     let calls = 0;
@@ -129,11 +129,29 @@ agree() { # <label> <cloudflare-seq-json> <google-seq-json> <expect-status>
       return s[Math.min(Math.floor(calls++ / 2), s.length - 1)];
     });
     const r = await m.lookup('probe');
-    process.stdout.write(r.status);
+    process.stdout.write(r.status + ':' + calls);
   ")"
+  got="${out%%:*}"
+  calls="${out##*:}"
   [ "$got" = "$want" ] || fail "$label: expected $want, got $got"
-  pass "$label — $got"
+  if [ -n "$want_calls" ]; then
+    [ "$calls" = "$want_calls" ] ||
+      fail "$label: expected $want_calls query calls, got $calls"
+  fi
+  pass "$label — $got ($calls query calls)"
 }
+
+#    Equal multi-answer sets agree regardless of order or TXT chunking. No keys
+#    are needed: lookup compares normalized strings, not their DKIM validity.
+TXT_PAIR='{"status":"NOERROR","answers":["\"alpha\"","\"beta\""]}'
+TXT_REVERSED='{"status":"NOERROR","answers":["\"be\" \"ta\"","\"al\" \"pha\""]}'
+TXT_CHANGED='{"status":"NOERROR","answers":["\"gamma\"","\"al\" \"pha\""]}'
+
+agree "reversed multi-answer TXT sets agree without retry" \
+  "[$TXT_PAIR]" "[$TXT_REVERSED]" NOERROR 2
+
+agree "one changed TXT value persists through both retries" \
+  "[$TXT_PAIR]" "[$TXT_CHANGED]" DISAGREE 6
 
 K_OK="{\"status\":\"NOERROR\",\"answers\":[\"\\\"v=DKIM1; k=rsa; p=${KEY_2048}\\\"\"]}"
 K_OTHER="{\"status\":\"NOERROR\",\"answers\":[\"\\\"v=DKIM1; k=rsa; p=${KEY_1024}\\\"\"]}"
