@@ -24,6 +24,21 @@ a minute so you are not waiting on Dusk to be told about an unused import.
 
 Locally, `composer check` runs the first two.
 
+### Pull-request triggers are frozen (TOG-12060)
+
+`ci.yml` and `pr-lint.yml` run on pull requests only via the opt-in `labeled`
+trigger while legacy development is frozen. Opening, pushing to, editing or
+reopening a PR runs only `secret-scan.yml` (`gitleaks`) and `codeowners.yml`;
+every workflow still runs on push to `main`. The required checks are unchanged,
+so a PR cannot merge until its head SHA has them. A maintainer adds any label to
+the PR's exact head, and again (remove, then re-add) after every push or title/body
+edit — the `labeled` event produces the checks as `pull_request` check runs, which
+is what the required checks read. Dispatching the workflows is reviewer evidence
+only: dispatched runs never enter the PR status rollup, so they do not satisfy the
+required checks (TOG-12971). To unfreeze, widen the `pull_request` `types:` back to
+the automatic events; `ci/verify-pipeline.sh` check 14 fails while only `labeled`
+may run them.
+
 ### Everything runs on GitHub-hosted runners
 
 Every job in every workflow is `runs-on: ubuntu-latest` — GitHub-hosted runners

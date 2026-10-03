@@ -185,6 +185,19 @@ expect_fail phantom-deploy-job 'required check `staging` is not reported' \
 expect_fail job-renamed 'required check `budgets` is not reported' \
   sed -i 's/^    name: budgets$/    name: Performance budgets/' .github/workflows/ci.yml
 
+# Legacy development freeze (TOG-12060, TOG-12971): `ci.yml` keeps only the
+# opt-in `pull_request` trigger (`types: [labeled]`), because dispatched runs never
+# enter the PR status rollup and cannot satisfy the required checks. Take the
+# `pull_request` trigger away entirely and no PR can ever get `tests`: red.
+expect_fail frozen-ci-pr-trigger-removed 'required check `tests` is not reported' \
+  sed -i '/^  pull_request:/d' .github/workflows/ci.yml
+
+# The opt-in shape is `types: [labeled]`, not a bare trigger: widen it to automatic
+# PR events and the freeze is silently gone. Check 14 names the file and the
+# offending types; that is the reason this case asserts.
+expect_fail frozen-ci-labeled-widened 'runs on automatic PR events' \
+  sed -i 's/    types: \[labeled\]/    types: [opened, synchronize]/' .github/workflows/ci.yml
+
 printf '\n\033[1m==> Docs and protection drift apart\033[0m\n'
 
 # docs/ci.md is where the next person reads the list off before applying it. A
