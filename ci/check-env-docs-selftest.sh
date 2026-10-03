@@ -30,9 +30,10 @@ n=0
 
 [ -x "$SCRIPT" ] || { printf '%s is not executable\n' "$SCRIPT" >&2; exit 1; }
 
-# expect <slug> <expected exit> <expected substring> <example> <docs>
+# expect <slug> <expected exit> <expected substring> <example> <docs> [forbidden pattern]
 expect() {
   local slug="$1" want_rc="$2" want_text="$3" example="$4" docs="$5"
+  local forbidden_pattern="${6:-}"
   n=$((n + 1))
 
   local out got_rc
@@ -50,6 +51,12 @@ expect() {
   fi
   if ! printf '%s' "$out" | grep -qF "$want_text"; then
     fail "$slug: exit $got_rc was right, but the output never said '$want_text'"
+    printf '%s\n' "$out" | sed 's/^/        /' >&2
+    rc=1
+    return
+  fi
+  if [ -n "$forbidden_pattern" ] && printf '%s' "$out" | grep -qE "$forbidden_pattern"; then
+    fail "$slug: output contained a forbidden verdict ('$forbidden_pattern')"
     printf '%s\n' "$out" | sed 's/^/        /' >&2
     rc=1
     return
@@ -126,6 +133,13 @@ fi
 
 printf 'nothing backticked here\n' > "$WORK/empty.docs"
 expect empty-docs 2 "no keys parsed" "$WORK/base.example" "$WORK/empty.docs"
+
+# Keep docs parseable so comments/blank lines in the example cannot be
+# mistaken for agreement or ordinary documentation drift.
+printf '# APP_ENV=local\n\n# No active assignments.\n' > "$WORK/empty.example"
+printf '`APP_ENV` selects the environment.\n' > "$WORK/one-key.docs"
+expect empty-example 2 "no keys parsed from $WORK/empty.example" "$WORK/empty.example" "$WORK/one-key.docs" \
+  'agree|undocumented:|missing:|stale allowlist'
 
 printf '\n'
 if [ "$rc" -ne 0 ]; then
