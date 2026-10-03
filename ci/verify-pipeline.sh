@@ -195,10 +195,26 @@ job_block() { awk -v id="$2" '$0 ~ "^  " id ":[[:space:]]*$" {j=1;next} j && /^ 
 #
 # The awk output goes through a here-string rather than a pipe. See the note on
 # `has_line` below: `awk | grep -q` under `pipefail` is a coin flip.
+#
+# Exception, and only this one: a workflow in PR_DISPATCH_WORKFLOWS has had its
+# automatic `pull_request` trigger removed on purpose (legacy development freeze,
+# TOG-12060). Its checks reach a PR only when someone dispatches the workflow on
+# the PR head — the path release-please PRs already use — so while it keeps
+# `workflow_dispatch` it still counts as a workflow a PR can be blocked on.
+# Naming the files, rather than accepting any `workflow_dispatch`, is what keeps
+# `deploy.yml` and `release.yml` un-requirable: they have that trigger too.
+PR_DISPATCH_WORKFLOWS=(ci.yml pr-lint.yml)
+
 triggers_on_pr() {
-  local on
+  local on f
   on=$(awk '/^on:/{o=1;next} o && /^[a-zA-Z]/{exit} o' "$1")
-  grep -qE '^\s+pull_request:?' <<< "$on"
+  grep -qE '^\s+pull_request:?' <<< "$on" && return 0
+  for f in "${PR_DISPATCH_WORKFLOWS[@]}"; do
+    if [ "$(basename "$1")" = "$f" ] && grep -qE '^\s+workflow_dispatch:?' <<< "$on"; then
+      return 0
+    fi
+  done
+  return 1
 }
 
 # grep for a pattern in some text, and say so honestly.

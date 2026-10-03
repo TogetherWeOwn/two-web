@@ -10,8 +10,8 @@ name: PR lint
 #     (for example a merge call that passes its own commit_title).
 
 on:
-  pull_request:
-    types: [opened, edited, synchronize, reopened, ready_for_review]
+  # No automatic pull_request trigger: legacy development is frozen (TOG-12060).
+  # Dispatch this workflow with pr_number to lint a PR (see workflow_dispatch below).
   push:
     branches: [main]
   # Dispatched by the release workflow (TOG-10036) on release-please branches:

@@ -6,7 +6,9 @@
 name: CI
 
 on:
-  pull_request:
+  # No automatic pull_request trigger: legacy development is frozen (TOG-12060).
+  # A PR gets these checks by dispatching this workflow on its head branch;
+  # ci/verify-pipeline.sh counts that dispatch path (PR_DISPATCH_WORKFLOWS).
   push:
     branches: [main]
   # Dispatched by the release workflow (TOG-10036) on release-please branches:
