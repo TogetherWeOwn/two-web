@@ -1,7 +1,9 @@
 <?php
 
 use App\Enums\EventStatus;
+use App\Enums\RecurrenceFrequency;
 use App\Enums\RsvpStatus;
+use App\Exceptions\EventNotOpenException;
 use App\Jobs\SyncEventToDiscord;
 use App\Models\Event;
 use App\Models\Rsvp;
@@ -92,6 +94,69 @@ it('will not re-publish a cancelled event', function () {
     $this->actingAs($this->moderator)
         ->postJson(route('events.publish', $event))
         ->assertStatus(409);
+});
+
+it('will not re-publish an event closed by reconcile', function () {
+    Queue::fake();
+    $this->freezeTime();
+
+    $event = Event::factory()->create([
+        'status' => EventStatus::Published,
+        'starts_at' => now()->subHours(2),
+        'ends_at' => now()->subHour(),
+    ]);
+
+    $this->artisan('events:reconcile')->assertSuccessful();
+
+    expect($event->fresh()?->status)->toBe(EventStatus::Past);
+
+    $this->actingAs($this->moderator)
+        ->postJson(route('events.publish', $event))
+        ->assertStatus(409)
+        ->assertJsonPath('reason', 'event_not_open')
+        ->assertJsonPath('event_key', $event->event_key)
+        ->assertJsonPath('status', EventStatus::Past->value);
+
+    expect($event->fresh()?->status)->toBe(EventStatus::Past);
+    Queue::assertNothingPushed();
+});
+
+it('refuses re-publishing a past event even when the service caller holds a stale model', function () {
+    Queue::fake();
+
+    $event = Event::factory()->create(['status' => EventStatus::Published]);
+    Event::query()->whereKey($event->getKey())->update(['status' => EventStatus::Past]);
+
+    expect(fn () => app(EventService::class)->publish($event))
+        ->toThrow(EventNotOpenException::class);
+
+    expect($event->fresh()?->status)->toBe(EventStatus::Past);
+    Queue::assertNothingPushed();
+});
+
+it('refuses publishing a past series parent without announcing its draft children', function () {
+    Queue::fake();
+
+    $parent = Event::factory()->create([
+        'status' => EventStatus::Past,
+        'recurrence_frequency' => RecurrenceFrequency::Weekly,
+        'recurrence_count' => 2,
+        'recurrence_index' => 1,
+    ]);
+    $child = Event::factory()->create([
+        'status' => EventStatus::Draft,
+        'parent_event_id' => $parent->getKey(),
+        'recurrence_index' => 2,
+    ]);
+
+    $this->actingAs($this->moderator)
+        ->postJson(route('events.publish', $parent))
+        ->assertStatus(409)
+        ->assertJsonPath('reason', 'event_not_open');
+
+    expect($parent->fresh()?->status)->toBe(EventStatus::Past)
+        ->and($child->fresh()?->status)->toBe(EventStatus::Draft);
+    Queue::assertNothingPushed();
 });
 
 it('records an RSVP for the member who is signed in', function () {
