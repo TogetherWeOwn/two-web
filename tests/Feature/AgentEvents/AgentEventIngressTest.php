@@ -36,15 +36,27 @@ const AGENT_CREDENTIAL = 'agent-test-credential-opaque-entropy-here';
 
 const AGENT_STAGING_GUILD = '1545644954272137297';
 
-/** @return array<string, mixed> */
+/**
+ * The event window is relative to the run, not a calendar date: a literal date
+ * turns every publish into "an event that has already ended cannot be
+ * published" the day it passes (TOG-12941). 20:00-22:00 London wall time sits
+ * outside the 01:00-02:00 clock-change hour, so it is never skipped or
+ * repeated. The day is fixed once per process so a retry that rebuilds the
+ * fields under one idempotency key hashes the same payload across midnight.
+ *
+ * @return array<string, mixed>
+ */
 function agentFields(array $overrides = []): array
 {
+    static $day = null;
+    $day ??= Carbon::now('Europe/London')->addDays(30)->format('Y-m-d');
+
     return array_merge([
         'title' => 'Agent proof event',
         'game' => 'Helldivers 2',
         'description' => 'One uniquely labelled staging proof.',
-        'starts_at' => '2026-10-01 20:00',
-        'ends_at' => '2026-10-01 22:00',
+        'starts_at' => "{$day} 20:00",
+        'ends_at' => "{$day} 22:00",
         'timezone' => 'Europe/London',
         'location' => 'Voice: General',
         'capacity' => 4,
