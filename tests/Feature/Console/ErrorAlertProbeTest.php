@@ -120,6 +120,8 @@ it('alerts while the limiter store is down instead of going silent', function ()
 });
 
 it('reports the alert-then-muted chain through the probe command', function () {
+    swapTestLog();
+
     $code = Artisan::call('error-alert:probe', ['--json' => true]);
 
     expect($code)->toBe(0);

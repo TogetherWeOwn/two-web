@@ -6,12 +6,21 @@
 name: CI
 
 on:
+  # CI on a pull request is opt-in (TOG-12060, TOG-12971): opening, pushing to,
+  # editing or reopening a PR does not run it. A maintainer adds any label to the
+  # PR's exact head to produce these checks as `pull_request` check runs, which is
+  # what the PR's required checks read. A new push needs the label removed and
+  # added again. There is deliberately no job-level `if` and no path filter: a
+  # skipped required job reports success, so every `labeled` event must run the
+  # real job.
   pull_request:
+    types: [labeled]
   push:
     branches: [main]
   # Dispatched by the release workflow (TOG-10036) on release-please branches:
   # PRs opened with GITHUB_TOKEN trigger no workflows, so the required checks
-  # would never run on the release PR without this path.
+  # would never run on the release PR without this path. Dispatch runs are not in
+  # a PR's status rollup, so they do not satisfy the required check; use the label.
   workflow_dispatch:
 
 # A second push to the same PR cancels the first. Never cancel `main` — its result
@@ -139,6 +148,9 @@ jobs:
       - name: Dusk suite-health self-test
         run: node ci/suite-health-selftest.mjs
 
+      - name: Profile draft recovery self-test
+        run: node --test ci/profile-draft-selftest.mjs
+
       # The Dusk app, OAuth provider, bot stub and queue worker are separate
       # processes. This is the mutation control on their receipt gate: bypassing
       # OAuth or skipping the bot call must make the required browser job red.
@@ -169,6 +181,11 @@ jobs:
       # already green, which is far too late to stop the pull request that breaks it.
       - name: Deploy guard self-test
         run: ./ci/deploy-target-selftest.sh
+
+      # A healthy status probe cannot vouch for a later HTML fetch. Fake curl
+      # keeps every other smoke check green while that fetch fails; no network.
+      - name: Staging smoke body-fetch self-test
+        run: ./ci/smoke-staging-selftest.sh
 
       # The deployment-records prune (TOG-9273): every merge to `main` creates
       # a Deployment record and nothing deleted them, so a weekly scheduled
@@ -676,7 +693,7 @@ jobs:
       # re-run it instead of reading it.
       - name: Upload failure evidence
         if: failure()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: dusk-failures
           path: |
@@ -838,8 +855,11 @@ jobs:
           # The runners are persistent and these ports are stable per runner, so
           # a server an earlier run leaked is still bound and would answer the
           # readiness probe below while the real server silently failed to bind.
-          # See ci/reclaim-ports.sh (TOG-2847).
-          ./ci/reclaim-ports.sh "$PROXY_UPSTREAM_PORT" "$PROXY_LISTEN_PORT"
+          # See ci/reclaim-ports.sh (TOG-2847). CI_CHROME_PORT is Lighthouse's
+          # fixed debugging port (ci/lighthouserc.cjs, TOG-8177): a leaked
+          # Chrome there answers the launcher's TCP probe and then 404s
+          # /json/version, which reads as a browser crash mid-run.
+          ./ci/reclaim-ports.sh "$PROXY_UPSTREAM_PORT" "$PROXY_LISTEN_PORT" "$CI_CHROME_PORT"
 
           "$CI_PHP_BIN" artisan serve --host=127.0.0.1 --port="$PROXY_UPSTREAM_PORT" --no-reload > storage/logs/serve.log 2>&1 &
           echo $! > storage/logs/serve.pid
@@ -1028,7 +1048,7 @@ jobs:
       # both paths are generated reports, and the flag only applies to them.
       - name: Upload budget reports
         if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: budget-reports
           path: |

@@ -131,9 +131,8 @@ it('bumps SEQUENCE on edit with the same UID and intact DTSTART/DTEND/STATUS', f
     $beforeUid = icsLine($before, 'UID:');
     $beforeSequence = (int) str_replace('SEQUENCE:', '', icsLine($before, 'SEQUENCE:'));
 
-    // Second resolution: `updated_at` timestamps share a second within a fast
-    // test, so travel past the second boundary — production re-polls are minutes
-    // apart and never hit this.
+    // Ordinary edits separated by seconds remain compatible with the legacy
+    // timestamp sequence; fixed-clock burst edits have separate regressions.
     $this->travel(2)->seconds();
     $event->update(['title' => 'Friday night Helldivers (rescheduled)']);
 

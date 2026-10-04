@@ -24,6 +24,21 @@ a minute so you are not waiting on Dusk to be told about an unused import.
 
 Locally, `composer check` runs the first two.
 
+### Pull-request triggers are frozen (TOG-12060)
+
+`ci.yml` and `pr-lint.yml` run on pull requests only via the opt-in `labeled`
+trigger while legacy development is frozen. Opening, pushing to, editing or
+reopening a PR runs only `secret-scan.yml` (`gitleaks`) and `codeowners.yml`;
+every workflow still runs on push to `main`. The required checks are unchanged,
+so a PR cannot merge until its head SHA has them. A maintainer adds any label to
+the PR's exact head, and again (remove, then re-add) after every push or title/body
+edit — the `labeled` event produces the checks as `pull_request` check runs, which
+is what the required checks read. Dispatching the workflows is reviewer evidence
+only: dispatched runs never enter the PR status rollup, so they do not satisfy the
+required checks (TOG-12971). To unfreeze, widen the `pull_request` `types:` back to
+the automatic events; `ci/verify-pipeline.sh` check 14 fails while only `labeled`
+may run them.
+
 ### Everything runs on GitHub-hosted runners
 
 Every job in every workflow is `runs-on: ubuntu-latest` — GitHub-hosted runners
@@ -577,7 +592,11 @@ the answer means anything — CI never sees staging's queue.
    `AppServiceProvider`. The probe dispatches a self-failing job, runs the
    worker once against it, and reports the `failed_jobs` row it landed in.
    Clean the probe row up afterwards with `php artisan queue:forget <uuid>`
-   (the uuid is in the probe output), or retry it with `php artisan queue:retry`.
+   (the uuid is in the probe output). Do not `queue:retry`: retry would
+   restore the poison to its single-use isolated queue where no worker
+   listens — re-run the probe for a fresh drill instead. The probe refuses
+   to run while the app is down for maintenance, so run the drill with the
+   app up.
    The chain is pinned by `tests/Feature/Console/QueuePoisonProbeTest.php`.
 
 A real failure lands the same way: the worker already owns recovery (the
@@ -622,19 +641,24 @@ still names the schedule, the Backup Now rule, the bound — and that
 
 ### Who polls `/up`, and who gets paged (TOG-7327)
 
-`/up` is Laravel's health endpoint (`health: '/up'` in `bootstrap/app.php`,
-pinned by `tests/Feature/HealthCheckTest.php`). It answers 200 when the
-application boots far enough to serve. What polls it today, and what does
-not:
+`/up` is the deploy health check (the funnel's `GET /up` in
+`routes/funnel.php` replaces the framework's `health: '/up'` closure in
+`bootstrap/app.php`, pinned by `tests/Feature/HealthCheckTest.php`). A ready
+app answers 200; an unreachable database or pending migrations answers 503
+`degraded` (TOG-8711), so the deploy poll fails instead of shipping a
+not-ready box. What polls it today, and what does not:
 
 - **Deploy time.** `deploy.yml` polls `${STAGING}/up` for up to ten minutes
   after triggering the Coolify staging deploy — a queued deploy that never
-  answers fails the job. Then `bin/smoke-staging.sh` asserts `/up` → 200
+  answers fails the job, and a release whose database is unreachable or
+  whose migrations are pending answers 503, failing the job the same way.
+  Then `bin/smoke-staging.sh` asserts `/up` → 200
   again, alongside `/discord`, `/`, and `/events.json`. Green `staging`
   means the new release answered, and nothing more.
 - **CI time.** The Dusk, budgets, and opcache jobs poll a local `/up` to
   learn when the throwaway `artisan serve` under test is ready, and how fast
-  it answers. That proves the build boots; it says nothing about any
+  it answers. Each migrates before serving, so the poll also proves the
+  schema is current. That proves the build boots; it says nothing about any
   deployed host.
 - **Continuously, on any environment: nobody.** No cron, no scheduled
   workflow, and no third-party pinger polls `/up` on a deployed host (this

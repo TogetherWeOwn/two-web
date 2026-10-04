@@ -153,22 +153,33 @@ it('uses the partial index for the unsynced-rsvp probe shape', function () {
     expect($plan)->toContain('rsvps_unsynced_event_id_index');
 });
 
-it('needs no new index for the reconcile-close shape', function () {
-    Event::factory()->create(['status' => EventStatus::Published, 'ends_at' => now()->subHour()]);
+it('uses the shipped status index for the steady-state reconcile-close shape', function () {
+    seedEventArchiveVolume();
+    DB::table('events')
+        ->where('status', EventStatus::Published->value)
+        ->where('ends_at', '<', now())
+        ->update(['status' => EventStatus::Past->value]);
+    Event::factory()->create([
+        'status' => EventStatus::Published,
+        'starts_at' => now()->subHours(2),
+        'ends_at' => now()->subHour(),
+    ]);
+    DB::statement('ANALYZE events');
 
-    // Verdict: none-needed. `status = published` is equality on the leading
-    // column of the shipped (status, starts_at) index, which bounds the
-    // candidate set; the ends_at filter then applies to tens of rows, not
-    // thousands. A (status, ends_at) composite never won a plan at
-    // production-shaped volume in any state (backlog or steady), so it would
-    // be write overhead for no read gain. This pins the verdict: the close
-    // shape must keep reaching the shipped index.
-    $plan = hotPathIndexPlan(
-        'SELECT * FROM events WHERE status = ? AND ends_at < now()',
+    // The no-new-index verdict applies to steady state: 1500 reconciled
+    // archive rows, 30 live published rows and one newly ended event. Status
+    // bounds the close pass to 31 candidates, not the whole archive. On the
+    // old one-row fixture either the status or ends_at index legitimately
+    // wins; in a published backlog even a seq scan is correct. Pin the
+    // selective shipped access path with fresh stats and normal planner
+    // settings, rather than forcing a particular index on a tiny table.
+    $plan = collect(DB::select(
+        'EXPLAIN SELECT * FROM events WHERE status = ? AND ends_at < now()',
         [EventStatus::Published->value]
-    );
+    ))->pluck('QUERY PLAN')->implode("\n");
 
-    expect($plan)->toContain('events_status_starts_at_index');
+    expect($plan)->toContain('events_status_starts_at_index')
+        ->not->toContain('Seq Scan');
 });
 
 it('uses the ends_at index for the calendar-upcoming shape', function () {

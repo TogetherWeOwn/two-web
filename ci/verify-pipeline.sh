@@ -195,10 +195,20 @@ job_block() { awk -v id="$2" '$0 ~ "^  " id ":[[:space:]]*$" {j=1;next} j && /^ 
 #
 # The awk output goes through a here-string rather than a pipe. See the note on
 # `has_line` below: `awk | grep -q` under `pipefail` is a coin flip.
+#
+# Only `pull_request`-event runs enter a PR's status rollup, so dispatched runs
+# never satisfy a required check (TOG-12971): the merge gate reads the rollup,
+# not the commit. `ci.yml` and `pr-lint.yml` therefore keep an opt-in
+# `pull_request` trigger (`types: [labeled]`) for the legacy freeze (TOG-12060) —
+# automatic PR runs stop, and a maintainer's label produces the real check runs.
+# No exception list: `deploy.yml` and `release.yml` have `workflow_dispatch` too
+# and must stay un-requirable, and any dispatch-only workflow would fail this lint
+# the same way a missing trigger would.
 triggers_on_pr() {
   local on
   on=$(awk '/^on:/{o=1;next} o && /^[a-zA-Z]/{exit} o' "$1")
-  grep -qE '^\s+pull_request:?' <<< "$on"
+  grep -qE '^\s+pull_request:?' <<< "$on" && return 0
+  return 1
 }
 
 # grep for a pattern in some text, and say so honestly.
@@ -595,6 +605,45 @@ lint() {
           rc=1
         fi
       done
+
+      # How LHCI binds Chrome's debugging port, read the same way — through
+      # node, not grep. TOG-8177: the budgets job died mid-/admin with
+      # `Failed to fetch browser webSocket URL ... /json/version: HTTP Not
+      # Found`, a squatter answering HTTP on chrome-launcher's random ephemeral
+      # debugging port. A fixed port inside the runner's reserved block
+      # (ci/runner-ports.sh CI_CHROME_PORT, reclaimed before the server starts)
+      # closes that race; 0 is chrome-launcher's "pick a random port", which is
+      # where the crash came from. The getter reads CI_CHROME_PORT and falls
+      # back to 0 where the var is unset, so this probes both shapes: with the
+      # var set it must be the reserved port, and the fallback must stay 0
+      # rather than a literal that silently re-points the job.
+      local chrome_port
+      chrome_port=$(CI_CHROME_PORT=16165 node -e '
+        const path = require("path");
+        const config = require(path.resolve(process.argv[1]));
+        console.log((config.ci || {}).collect?.settings?.port ?? "absent");
+      ' "$budget_file" 2>&1) || chrome_port="unreadable: ${chrome_port}"
+      if [ "$chrome_port" = "16165" ]; then
+        pass "LHCI binds Chrome to the runner-reserved debugging port (\`CI_CHROME_PORT\`)"
+      else
+        fail "ci/lighthouserc.cjs does not bind Chrome to \`CI_CHROME_PORT\` (settings.port reads \`${chrome_port}\` with the var set). A random ephemeral debugging port is how a squatter 404s /json/version mid-run and takes the whole budgets job down with zero assertion results (TOG-8177). If the fixed port genuinely has to go, say which race replaces it and why in the commit, and update this check with it."
+        rc=1
+      fi
+      local chrome_port_fallback
+      # Unset the var for this probe: CI runners export it, and this checks the
+      # *fallback* shape, not the configured one. Without `env -u` a
+      # runner-populated shell fails this check on a correct config (TOG-10673).
+      chrome_port_fallback=$(env -u CI_CHROME_PORT node -e '
+        const path = require("path");
+        const config = require(path.resolve(process.argv[1]));
+        console.log((config.ci || {}).collect?.settings?.port ?? "absent");
+      ' "$budget_file" 2>&1) || chrome_port_fallback="unreadable: ${chrome_port_fallback}"
+      if [ "$chrome_port_fallback" = "0" ]; then
+        pass "LHCI debugging-port fallback stays random-port (0) where \`CI_CHROME_PORT\` is unset"
+      else
+        fail "ci/lighthouserc.cjs debugging-port fallback reads \`${chrome_port_fallback}\`, not \`0\`. Where CI_CHROME_PORT is unset (notably \`static\`, which loads this file for --lint) the port must stay chrome-launcher's random-port default; a literal there would point every environment without the var at one fixed port."
+        rc=1
+      fi
     fi
   fi
 
@@ -910,6 +959,37 @@ print("trivialAllowlist=%s" % ",".join(trivial))
   else
     pass "\`$(echo "$deps_selftest_jobs" | tr '\n' ' ' | sed 's/ $//')\` runs the audit predicate's self-test — a predicate that stops failing cannot go quiet"
   fi
+
+  # 14. The legacy development freeze is still a freeze (TOG-12060, TOG-12971).
+  #
+  #    `ci.yml` and `pr-lint.yml` run on pull requests only via the opt-in
+  #    `labeled` trigger. Two ways to silently unfreeze, and neither shows up
+  #    anywhere else in the pipeline: widen `types:` back to automatic events
+  #    (opened/synchronize/edit/reopen), or add a job-level `if:` that skips the
+  #    required jobs on `labeled` events — a skipped required check counts as
+  #    passed, so the gate would bless PRs it never tested. Dispatch is not a
+  #    third way back in: `workflow_dispatch` runs never enter the PR status
+  #    rollup, so they cannot satisfy a required check, and the lint does not
+  #    count them (see `triggers_on_pr` above).
+  local freeze_file freeze_on freeze_types
+  for freeze_file in .github/workflows/ci.yml .github/workflows/pr-lint.yml; do
+    freeze_on=$(awk '/^on:/{o=1;next} o && /^[a-zA-Z]/{exit} o' "$freeze_file")
+    if ! grep -qE '^\s+pull_request:?' <<< "$freeze_on"; then
+      fail "\`${freeze_file}\` has no \`pull_request\` trigger — no PR can ever get its checks. The freeze is opt-in (\`types: [labeled]\`), not trigger removal: dispatched runs never enter the PR rollup."
+      rc=1
+      continue
+    fi
+    freeze_types=$(grep -A3 -E '^\s+pull_request:?\s*$' <<< "$freeze_on" | grep -E '^\s+types:')
+    if [ -z "$freeze_types" ]; then
+      fail "\`${freeze_file}\` triggers on every \`pull_request\` event — the legacy freeze is gone. Only the opt-in \`labeled\` type may run it."
+      rc=1
+    elif grep -qE 'opened|synchronize|edited|reopened|ready_for_review|assigned|unassigned|review_requested' <<< "$freeze_types"; then
+      fail "\`${freeze_file}\` runs on automatic PR events (\`${freeze_types//  /}\`) — the legacy freeze is gone. Only the opt-in \`labeled\` type may run it."
+      rc=1
+    else
+      pass "\`${freeze_file}\` runs on pull requests only via the opt-in trigger — the freeze still holds"
+    fi
+  done
 
   return "$rc"
 }

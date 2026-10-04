@@ -138,7 +138,7 @@ class RsvpButton extends Component
 
         try {
             RsvpRateLimit::hit($user);
-            $events->rsvp($this->event, $user, $answer);
+            $saved = $events->rsvp($this->event, $user, $answer);
             // TOG-6990: a re-arming write clears the terminal stamp on the
             // service's own row instance. Re-read so this render sees the
             // cleared stamp — otherwise the banner shows "failed" for an
@@ -158,7 +158,7 @@ class RsvpButton extends Component
             $this->dispatch(
                 'going-count-updated',
                 eventKey: $this->event->event_key,
-                viewerState: match ($answer) {
+                viewerState: match ($saved->status) {
                     RsvpStatus::Going => 'going',
                     RsvpStatus::Waitlisted => 'waitlisted',
                     default => 'other',
@@ -293,6 +293,7 @@ class RsvpButton extends Component
             'rsvp' => $rsvp,
             'going' => $going,
             'waitlisted' => $waitlisted,
+            'nonSeatAnswer' => in_array($rsvp?->status, [RsvpStatus::Maybe, RsvpStatus::NotGoing], true),
             'open' => $live,
             'paused' => $paused,
             // Somebody already holding a seat — or a place in line — is never

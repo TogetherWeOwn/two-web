@@ -117,6 +117,110 @@ it('renders all four instances on the calendar with shareable pages, and 410s th
     }
 });
 
+it('persists separate parent time deltas only on children that have not started', function (string $now, string $startsAt, string $endsAt, string $futureStart, string $futureEnd) {
+    Queue::fake();
+
+    $service = app(EventService::class);
+    $parent = $service->createSeries($this->moderator, sundaySquadInput(), weeklyFour());
+    $service->publish($parent->refresh());
+    $service->cancel($parent->childEvents()->where('recurrence_index', 4)->sole());
+
+    $before = $parent->childEvents()->orderBy('recurrence_index')->get();
+    $identity = ['id', 'event_key', 'parent_event_id', 'recurrence_index', 'status'];
+
+    // Week 2 has ended; week 3 is at its start boundary or already underway.
+    Carbon::setTestNow($now);
+    $service->update($parent->fresh(), EventInput::fromValidated([
+        'title' => 'Sunday Squad',
+        'game' => 'Fall Guys',
+        'description' => 'An hour every Sunday.',
+        'starts_at' => $startsAt,
+        'ends_at' => $endsAt,
+        'timezone' => 'Europe/London',
+        'location' => 'Voice: Lobby',
+        'capacity' => null,
+    ]));
+
+    $persistedParent = $parent->fresh();
+    expect($persistedParent->starts_at->toIso8601String())->toBe(EventInput::instant($startsAt, 'Europe/London')->toIso8601String())
+        ->and($persistedParent->ends_at->toIso8601String())->toBe(EventInput::instant($endsAt, 'Europe/London')->toIso8601String());
+
+    $after = $persistedParent->childEvents()->orderBy('recurrence_index')->get();
+    expect($after)->toHaveCount(3)
+        ->and($after->map->only($identity)->all())->toBe($before->map->only($identity)->all())
+        ->and($after->map(fn (Event $child): array => [
+            $child->starts_at->toIso8601String(),
+            $child->ends_at->toIso8601String(),
+        ])->all())->toBe([
+            ['2026-10-11T19:00:00+00:00', '2026-10-11T20:00:00+00:00'],
+            ['2026-10-18T19:00:00+00:00', '2026-10-18T20:00:00+00:00'],
+            [$futureStart, $futureEnd],
+        ]);
+})->with([
+    'later, exact start boundary' => ['2026-10-18T19:00:00Z', '2026-10-11 20:30', '2026-10-11 22:30', '2026-11-01T20:30:00+00:00', '2026-11-01T22:30:00+00:00'],
+    'later, already underway' => ['2026-10-18T19:30:00Z', '2026-10-11 20:30', '2026-10-11 22:30', '2026-11-01T20:30:00+00:00', '2026-11-01T22:30:00+00:00'],
+    // Moving week 4 back across the clocks change uses seconds, not local weeks:
+    // 20:00 GMT minus seven days and 30 minutes becomes 20:30 BST, not 19:30 BST.
+    'earlier across DST' => ['2026-10-18T19:00:00Z', '2026-09-27 19:30', '2026-09-27 20:45', '2026-10-18T19:30:00+00:00', '2026-10-18T20:45:00+00:00'],
+]);
+
+it('persists a direct child edit without changing its parent or siblings', function () {
+    Queue::fake();
+
+    $service = app(EventService::class);
+    $parent = $service->createSeries($this->moderator, sundaySquadInput(), weeklyFour());
+    $child = $parent->childEvents()->where('recurrence_index', 3)->sole();
+    $others = fn () => Event::query()->where(function ($query) use ($parent) {
+        $query->whereKey($parent->getKey())->orWhere('parent_event_id', $parent->getKey());
+    })->where('id', '!=', $child->getKey())->orderBy('recurrence_index')->get()->toArray();
+    $before = $others();
+    $identity = $child->only(['id', 'event_key', 'parent_event_id', 'recurrence_index', 'status']);
+
+    $service->update($child, EventInput::fromValidated([
+        'title' => 'One-off Squad',
+        'game' => 'Fall Guys',
+        'description' => 'Just this week moves.',
+        'starts_at' => '2026-10-19 20:30',
+        'ends_at' => '2026-10-19 22:00',
+        'timezone' => 'Europe/London',
+        'location' => 'Voice: Lobby',
+        'capacity' => null,
+    ]));
+
+    $edited = $child->fresh();
+    expect($edited->title)->toBe('One-off Squad')
+        ->and($edited->starts_at->toIso8601String())->toBe('2026-10-19T19:30:00+00:00')
+        ->and($edited->ends_at->toIso8601String())->toBe('2026-10-19T21:00:00+00:00')
+        ->and($edited->only(array_keys($identity)))->toBe($identity)
+        ->and($others())->toBe($before);
+});
+
+it('persists a non-time parent edit without changing any child row', function () {
+    Queue::fake();
+
+    $service = app(EventService::class);
+    $parent = $service->createSeries($this->moderator, sundaySquadInput(), weeklyFour());
+    $before = $parent->childEvents()->orderBy('recurrence_index')->get()->toArray();
+
+    $service->update($parent, EventInput::fromValidated([
+        'title' => 'Renamed Sunday Squad',
+        'game' => 'Rocket League',
+        'description' => 'Updated parent description.',
+        'starts_at' => '2026-10-04 20:00',
+        'ends_at' => '2026-10-04 21:00',
+        'timezone' => 'Europe/London',
+        'location' => 'Voice: Games',
+        'capacity' => null,
+    ]));
+
+    $edited = $parent->fresh();
+    expect($edited->title)->toBe('Renamed Sunday Squad')
+        ->and($edited->game)->toBe('Rocket League')
+        ->and($edited->description)->toBe('Updated parent description.')
+        ->and($edited->location)->toBe('Voice: Games')
+        ->and($edited->childEvents()->orderBy('recurrence_index')->get()->toArray())->toBe($before);
+});
+
 it('lets the reconcile command materialise a series created anywhere else', function () {
     Queue::fake();
 

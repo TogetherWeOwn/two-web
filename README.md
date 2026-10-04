@@ -18,6 +18,10 @@ never holds the Discord bot token.
 You need: **PHP 8.2+** with the `pdo_pgsql` and `intl` extensions, **Composer**,
 **Node 20+**, and **Docker** (for the local database only).
 
+This quick start is for a developer's disposable local database. Agents must use
+only the approved test containers or disposable CI services described below,
+not a staging or production database.
+
 ```bash
 git clone <this repo> two-web && cd two-web
 
@@ -46,21 +50,81 @@ It downloads a self-contained PHP 8.3 and Composer into `.tooling/bin`
 usable PHP. Add the printed line to your `PATH` and the rest of the README works
 unchanged.
 
-For the database, if `docker` is also missing, point `DB_HOST`, `DB_PORT`,
-`DB_DATABASE`, `DB_USERNAME` and `DB_PASSWORD` in `.env` at any Postgres 14+ you
-can reach and are allowed to wipe. Nothing in the app cares where Postgres lives —
-the test suite reads the same `.env` and only forces the database *name*, so create
-`two_web_test` on that server as well (docker-compose does this for you):
+> **Agents:** use this script for the PHP toolchain only. Its closing database
+> advice — pointing `.env` at any Postgres you can reach — is superseded by the
+> [agent setup](#database-setup-agents-developers-and-ci) below and must not be
+> followed. The script itself is unchanged; this note overrides its database
+> guidance for agents.
 
-```sql
-CREATE DATABASE two_web_test;
+### Database setup: agents, developers and CI
+
+**Agents:** database tests and database probes may use only `agent-testdb:5432`
+with user `agent_test` and an empty password, or disposable CI service containers.
+Set all default and bot connection values in the process environment of the
+command you run — a `.env` file alone does not do it:
+
+```bash
+DB_CONNECTION=pgsql \
+DB_HOST=agent-testdb \
+DB_PORT=5432 \
+DB_DATABASE=two_web_test \
+DB_USERNAME=agent_test \
+DB_PASSWORD= \
+BOT_DB_HOST=agent-testdb \
+BOT_DB_PORT=5432 \
+BOT_DB_DATABASE=two_web_test \
+BOT_DB_USERNAME=agent_test \
+BOT_DB_PASSWORD= \
+composer test
 ```
 
-The suite only ever touches a database named `two_web_test*` — `phpunit.xml`
-forces the name and the `Tests\TestCase` guard refuses anything else before the
-first migration runs (TOG-9649). A `DB_DATABASE` here that does not start with
-`two_web_test` fails every test with that refusal, which is the protection
-working, not a setup bug.
+A real environment variable (for example a `DB_HOST` inherited from the worker)
+overrides the same name from a `.env` file, while `config/database.php` reads
+that resolved environment and `phpunit.xml` forces only the connection and the
+database name. A `.env`-only setup therefore leaves any inherited host and
+credentials in control. Exporting `DB_PASSWORD=` (empty) matters: it clears an
+inherited password instead of leaving the worker's credential active. Likewise,
+put a per-worktree `DB_DATABASE=two_web_test_<something>` here, not only in
+`.env` — the forced `phpunit.xml` name overrides a `.env`-only suffix and the
+run would silently use the shared `two_web_test` instead. `composer test`
+clears a stale cached config itself before running Pest; if you invoke
+`phpunit` or `pest` directly instead, run `php artisan config:clear` first —
+a cached config ignores environment changes entirely.
+
+Isolate **every configured connection**, not only the default one. The `bot`
+connection reads its own `BOT_DB_*` values, and homepage tests can query it even
+when the default connection passes the database-name guard. Set all five bot
+values explicitly too, including `BOT_DB_PASSWORD=` to clear an inherited
+password. The example sends both connections to the same approved disposable
+test database; if you select a per-worktree database, set both `DB_DATABASE` and
+`BOT_DB_DATABASE` to that name. Never leave the bot connection pointing at an
+inherited staging or production host: even a failed read is a prohibited probe.
+Tests that need bot views must use disposable fixtures on the approved test
+service or a no-I/O test double, never live bot data.
+
+The shared service's default database is `agent_test`, but this suite requires
+`two_web_test` (or a per-worktree `two_web_test_<something>` database). Provision
+that disposable database only on the approved test service; if it is unavailable
+or you lack permission, stop and report the blocker. Never use staging or
+production for database tests or probes, even with a test-prefixed database name.
+If a test needs Redis, the approved service is `redis://agent-testredis:6379`;
+TWO Web itself does not require Redis.
+
+**Developers:** `docker compose` creates disposable local `two_web` and
+`two_web_test` databases. Without Docker, provision a dedicated disposable local
+Postgres 14+ test instance — not a shared staging or production server — and set
+`DB_HOST`, `DB_PORT`, `DB_DATABASE`, `DB_USERNAME` and `DB_PASSWORD` to that
+instance. **CI:** use the disposable Postgres service and test-only credentials
+created by the workflow. These developer/CI setups do not authorize agents to
+choose another reachable host.
+
+Keep `phpunit.xml`'s forced database name and the `Tests\TestCase` guard enabled
+(TOG-9649). A name beginning with `two_web_test` is required, but is **not proof
+that the host is an approved test service**. The guard does not validate the host.
+A refused connection, authentication/ownership/permission error, or database-name
+refusal means stop and report the expected test service and error. Never weaken
+the guard or substitute credentials from inherited runtime URLs, environment
+variables, files, process information or other tool results.
 
 That PHP build has no `intl`, which Filament wants — locally you will need
 `--ignore-platform-req=ext-intl`. Real dev and production VMs have it, so this is

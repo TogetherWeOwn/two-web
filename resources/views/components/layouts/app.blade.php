@@ -84,6 +84,19 @@
          resources/css/app.css as `a[href='#main']:focus-visible`, so the class
          list here stays structural: hidden until focused, then handed to CSS. --}}
     <a href="#main" class="sr-only focus:not-sr-only">Skip to content</a>
+    {{-- Session-free funnel pages must not render a tokenless logout form. --}}
+    @if (request()->hasSession() && auth()->check())
+        <nav aria-label="Your account" class="mx-auto flex max-w-6xl items-center justify-end gap-3 px-6 py-3" data-testid="member-account-controls">
+            <a href="{{ route('profile') }}" class="inline-flex min-h-11 items-center text-sm underline underline-offset-4 hover:no-underline">Your profile</a>
+            <form method="POST" action="{{ route('logout') }}">
+                @csrf
+                <button type="submit"
+                        class="inline-flex min-h-11 items-center justify-center rounded-md px-3 text-sm underline underline-offset-4 hover:no-underline">
+                    Sign out
+                </button>
+            </form>
+        </nav>
+    @endif
     {{-- `tabindex="-1"`: the skip-link target must take programmatic focus in
          Chrome/Safari, where a plain anchor jump scrolls but leaves focus on
          `body` — a keyboard user who skips then tabs starts over at the top.
@@ -134,6 +147,26 @@
 
                 let checking = false;
 
+                // An explicit sign-out seen in this page lifetime sticks:
+                // later probes describe the same dead session, never a quiet
+                // expiry, so editors keep requiring an explicit login after
+                // it (TOG-9355 review). Without this, the first focus after a
+                // cross-tab sign-out would report 'expired' and auto-start
+                // OAuth — the exact navigation the sign-out path refuses.
+                let signedOut = false;
+
+                function reloadAfterAuthChange(reason) {
+                    // Editors may preserve unsent input or refuse navigation
+                    // when storage is unavailable. Other pages still reload.
+                    // The reason tells editors apart: an explicit sign-out in
+                    // another tab must never auto-start OAuth (TOG-9355
+                    // review), while a quiet expiry may go through login.
+                    const beforeReload = new CustomEvent('two:before-auth-reload', { cancelable: true, detail: { reason } });
+                    if (document.dispatchEvent(beforeReload)) {
+                        window.location.reload();
+                    }
+                }
+
                 async function recheck() {
                     if (checking || document.visibilityState === 'hidden') {
                         return;
@@ -147,7 +180,7 @@
                         if (res.ok) {
                             const body = await res.json();
                             if (body && body.authenticated === false) {
-                                window.location.reload();
+                                reloadAfterAuthChange(signedOut ? 'signed-out' : 'expired');
                             }
                         }
                     } catch (e) {
@@ -171,7 +204,8 @@
                 });
                 window.addEventListener('storage', (event) => {
                     if (event.key === STORAGE_KEY && event.newValue === 'signed-out') {
-                        window.location.reload();
+                        signedOut = true;
+                        reloadAfterAuthChange('signed-out');
                     }
                 });
 

@@ -185,6 +185,19 @@ expect_fail phantom-deploy-job 'required check `staging` is not reported' \
 expect_fail job-renamed 'required check `budgets` is not reported' \
   sed -i 's/^    name: budgets$/    name: Performance budgets/' .github/workflows/ci.yml
 
+# Legacy development freeze (TOG-12060, TOG-12971): `ci.yml` keeps only the
+# opt-in `pull_request` trigger (`types: [labeled]`), because dispatched runs never
+# enter the PR status rollup and cannot satisfy the required checks. Take the
+# `pull_request` trigger away entirely and no PR can ever get `tests`: red.
+expect_fail frozen-ci-pr-trigger-removed 'required check `tests` is not reported' \
+  sed -i '/^  pull_request:/d' .github/workflows/ci.yml
+
+# The opt-in shape is `types: [labeled]`, not a bare trigger: widen it to automatic
+# PR events and the freeze is silently gone. Check 14 names the file and the
+# offending types; that is the reason this case asserts.
+expect_fail frozen-ci-labeled-widened 'runs on automatic PR events' \
+  sed -i 's/    types: \[labeled\]/    types: [opened, synchronize]/' .github/workflows/ci.yml
+
 printf '\n\033[1m==> Docs and protection drift apart\033[0m\n'
 
 # docs/ci.md is where the next person reads the list off before applying it. A
@@ -287,6 +300,29 @@ expect_fail lhci-chrome-flags-dropped 'without `--no-sandbox`' \
 # so checking --no-sandbox alone cannot silently satisfy both requirements.
 expect_fail lhci-chrome-shared-memory-flag-dropped 'without `--disable-dev-shm-usage`' \
   sed -i "s/chromeFlags: '--no-sandbox --disable-dev-shm-usage',/chromeFlags: '--no-sandbox',/" ci/lighthouserc.cjs
+# The fixed debugging port removed. Without `settings.port` reading
+# CI_CHROME_PORT, chrome-launcher falls back to a random ephemeral port per
+# Chrome launch — and on the shared runners a squatter on that port answers the
+# launcher's TCP probe, then 404s /json/version, which kills the whole budgets
+# job mid-run with zero assertion results (TOG-8177). The lint reads the port
+# through node with the var set, so deleting the getter — or the whole key —
+# goes red here.
+expect_fail lhci-chrome-port-removed 'does not bind Chrome to `CI_CHROME_PORT`' \
+  bash -c 'python3 - <<'"'"'EOF'"'"'
+import re
+p = "ci/lighthouserc.cjs"
+s = open(p).read()
+start = s.index("        get port() {")
+end = s.index("        },", start) + len("        },")
+open(p, "w").write(s[:start] + s[end+1:])
+EOF'
+
+# The same port repointed at a literal. The getter still exists and still reads
+# an integer, so a check that only asked "is it a number" would stay green —
+# while every environment without that exact port collides or binds wrong. The
+# lint pins the value the var produces, so a hardcoded port goes red here.
+expect_fail lhci-chrome-port-literal 'does not bind Chrome to `CI_CHROME_PORT`' \
+  sed -i 's/Number.isInteger(parsed) && parsed > 0 ? parsed : 0/19411/' ci/lighthouserc.cjs
 
 # A second entry appended for an audit that already has one. The pinned line is
 # left exactly as it was — and a JavaScript object literal keeps the *last*
@@ -543,6 +579,20 @@ if ( cd "$(fixture clean)" && ./ci/verify-pipeline.sh --lint >/dev/null 2>&1 ); 
 else
   fail "clean: the real workflow does not lint green"
   ( cd "$WORK/clean" && ./ci/verify-pipeline.sh --lint 2>&1 | sed 's/^/        /' )
+  rc=1
+fi
+
+# The fallback probe must not see a runner-exported CI_CHROME_PORT. CI runners
+# export the var, so without `env -u` the unset-shape check reads the configured
+# port and fails a correct config (TOG-10673 review of the TOG-8177 fix). This is
+# a pass-case, not a mutation: the clean fixture lints green under an inherited
+# valid port.
+n=$((n + 1))
+if ( cd "$(fixture clean-inherited-port)" && CI_CHROME_PORT=10015 ./ci/verify-pipeline.sh --lint >/dev/null 2>&1 ); then
+  pass "clean-inherited-port: the real workflow lints green with CI_CHROME_PORT set in the environment"
+else
+  fail "clean-inherited-port: the lint rejects a correct config when CI_CHROME_PORT is inherited"
+  ( cd "$WORK/clean-inherited-port" && CI_CHROME_PORT=10015 ./ci/verify-pipeline.sh --lint 2>&1 | sed 's/^/        /' )
   rc=1
 fi
 

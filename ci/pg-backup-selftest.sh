@@ -31,7 +31,24 @@
 #   backup-empty          pg_dump prints nothing        -> exit 1, no file kept
 #   backup-failed         pg_dump exits nonzero          -> no dump/temp or success
 #   password-not-in-argv  the secret never appears in any docker argv
-#   proof-ok              equal counts                  -> PROOF OK, scratch dropped
+#   proof-source-alias    source equals scratch (env/.env) -> exit 1, no docker calls
+#   proof-alias-comment   dotenv quoted value + trailing `#` comment -> same
+#   proof-alias-hash-nospace unquoted value + `#` with no preceding space ->
+#                         same (dotenv starts a comment at any `#`)
+#   proof-alias-spaced-key  `DB_DATABASE = …` (spaces around `=`) -> same
+#   proof-alias-quoted-key  `"DB_DATABASE"=…` (quoted name) -> same
+#   proof-alias-invalid-name a line dotenv itself rejects -> exit 1 naming
+#                         the rejection, no docker calls
+#   proof-backup-unparse  malformed DB_DATABASE line + `backup` -> exit 1
+#                         naming the parse refusal, no dump, no docker calls
+#   proof-alias-conninfo  `dbname=…` connection string (env/.env) -> exit 1,
+#                         names the connection-string rule, no docker calls
+#   proof-alias-uri       `postgresql://…` URI -> same
+#   proof-alias-unparse   unterminated quote in .env -> exit 1, parse refusal,
+#                         no docker calls
+#   proof-alias-expansion dotenv `$VAR` expansion -> exit 1, expansion refusal,
+#                         no docker calls
+#   proof-ok              distinct source, equal counts -> PROOF OK, scratch dropped
 #   proof-mismatch        one count differs             -> PROOF FAILED, exit 1
 #   proof-corrupt         pg_restore exits 1            -> nonzero, scratch dropped
 #   proof-missing-dump    explicit path that is absent  -> exit 1, names it
@@ -315,14 +332,307 @@ fi
 
 printf '\n\033[1m==> The restore proof proves, and cleans up\033[0m\n'
 
+# Aliasing would let both the initial dropdb and EXIT cleanup delete the source.
+# Refuse environment and quoted/exported .env values before any docker call,
+# including cleanup. Seed a valid dump so missing input cannot mask the guard.
+for source in env dotenv; do
+  dir="$(fixture "proofalias-${source}")"
+  seed_dump "$dir"
+  : > "$dir/docker.log"
+  if [ "$source" = env ]; then
+    out="$(cd "$dir" && PATH="$STUB_DIR:$PATH" STUB_LOG="$dir/docker.log" \
+      DB_HOST=127.0.0.1 DB_DATABASE=two_web_restore_proof \
+      ./bin/pg-backup.sh restore-proof "$dir/backups/seed.dump" 2>&1)"; status=$?
+  else
+    printf 'export DB_DATABASE="two_web_restore_proof"\n' > "$dir/.env"
+    out="$(cd "$dir" && env -u DB_DATABASE PATH="$STUB_DIR:$PATH" STUB_LOG="$dir/docker.log" \
+      DB_HOST=127.0.0.1 ./bin/pg-backup.sh restore-proof "$dir/backups/seed.dump" 2>&1)"; status=$?
+  fi
+  if [ "$status" -eq 1 ] \
+      && grep -qF "DB_DATABASE must differ from scratch database 'two_web_restore_proof'" <<< "$out" \
+      && [ ! -s "$dir/docker.log" ]; then
+    pass "proof-source-alias-${source}"
+  else
+    fail "proof-source-alias-${source}: expected exit 1 naming the alias and no docker calls (got ${status})"
+    printf '%s\n' "$out" | sed 's/^/        /'
+    printf '%s\n' "$(< "$dir/docker.log")" | sed 's/^/        /'
+  fi
+done
+
+# The application (dotenv) strips a trailing `#` comment after a quoted value,
+# so a commented alias must refuse exactly like a literal one — before any
+# docker call, including cleanup.
+dir="$(fixture proofalias-comment)"
+seed_dump "$dir"
+printf 'DB_DATABASE="two_web_restore_proof" # local database\n' > "$dir/.env"
+out="$(cd "$dir" && env -u DB_DATABASE PATH="$STUB_DIR:$PATH" STUB_LOG="$dir/docker.log" \
+  DB_HOST=127.0.0.1 ./bin/pg-backup.sh restore-proof "$dir/backups/seed.dump" 2>&1)"; status=$?
+if [ "$status" -eq 1 ] \
+    && grep -qF "DB_DATABASE must differ from scratch database 'two_web_restore_proof'" <<< "$out" \
+    && [ ! -s "$dir/docker.log" ]; then
+  pass "proof-alias-comment"
+else
+  fail "proof-alias-comment: expected exit 1 naming the alias and no docker calls (got ${status})"
+  printf '%s\n' "$out" | sed 's/^/        /'
+  printf '%s\n' "$(< "$dir/docker.log")" | sed 's/^/        /'
+fi
+
+# libpq accepts keyword/value and URI connection strings where this script
+# passes `-d`, so values that merely differ textually from the scratch name
+# can still address it. Refuse them by rule — from the environment and from
+# .env — before any docker call.
+for source in env dotenv; do
+  dir="$(fixture "proofalias-conninfo-${source}")"
+  seed_dump "$dir"
+  : > "$dir/docker.log"
+  if [ "$source" = env ]; then
+    out="$(cd "$dir" && PATH="$STUB_DIR:$PATH" STUB_LOG="$dir/docker.log" \
+      DB_HOST=127.0.0.1 DB_DATABASE='dbname=two_web_restore_proof' \
+      ./bin/pg-backup.sh restore-proof "$dir/backups/seed.dump" 2>&1)"; status=$?
+  else
+    printf "DB_DATABASE='dbname=two_web_restore_proof'\n" > "$dir/.env"
+    out="$(cd "$dir" && env -u DB_DATABASE PATH="$STUB_DIR:$PATH" STUB_LOG="$dir/docker.log" \
+      DB_HOST=127.0.0.1 ./bin/pg-backup.sh restore-proof "$dir/backups/seed.dump" 2>&1)"; status=$?
+  fi
+  if [ "$status" -eq 1 ] \
+      && grep -qF "must be a plain database name, not a connection string or URI" <<< "$out" \
+      && [ ! -s "$dir/docker.log" ]; then
+    pass "proof-alias-conninfo-${source}"
+  else
+    fail "proof-alias-conninfo-${source}: expected exit 1 naming the connection-string rule and no docker calls (got ${status})"
+    printf '%s\n' "$out" | sed 's/^/        /'
+    printf '%s\n' "$(< "$dir/docker.log")" | sed 's/^/        /'
+  fi
+done
+
+dir="$(fixture proofalias-uri)"
+seed_dump "$dir"
+out="$(cd "$dir" && PATH="$STUB_DIR:$PATH" STUB_LOG="$dir/docker.log" \
+  DB_HOST=127.0.0.1 DB_DATABASE='postgresql://127.0.0.1:5432/two_web' \
+  ./bin/pg-backup.sh restore-proof "$dir/backups/seed.dump" 2>&1)"; status=$?
+if [ "$status" -eq 1 ] \
+    && grep -qF "must be a plain database name, not a connection string or URI" <<< "$out" \
+    && [ ! -s "$dir/docker.log" ]; then
+  pass "proof-alias-uri"
+else
+  fail "proof-alias-uri: expected exit 1 naming the connection-string rule and no docker calls (got ${status})"
+  printf '%s\n' "$out" | sed 's/^/        /'
+  printf '%s\n' "$(< "$dir/docker.log")" | sed 's/^/        /'
+fi
+
+# An .env database line this script cannot parse the same way as the
+# application must fail closed: comparing a different name than the
+# application connects to is how the alias slips through.
+dir="$(fixture proofalias-unparse)"
+seed_dump "$dir"
+printf 'DB_DATABASE="two_web_restore_proof\n' > "$dir/.env"
+out="$(cd "$dir" && env -u DB_DATABASE PATH="$STUB_DIR:$PATH" STUB_LOG="$dir/docker.log" \
+  DB_HOST=127.0.0.1 ./bin/pg-backup.sh restore-proof "$dir/backups/seed.dump" 2>&1)"; status=$?
+if [ "$status" -eq 1 ] \
+    && grep -qF "cannot parse the DB_DATABASE line in .env" <<< "$out" \
+    && [ ! -s "$dir/docker.log" ]; then
+  pass "proof-alias-unparse"
+else
+  fail "proof-alias-unparse: expected exit 1 naming the parse refusal and no docker calls (got ${status})"
+  printf '%s\n' "$out" | sed 's/^/        /'
+  printf '%s\n' "$(< "$dir/docker.log")" | sed 's/^/        /'
+fi
+
+# dotenv expands $VAR inside unquoted and double-quoted values while this
+# script deliberately does not — so such a line compares a different name
+# than the application connects to. Single-quoted values stay literal and
+# take the plain-name path instead.
+dir="$(fixture proofalias-expansion)"
+seed_dump "$dir"
+printf 'DB_DATABASE="two_web_${SUFFIX:-restore_proof}"\n' > "$dir/.env"
+out="$(cd "$dir" && env -u DB_DATABASE PATH="$STUB_DIR:$PATH" STUB_LOG="$dir/docker.log" \
+  DB_HOST=127.0.0.1 ./bin/pg-backup.sh restore-proof "$dir/backups/seed.dump" 2>&1)"; status=$?
+if [ "$status" -eq 1 ] \
+    && grep -qF "uses variable expansion" <<< "$out" \
+    && [ ! -s "$dir/docker.log" ]; then
+  pass "proof-alias-expansion"
+else
+  fail "proof-alias-expansion: expected exit 1 naming the expansion refusal and no docker calls (got ${status})"
+  printf '%s\n' "$out" | sed 's/^/        /'
+  printf '%s\n' "$(< "$dir/docker.log")" | sed 's/^/        /'
+fi
+
+# dotenv starts a comment at any `#` in an unquoted value — no preceding
+# whitespace required (EntryParser enters COMMENT_STATE on `#` in both the
+# initial and unquoted states) — so an attached comment must refuse exactly
+# like a spaced one: the application connects to the scratch database either
+# way.
+dir="$(fixture proofalias-hash-nospace)"
+seed_dump "$dir"
+printf 'DB_DATABASE=two_web_restore_proof#local\n' > "$dir/.env"
+out="$(cd "$dir" && env -u DB_DATABASE PATH="$STUB_DIR:$PATH" STUB_LOG="$dir/docker.log" \
+  DB_HOST=127.0.0.1 ./bin/pg-backup.sh restore-proof "$dir/backups/seed.dump" 2>&1)"; status=$?
+if [ "$status" -eq 1 ] \
+    && grep -qF "DB_DATABASE must differ from scratch database 'two_web_restore_proof'" <<< "$out" \
+    && [ ! -s "$dir/docker.log" ]; then
+  pass "proof-alias-hash-nospace"
+else
+  fail "proof-alias-hash-nospace: expected exit 1 naming the alias and no docker calls (got ${status})"
+  printf '%s\n' "$out" | sed 's/^/        /'
+  printf '%s\n' "$(< "$dir/docker.log")" | sed 's/^/        /'
+fi
+
+# dotenv splits each line on the first `=`, trims the name, and strips one
+# leading `export` and one matching quote pair — so spaced and quoted names
+# set DB_DATABASE exactly like the bare spelling, and an alias through them
+# must refuse before any docker call. One case per spelling, all seeded so a
+# missing dump cannot mask the guard.
+i=0
+for spelling in 'DB_DATABASE = two_web_restore_proof' '"DB_DATABASE"=two_web_restore_proof' "'DB_DATABASE'=two_web_restore_proof"; do
+  i=$((i + 1))
+  dir="$(fixture "proofalias-keyspell-${i}")"
+  seed_dump "$dir"
+  printf '%s\n' "$spelling" > "$dir/.env"
+  out="$(cd "$dir" && env -u DB_DATABASE PATH="$STUB_DIR:$PATH" STUB_LOG="$dir/docker.log" \
+    DB_HOST=127.0.0.1 ./bin/pg-backup.sh restore-proof "$dir/backups/seed.dump" 2>&1)"; status=$?
+  if [ "$status" -eq 1 ] \
+      && grep -qF "DB_DATABASE must differ from scratch database 'two_web_restore_proof'" <<< "$out" \
+      && [ ! -s "$dir/docker.log" ]; then
+    pass "proof-alias-keyspell-${i} ($(printf '%s' "$spelling" | head -c 24))"
+  else
+    fail "proof-alias-keyspell-${i}: spelling $(printf '%s' "$spelling" | head -c 40) expected exit 1 naming the alias and no docker calls (got ${status})"
+    printf '%s\n' "$out" | sed 's/^/        /'
+    printf '%s\n' "$(< "$dir/docker.log")" | sed 's/^/        /'
+  fi
+done
+
+# A line dotenv itself rejects (here: a name with interior blanks) makes the
+# application refuse to boot at all — Laravel dies in writeErrorAndDie — so
+# there is no live application value to diverge from. The proof must still
+# fail closed on it rather than compare the fallback default the application
+# would never use.
+dir="$(fixture proofalias-invalid-name)"
+seed_dump "$dir"
+printf 'DB_DATABASE=two_web\nDB DATA=oops\n' > "$dir/.env"
+out="$(cd "$dir" && env -u DB_DATABASE PATH="$STUB_DIR:$PATH" STUB_LOG="$dir/docker.log" \
+  DB_HOST=127.0.0.1 ./bin/pg-backup.sh restore-proof "$dir/backups/seed.dump" 2>&1)"; status=$?
+if [ "$status" -eq 1 ] \
+    && grep -qF "dotenv itself rejects" <<< "$out" \
+    && [ ! -s "$dir/docker.log" ]; then
+  pass "proof-alias-invalid-name"
+else
+  fail "proof-alias-invalid-name: expected exit 1 naming the dotenv rejection and no docker calls (got ${status})"
+  printf '%s\n' "$out" | sed 's/^/        /'
+  printf '%s\n' "$(< "$dir/docker.log")" | sed 's/^/        /'
+fi
+
+# `backup` dumps whichever database the local client resolves, so a .env
+# database line this script cannot parse the same way as the application must
+# refuse there too — before any docker call, with no dump written and no temp
+# file kept. `rotate` and `promote-weekly` stay tolerant on purpose (they
+# address no database); only the connecting commands refuse.
+dir="$(fixture proofbackup-unparse)"
+printf 'DB_DATABASE="important_db\n' > "$dir/.env"
+out="$(cd "$dir" && env -u DB_DATABASE PATH="$STUB_DIR:$PATH" STUB_LOG="$dir/docker.log" \
+  DB_HOST=127.0.0.1 ./bin/pg-backup.sh backup 2>&1)"; status=$?
+dump="$(ls -t "$dir"/backups/two-web-*.dump 2>/dev/null | head -n 1 || true)"
+if [ "$status" -eq 1 ] \
+    && grep -qF "cannot parse the DB_DATABASE line in .env" <<< "$out" \
+    && [ ! -s "$dir/docker.log" ] \
+    && [ -z "$dump" ] \
+    && [ -z "$(ls "$dir"/backups/*.tmp.* 2>/dev/null || true)" ]; then
+  pass "proof-backup-unparse"
+else
+  fail "proof-backup-unparse: expected exit 1 naming the parse refusal with no dump and no docker calls (got ${status})"
+  printf '%s\n' "$out" | sed 's/^/        /'
+  printf '%s\n' "$(< "$dir/docker.log")" | sed 's/^/        /'
+fi
+
+# A multiline value for ANY key hides assignment-looking lines from dotenv.
+# Refuse the unsupported file before selecting DB_DATABASE, even if the real
+# environment supplies the source. Invalid names and values elsewhere must
+# also refuse with one actionable diagnostic, not a silent fallback dump.
+for mode in backup restore-proof; do
+  for scenario in multiline multiline-env invalid-hyphen invalid-spaces invalid-quoted \
+      malformed-other escaped-other embedded-cr nul; do
+    dir="$(fixture "strict-${mode}-${scenario}")"
+    seed_dump "$dir"
+    : > "$dir/docker.log"
+    override=""
+    expected="cannot parse"
+    case "$scenario" in
+      multiline|multiline-env)
+        printf 'DB_DATABASE=two_web_restore_proof\nAPP_NOTE="begin\nDB_DATABASE=custom_source\nTAIL="\n' > "$dir/.env"
+        [ "$scenario" != multiline-env ] || override=custom_source
+        ;;
+      invalid-hyphen|invalid-spaces|invalid-quoted)
+        case "$scenario" in
+          invalid-hyphen) spelling='DB-NAME' ;;
+          invalid-spaces) spelling='DB NAME' ;;
+          invalid-quoted) spelling='"DB-NAME"' ;;
+        esac
+        printf 'DB_DATABASE=custom_source\n%s=oops\n' "$spelling" > "$dir/.env"
+        expected="dotenv itself rejects"
+        ;;
+      malformed-other) printf 'DB_DATABASE=custom_source\nAPP_NOTE="missing\n' > "$dir/.env" ;;
+      escaped-other) printf 'DB_DATABASE=custom_source\nAPP_NOTE="one\\ntwo"\n' > "$dir/.env" ;;
+      embedded-cr) printf 'DB_DATABASE=two_web_restore_proof\rDB_DATABASE=custom_source\n' > "$dir/.env" ;;
+      nul) printf 'DB_DATABASE=two_web_restore_proof\000suffix\n' > "$dir/.env" ;;
+    esac
+    out="$(cd "$dir" && env -u DB_DATABASE PATH="$STUB_DIR:$PATH" STUB_LOG="$dir/docker.log" \
+      DB_HOST=127.0.0.1 DB_DATABASE="$override" \
+      ./bin/pg-backup.sh "$mode" "$dir/backups/seed.dump" 2>&1)"; status=$?
+    if [ "$status" -eq 1 ] && grep -qF "$expected" <<< "$out" \
+        && [ "$(grep -cF 'pg-backup: refusing:' <<< "$out")" -eq 1 ] \
+        && [ ! -s "$dir/docker.log" ] \
+        && [ "$(< "$dir/backups/seed.dump")" = x ] \
+        && [ -z "$(ls "$dir"/backups/*.tmp.* 2>/dev/null || true)" ]; then
+      pass "strict-${mode}-${scenario}"
+    else
+      fail "strict-${mode}-${scenario}: expected exit 1, one refusal, no docker calls, and untouched dump (got ${status})"
+      printf '%s\n' "$out" | sed 's/^/        /'
+    fi
+  done
+done
+
+# CRLF, comments and assignment-looking text inside a single-line value are
+# supported. The value is data, not another assignment; use the actual source.
+dir="$(fixture proof-single-line-note)"
+seed_dump "$dir"
+printf 'APP_NOTE="DB_DATABASE=two_web_restore_proof"\r\nexport DB_DATABASE = "custom_source" # local\r\n' > "$dir/.env"
+out="$(cd "$dir" && env -u DB_DATABASE PATH="$STUB_DIR:$PATH" STUB_LOG="$dir/docker.log" \
+  DB_HOST=127.0.0.1 ./bin/pg-backup.sh restore-proof "$dir/backups/seed.dump" 2>&1)"; status=$?
+if [ "$status" -eq 0 ] && grep -qF "PROOF OK" <<< "$out" \
+    && grep -qF -- "-d custom_source" "$dir/docker.log"; then
+  pass "proof-single-line-note"
+else
+  fail "proof-single-line-note: expected the distinct dotenv source and PROOF OK (got ${status})"
+  printf '%s\n' "$out" | sed 's/^/        /'
+fi
+
+# File-only commands remain usable with unsupported dotenv syntax.
+dir="$(fixture rotate-multiline)"
+mkdir -p "$dir/backups"
+printf x > "$dir/backups/two-web-20260929T030000Z.dump"
+printf x > "$dir/backups/two-web-20260930T030000Z.dump"
+printf 'APP_NOTE="begin\nDB_DATABASE=two_web_restore_proof\nTAIL="\n' > "$dir/.env"
+out="$(BACKUP_KEEP_DAILY=1 run_script "$dir" rotate --dry-run)"; status=$?
+if [ "$status" -eq 0 ] && grep -qF 'Nothing removed' <<< "$out" && [ ! -s "$dir/docker.log" ]; then
+  pass "rotate-multiline"
+else
+  fail "rotate-multiline: expected docker-free file rotation despite unsupported dotenv (got ${status})"
+  printf '%s\n' "$out" | sed 's/^/        /'
+fi
+
 # Happy path: three tables, equal counts. Asserts the verdict, the per-table
 # listing (a PROOF OK with no table detail proves nothing to a reader), and
 # that both the scratch database and the container-side dump copy were removed.
 dir="$(fixture proofok)"
 seed_dump "$dir"
-out="$(run_script "$dir" restore-proof "$dir/backups/seed.dump" 2>&1)"; status=$?
+# A distinct environment value still wins over an aliased .env value.
+printf 'DB_DATABASE=two_web_restore_proof\n' > "$dir/.env"
+out="$(cd "$dir" && PATH="$STUB_DIR:$PATH" STUB_LOG="$dir/docker.log" \
+  DB_HOST=127.0.0.1 DB_DATABASE=custom_source \
+  ./bin/pg-backup.sh restore-proof "$dir/backups/seed.dump" 2>&1)"; status=$?
 if [ "$status" -eq 0 ] && grep -qF "PROOF OK" <<< "$out" \
     && grep -qF "cache 3" <<< "$out" && grep -qF "migrations 2" <<< "$out" \
+    && grep -qF -- "-d custom_source" "$dir/docker.log" \
+    && grep -qF "createdb" "$dir/docker.log" && grep -qF "pg_restore" "$dir/docker.log" \
     && grep -qF "dropdb" "$dir/docker.log" && grep -qF "restore-proof.dump" "$dir/docker.log"; then
   pass "proof-ok"
 else

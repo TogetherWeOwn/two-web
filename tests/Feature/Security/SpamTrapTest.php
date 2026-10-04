@@ -4,6 +4,7 @@ use App\Enums\EventStatus;
 use App\Enums\RsvpStatus;
 use App\Livewire\MemberProfile;
 use App\Models\Event;
+use App\Models\Profile;
 use App\Models\Rsvp;
 use App\Models\User;
 use App\Support\Profiles\MemberStats;
@@ -110,6 +111,92 @@ it('shows field errors on a fast invalid save instead of false success (TOG-9361
 
     expect($member->profile()->exists())->toBeFalse();
 });
+
+it('shows per-game errors before either profile trap signal', function (string $gamesText, string $message, bool $fast, string $decoy) {
+    $this->freezeTime();
+    $member = User::factory()->create();
+    $profile = Profile::factory()->for($member)->create([
+        'bio' => 'Before',
+        'games' => ['Minecraft'],
+        'timezone' => 'Europe/London',
+    ]);
+    $before = $profile->fresh()->getAttributes();
+
+    $edit = Livewire::actingAs($member)
+        ->test(MemberProfile::class, ['member' => $member, 'stats' => memberStatsStub($member->discord_id)])
+        ->call('edit')
+        ->set('bio', 'Unsaved bio.')
+        ->set('gamesText', $gamesText)
+        ->set('timezone', 'UTC')
+        ->set(SpamTrap::HONEY_FIELD, $decoy);
+
+    if (! $fast) {
+        $this->travel(SpamTrap::MIN_FILL_MS + 1)->milliseconds();
+    }
+
+    $edit->call('save')
+        ->assertSet('editing', true)
+        ->assertSet('saved', false)
+        ->assertSet('bio', 'Unsaved bio.')
+        ->assertSet('gamesText', $gamesText)
+        ->assertSet('timezone', 'UTC')
+        ->assertHasErrors(['gamesText'])
+        ->assertSee($message)
+        ->assertSee('Check the highlighted fields')
+        ->assertDontSee('Profile saved.')
+        ->assertNotDispatched('profile-draft-retired');
+
+    expect($profile->fresh()->getAttributes())->toBe($before)
+        ->and(Profile::query()->count())->toBe(1);
+})->with([
+    '81-character name' => [str_repeat('g', 81), 'Keep each game name to 80 characters or fewer.'],
+    '21 distinct games' => [implode("\n", array_map(fn (int $i) => "Game {$i}", range(1, 21))), 'Add no more than 20 games.'],
+])->with([
+    'fast fill only' => [true, ''],
+    'honeypot only' => [false, 'https://spam.example'],
+    'both signals' => [true, 'https://spam.example'],
+]);
+
+it('silently swallows valid games under either profile trap signal', function (array $games, bool $fast, string $decoy) {
+    $this->freezeTime();
+    $member = User::factory()->create();
+    $profile = Profile::factory()->for($member)->create([
+        'bio' => 'Before',
+        'games' => ['Minecraft'],
+        'timezone' => 'Europe/London',
+    ]);
+    $before = $profile->fresh()->getAttributes();
+    $edit = Livewire::actingAs($member)
+        ->test(MemberProfile::class, ['member' => $member, 'stats' => memberStatsStub($member->discord_id)])
+        ->call('edit')
+        ->set('bio', 'Trapped bio.')
+        ->set('gamesText', implode("\n", $games))
+        ->set('timezone', 'UTC')
+        ->set(SpamTrap::HONEY_FIELD, $decoy);
+
+    if (! $fast) {
+        $this->travel(SpamTrap::MIN_FILL_MS + 1)->milliseconds();
+    }
+
+    $edit->call('save')
+        ->assertSet('editing', false)
+        ->assertSet('saved', true)
+        ->assertSet('bio', 'Before')
+        ->assertSet('gamesText', 'Minecraft')
+        ->assertHasNoErrors()
+        ->assertSee('Profile saved.')
+        ->assertDispatched('profile-draft-retired');
+
+    expect($profile->fresh()->getAttributes())->toBe($before)
+        ->and(Profile::query()->count())->toBe(1);
+})->with([
+    '80-character names' => [array_map(fn (int $i) => str_pad("Game {$i}", 80, 'g'), range(1, 20))],
+    'accented names' => [array_map(fn (int $i) => "ÅGame {$i}", range(1, 20))],
+])->with([
+    'fast fill only' => [true, ''],
+    'honeypot only' => [false, 'https://spam.example'],
+    'both signals' => [true, 'https://spam.example'],
+]);
 
 it('saves a patient profile edit exactly as before', function () {
     $member = User::factory()->create();

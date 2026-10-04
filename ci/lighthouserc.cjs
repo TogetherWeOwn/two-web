@@ -103,6 +103,31 @@ module.exports = {
         // surface for this (collect.settings.chromeFlags), and --lint pins it.
         chromeFlags: '--no-sandbox --disable-dev-shm-usage',
 
+        // A fixed debugging port inside this runner's reserved block, not
+        // chrome-launcher's random ephemeral one. Random means the launcher binds
+        // a port, releases it, and hopes nothing takes it before Chrome binds —
+        // and on the shared runners something did: two PR runs died mid-/admin
+        // with `Failed to fetch browser webSocket URL ... /json/version: HTTP
+        // Not Found`, a squatter answering HTTP on the debugging port (TOG-8177).
+        // `port` here reaches ChromeLauncher the same way `chromeFlags` does —
+        // lhci serialises the whole `settings` object into the flags file it
+        // hands the Lighthouse CLI (verified against the pinned @lhci/cli@0.14.0
+        // source, not the docs). The value comes from `CI_CHROME_PORT`, which
+        // `ci/runner-ports.sh` derives per runner and the budgets job reclaims
+        // before starting, so the port is stable per runner and never shared.
+        //
+        // A getter for the same reason `url` above is one: `--lint` loads this
+        // file in `static` where the env var is unset, and must still read the
+        // thresholds. Falling back to 0 keeps that path on the old random-port
+        // behaviour — the lint never launches Chrome, so the port is irrelevant
+        // there.
+        get port() {
+          const raw = process.env.CI_CHROME_PORT;
+          const parsed = raw === undefined ? NaN : Number(raw);
+
+          return Number.isInteger(parsed) && parsed > 0 ? parsed : 0;
+        },
+
         formFactor: 'mobile',
         screenEmulation: {
           mobile: true,

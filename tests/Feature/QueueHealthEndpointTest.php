@@ -29,9 +29,12 @@ use Illuminate\Support\Facades\Route;
  *   - a non-database driver answers healthy with the queue reported unknown
  *     rather than a zero that would read as healthy;
  *   - an unreadable queue table still answers 200, with the queue unknown;
- *   - the route answers through an app-DB outage the same way the static
- *     funnel leaves do (the framework's old `/up` never touched the database,
- *     and the deploy poll must keep answering while it is down).
+ *   - an app-DB outage answers 503 `degraded` with `db: error` (TOG-8711):
+ *     the old contract answered 200 through one the way the static funnel
+ *     leaves do, but a health check that says "up" while the database is
+ *     down lets a failed deploy pass. The queue slice still rides along so
+ *     the failure stays diagnosable, and a queue-only failure still stays
+ *     200 — backlog is lag, not an outage.
  */
 
 beforeEach(function () {
@@ -154,14 +157,15 @@ it('reports the queue unknown, not zero, on a driver with no countable depth', f
         ]);
 });
 
-it('still answers 200 with the queue unknown when the queue table will not answer', function () {
-    // Point the queue's connection at a refused port, the way the funnel
-    // outage tests point `pgsql`. The queue read must fail into `unknown`,
-    // never into a 500 — an `/up` that errors because the queue is slow
-    // mistakes the smoke detector for the fire.
-    $original = config('database.connections.pgsql');
+it('still answers 200 with the queue unknown when only the queue table will not answer', function () {
+    // Point only the queue's connection at a refused port, keeping the app
+    // database healthy. The queue read must fail into `unknown` while the
+    // endpoint stays 200 — an `/up` that errors because the queue is slow
+    // mistakes the smoke detector for the fire. (A dead app database is the
+    // opposite shape: 503 `degraded`, pinned in HealthCheckTest.)
+    $originalConnection = config('queue.connections.database.connection');
 
-    Config::set('database.connections.pgsql', [
+    Config::set('database.connections.queue_refused', [
         'driver' => 'pgsql',
         'host' => '127.0.0.1',
         // Nothing listens here. A refused connection comes back immediately,
@@ -177,29 +181,28 @@ it('still answers 200 with the queue unknown when the queue table will not answe
         'sslmode' => 'prefer',
         'timezone' => 'Etc/UTC',
     ]);
+    Config::set('queue.connections.database.connection', 'queue_refused');
 
-    DB::purge(config('queue.connections.database.connection'));
+    DB::purge('queue_refused');
 
     try {
         $this->get('/up')
             ->assertOk()
             ->assertJson([
                 'status' => 'healthy',
+                'db' => 'ok',
+                'pending_migrations' => 0,
                 'queue' => [
                     'status' => 'unknown',
                     'pending' => null,
                 ],
             ]);
     } finally {
-        // Restore before RefreshDatabase teardown runs: its
-        // beforeApplicationDestroyed callback reconnects the transacted
-        // default connection, and leaving the refused-port config in place
-        // would fail every later test there instead of failing here. The
-        // replacement transaction keeps the suite's wrapping transaction
-        // intact so no re-migration is triggered.
-        Config::set('database.connections.pgsql', $original);
-        DB::purge(config('queue.connections.database.connection'));
-        DB::connection('pgsql')->beginTransaction();
+        // The app connection is untouched, so no teardown-transaction repair
+        // is needed here — just point the queue back and drop the refused
+        // handle so later tests count the real table again.
+        Config::set('queue.connections.database.connection', $originalConnection);
+        DB::purge('queue_refused');
     }
 });
 
@@ -217,11 +220,16 @@ it('keeps the funnel placement: no session, cookie or throttle middleware', func
     );
 });
 
-it('answers through an app-DB outage with the queue unknown', function () {
+it('answers 503 degraded with db:error through an app-DB outage', function () {
     // The TOG-6853 repro with production parity, applied to the endpoint:
     // database session and cache configured, then `pgsql` pointed at a
     // refused port. The funnel route carries no middleware, so StartSession
-    // never opens the database; only the queue read fails, into `unknown`.
+    // never opens the database — the controller's own read-only probe is
+    // what reports the outage. TOG-8711 changed the answer on purpose: the
+    // old contract said 200 through this the way the static funnel leaves
+    // do, but a health check that reads "up" while the database is down
+    // lets a failed deploy pass. The queue slice still rides along so the
+    // failure stays diagnosable.
     config()->set('session.driver', 'database');
     config()->set('cache.default', 'database');
 
@@ -247,15 +255,18 @@ it('answers through an app-DB outage with the queue unknown', function () {
     DB::purge('pgsql');
 
     try {
-        $this->get('/up')
-            ->assertOk()
-            ->assertJson([
-                'status' => 'healthy',
-                'queue' => [
-                    'status' => 'unknown',
-                    'pending' => null,
-                ],
-            ]);
+        $response = $this->get('/up');
+
+        $response->assertStatus(503)->assertJson([
+            'status' => 'degraded',
+            'db' => 'error',
+            'queue' => [
+                'status' => 'unknown',
+                'pending' => null,
+            ],
+        ]);
+
+        expect($response->json('pending_migrations'))->toBeNull();
     } finally {
         Config::set('database.connections.pgsql', $original);
         DB::purge('pgsql');

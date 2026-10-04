@@ -36,6 +36,7 @@ use Spatie\Activitylog\Traits\LogsActivity;
  * @property int|null $created_by
  * @property string|null $agent_grant_id
  * @property string|null $proof_marker
+ * @property int|null $ics_sequence
  * @property int $agent_version
  * @property RecurrenceFrequency|null $recurrence_frequency
  * @property int|null $recurrence_count
@@ -113,6 +114,7 @@ class Event extends Model
             'discord_sync_failed_at' => 'immutable_datetime',
             'rsvp_open' => 'boolean',
             'agent_version' => 'integer',
+            'ics_sequence' => 'integer',
             'recurrence_frequency' => RecurrenceFrequency::class,
             'recurrence_count' => 'integer',
             'recurrence_ends_on' => 'immutable_date',
@@ -141,6 +143,11 @@ class Event extends Model
         // fragments. `saved` (not `updated`) so the create path bumps too —
         // harmless (nothing is cached yet) and one hook covers every write.
         static::saved(function (Event $event): void {
+            // Trigger-generated values are not hydrated by Eloquent save(). Read
+            // the whole snapshot so a racing write cannot pair old content with
+            // its newer revision in a returned service model or the pure ICS builder.
+            $event->setRawAttributes($event->newQuery()->whereKey($event->getKey())->firstOrFail()->getAttributes(), true);
+
             AnonymousEventCard::bump($event);
         });
         static::deleted(function (Event $event): void {
