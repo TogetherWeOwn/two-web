@@ -17,9 +17,8 @@ use Illuminate\Contracts\Validation\ValidationRule;
  * 20:00 London wall the host typed is 19:00Z (TOG-6804). Reject those strings
  * with a 422 the host can fix instead of storing the wrong instant.
  *
- * The zone test lives on EventInput::carriesZone() so the domain layer guards
- * the same strings this rule guards (the Filament panel calls fromValidated()
- * directly and never sees this rule). Anything else — including unparseable
+ * The zone test lives on EventInput::carriesZone() so the API, Filament panel
+ * and domain layer guard the same strings. Anything else — including unparseable
  * strings and relative phrases like `tomorrow` — is left to the `date` rule,
  * so this rule never double-reports.
  */
